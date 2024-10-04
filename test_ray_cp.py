@@ -7,8 +7,11 @@ ray.init()
 # Define the producer function
 @ray.remote
 def producer(num_tasks):
-    tasks = [i for i in range(num_tasks)]  # Generate a list of tasks (data)
-    return tasks
+    for i in range(num_tasks):
+        task = i
+        print(f"Produced task {task}")
+        yield task
+        time.sleep(0.5)
 
 # Define the consumer function to run on GPU
 @ray.remote(num_gpus=1)
@@ -22,13 +25,15 @@ def consumer(task):
 # Main producer-consumer function
 def run_producer_consumer(num_tasks, num_consumers):
     # Start producer
-    print("Producing tasks...")
-    tasks = ray.get(producer.remote(num_tasks))
+
+    producer_iterator = producer.remote(num_tasks)
+    #print("Producing tasks...")
+    #tasks = ray.get(producer.remote(num_tasks))
 
     # Send tasks to consumers for processing
     results = []
-    for i in range(num_consumers):
-        result = consumer.remote(tasks[i % len(tasks)])  # Send task to available consumers
+    for task in producer_iterator:
+        result = consumer.remote(task)  # Send task to available consumers
         results.append(result)
 
     # Gather and print results
@@ -37,7 +42,7 @@ def run_producer_consumer(num_tasks, num_consumers):
 
 # Run the producer-consumer system
 if __name__ == "__main__":
-    num_tasks = 10000000000000
+    num_tasks = 1000
     num_consumers = 4  # You can adjust this based on available GPUs
     run_producer_consumer(num_tasks, num_consumers)
 
