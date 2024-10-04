@@ -37,7 +37,7 @@ def run_producer_consumer(num_tasks, num_consumers):
 
 # Run the producer-consumer system
 if __name__ == "__main__":
-    num_tasks = 10
+    num_tasks = 10000000000000
     num_consumers = 4  # You can adjust this based on available GPUs
     run_producer_consumer(num_tasks, num_consumers)
 
