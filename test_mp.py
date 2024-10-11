@@ -122,9 +122,9 @@ if __name__ == "__main__":
                 print("[Consumer] Sampled batch:", x, y)
                 time.sleep(1)
                 i = i + 1
-            
-            if i % 20 == 0:
-                # model weight sync.
-                send_model_weight_to_producer(model.weight.cpu())
-                print('push model weight...........')
+                
+                if i % 20 == 0:
+                    # model weight sync.
+                    send_model_weight_to_producer(model.weight.cpu())
+                    print('push model weight...........')
     print('done!')
