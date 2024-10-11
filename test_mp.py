@@ -85,7 +85,7 @@ def send_experience_to_consumer(experience, consumer_worker="worker1"):
 
 
 def send_model_weight_to_producer(model_weight):
-    rpc.rpc_sync("trainer1", sync_weight, args=(model_weight,))
+    rpc.rpc_sync("worker0", sync_weight, args=(model_weight,))
 
 if __name__ == "__main__":
     world_size = 2
