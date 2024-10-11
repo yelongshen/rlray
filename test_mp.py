@@ -63,6 +63,7 @@ if __name__ == "__main__":
     print('gpu rank', rank)
     model = get_init_model(rank) #
 
+    dist.init_process_group('nccl', rank=rank, world_size=world_size)
     rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
 
     # predictor running.
