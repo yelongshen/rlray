@@ -45,6 +45,7 @@ class ReplayBuffer:
 buffer = ReplayBuffer(100000)
 # Consumer side: Function to add experiences to its local buffer
 def add_to_buffer(experience):
+    print('debug consumer side add.....',  int(os.environ['RANK']) )
     global buffer
     buffer.add(experience)
 
@@ -78,7 +79,7 @@ if __name__ == "__main__":
     if rank == 1:
         i = 0
         while i < 1000:
-            if len(buffer) > 2:
+            if len(buffer) > 20:
                 # Sample batch of experiences from the replay buffer
                 (x, y) = buffer.sample(2)
                 print("[Consumer] Sampled batch:", x, y)
