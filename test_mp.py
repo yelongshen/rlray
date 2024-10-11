@@ -8,6 +8,9 @@ import threading
 import time
 import random
 
+
+## so this can be used for 
+
 def get_init_model(rank):
     # rank in predictor mode.
     if rank == 0:
@@ -41,7 +44,28 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.buffer)
-    
+
+class ModelBuffer:
+    def __init__(self):
+        self.buffer = None
+        self.is_new = False
+        self.lock = threading.Lock()
+
+    def push(self, model):
+        """ Add new experience to the buffer """
+        with self.lock:
+            self.buffer = model
+            self.is_new = True
+
+    def check_new(self):
+        with self.lock:
+            return self.is_new
+
+    def pull(self, host_model):
+        with self.lock:
+            host_model.data.copy_(self.buffer)
+            self.is_new = False
+            
 buffer = ReplayBuffer(100000)
 # Consumer side: Function to add experiences to its local buffer
 def add_to_buffer(experience):
@@ -49,10 +73,19 @@ def add_to_buffer(experience):
     global buffer
     buffer.add(experience)
 
+model_buffer = ModelBuffer()
+
+def sync_weight(model_weight):
+    global model_buffer
+    model_buffer.push(model_weight)
+
 def send_experience_to_consumer(experience, consumer_worker="worker1"):
     # Use RPC to send experience data to the consumer node
     rpc.rpc_sync(consumer_worker, add_to_buffer, args=(experience,))
 
+
+def send_model_weight_to_producer(model_weight):
+    rpc.rpc_sync("trainer1", sync_weight, args=(model_weight,))
 
 if __name__ == "__main__":
     world_size = 2
@@ -75,6 +108,10 @@ if __name__ == "__main__":
             send_experience_to_consumer((x.cpu(),y.cpu()), consumer_worker="worker1")
             print("[Producer] Sent experience to consumer.")
             time.sleep(1)
+
+            if model_buffer.check_new():
+                model_buffer.pull(model.weight)
+                print('pull model weight.............')
     # trainer running loop.
     if rank == 1:
         i = 0
@@ -85,4 +122,9 @@ if __name__ == "__main__":
                 print("[Consumer] Sampled batch:", x, y)
                 time.sleep(1)
                 i = i + 1
+            
+            if i % 20 == 0:
+                # model weight sync.
+                send_model_weight_to_producer(model.weight.cpu())
+                print('push model weight...........')
     print('done!')
