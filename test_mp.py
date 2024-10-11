@@ -71,7 +71,7 @@ if __name__ == "__main__":
         for i in range(0, 100000):
             x = torch.randn(2, 4).to(rank)
             y = model(x)
-            send_experience_to_consumer((x,y), consumer_worker="worker1")
+            send_experience_to_consumer((x.cpu(),y.cpu()), consumer_worker="worker1")
             print("[Producer] Sent experience to consumer.")
             time.sleep(1)
     # trainer running loop.
