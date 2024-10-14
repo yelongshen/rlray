@@ -16,7 +16,7 @@ def _test():
     batch_code = [
         """
 print(input())
-a, b = input().split()
+a, b = map(int, input().split())
 print("Hello World!", a, b)
         """
     ]
