@@ -15,7 +15,7 @@ from contextlib import redirect_stdout
 def _test():
     batch_code = [
         """
-        print("Hello World!")
+print("Hello World!")
         """
     ]
 
