@@ -24,14 +24,21 @@ print("Hello World!", a, b)
     input_data = '10,100\n'
 
     old_stdout = sys.stdout
+    old_stdin = sys.stdin
+
     new_stdout = io.StringIO()
     sys.stdout = new_stdout
     sys.stdin = io.StringIO(input_data)
-    exec(batch_code[0])
 
-    output = new_stdout.getvalue()
-
-    sys.stdout = old_stdout
+    try:
+        exec(batch_code[0])
+        output = new_stdout.getvalue()
+    except EOFError:
+        output = "Error: Unexpected end of input. Make sure to provide the necessary input."
+    except Exception as e:
+        output = f"Error: {str(e)}"
+    finally:
+        sys.stdout = old_stdout
 
     print("this is code output:", output)
     #executor = PythonExecutor(get_answer_from_stdout=True)
