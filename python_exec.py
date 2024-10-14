@@ -15,7 +15,7 @@ from collections import deque
 
 
 def _test():
-    batch_code = ["""\
+    batch_code = ["""
 #print(input())
 a, b = map(int, input().split())
 print('Hello World!\n\n\n:', a, b, a+b)"""
@@ -26,6 +26,7 @@ print('Hello World!\n\n\n:', a, b, a+b)"""
     old_stdout = sys.stdout
     old_stdin = sys.stdin
 
+    print(batch_code[0])
     sys.stdout = io.StringIO()
     sys.stdin = io.StringIO(input_data)
 
