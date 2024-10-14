@@ -100,6 +100,9 @@ print(str(res)[1:-1].replace(' ', '').replace(',', '\\n'))
 
             tests = example['public_tests']
             for test_input, test_output in zip(tests['input'], tests['output']):
+                print('------------test input-------------\n')
+                print(test_input)
+
                 old_stdout = sys.stdout
                 sys.stdout = io.StringIO()
                 
