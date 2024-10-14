@@ -80,7 +80,7 @@ for i in range(m):
     uv.append((u-1, v-1))
 
 res = solve(a, m, k, uv)
-print(str(res)[1:-1].replace(' ', '').replace(',', '\n'))
+print(str(res)[1:-1].replace(' ', '').replace(',', '\\n'))
 """
 
     old_stdin = sys.stdin
