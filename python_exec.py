@@ -21,7 +21,7 @@ print("Hello World!", a, b)
         """
     ]
 
-    input_data = '10,100\n'
+    input_data = '10,100\n\n\n'
 
     old_stdout = sys.stdout
     old_stdin = sys.stdin
