@@ -23,11 +23,10 @@ d = deque()
 d.append(1)
 d.append(2)
 
-from collections import deque
-
 def solve(adj, m, k, uv):
     n = len(adj)
     nn = [len(a) for a in adj]
+    from collections import deque
     q = deque()
     for i in range(n):
         if nn[i] < k:
