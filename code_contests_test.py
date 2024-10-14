@@ -15,7 +15,7 @@ from datasets import load_dataset
 
 def _test():
     old_stdin = sys.stdin
-    
+
     dataset = load_dataset("deepmind/code_contests")
     train = dataset['train']
 
@@ -26,7 +26,7 @@ def _test():
         pycode = ''
         for (lang, code) in zip(soluts['language'], soluts['solution']):
             if lang == 3:
-                print(example['description'], code)
+                print(code)
                 pycode = code
                 status = 1
                 break
