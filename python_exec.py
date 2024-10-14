@@ -13,6 +13,7 @@ import sys
 
 from collections import deque
 
+
 def _test():
     batch_code = [
         """
@@ -46,4 +47,10 @@ print("Hello World!", a, b, a+b)
     #print(predictions)
 
 if __name__ == '__main__':
+    q = deque()
+
+    q.append(99)
+    q.append(999)
+    print(q)
+    
     _test()
