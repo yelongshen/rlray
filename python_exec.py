@@ -15,12 +15,11 @@ from collections import deque
 
 
 def _test():
-    batch_code = [
-        """
+    batch_code = ["""
 #print(input())
 a, b = map(int, input().split())
 print("Hello World!\n\n\n:", a, b, a+b)
-        """
+"""
     ]
 
     input_data = '10 100'
