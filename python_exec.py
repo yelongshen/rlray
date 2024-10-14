@@ -15,6 +15,7 @@ import sys
 def _test():
     batch_code = [
         """
+print(input())
 a, b = input().split()
 print("Hello World!", a, b)
         """
@@ -27,7 +28,7 @@ print("Hello World!", a, b)
     sys.stdout = new_stdout
     sys.stdin = io.StringIO(input_data)
     exec(batch_code[0])
-    
+
     output = new_stdout.getvalue()
 
     sys.stdout = old_stdout
