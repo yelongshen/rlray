@@ -21,7 +21,7 @@ print("Hello World!", a, b)
         """
     ]
 
-    input_data = '10,100'
+    input_data = '10,100\n'
 
     old_stdout = sys.stdout
     new_stdout = io.StringIO()
