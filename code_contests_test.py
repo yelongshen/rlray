@@ -33,7 +33,7 @@ import sys
         for (lang, code) in zip(soluts['language'], soluts['solution']):
             if lang == 3:
                 
-                pycode = code
+                pycode = default_imports + code
                 status = 1
                 break
         tests = example['public_tests']
@@ -47,7 +47,7 @@ import sys
                 sys.stdout = io.StringIO()
                 
                 sys.stdin = io.StringIO(test_input)
-                exec(default_imports + pycode)
+                exec(pycode)
                 output = sys.stdout.getvalue()
                 sys.stdout = old_stdout
                 
