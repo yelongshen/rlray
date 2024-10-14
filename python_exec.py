@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 from concurrent.futures import TimeoutError
 from functools import partial
 from contextlib import redirect_stdout
-
+import sys
 
 
 def _test():
@@ -19,9 +19,14 @@ print("Hello World!")
         """
     ]
 
-    result = exec(batch_code[0])
+    old_stdout = sys.stdout
+    new_stdout = io.StringIO()
+    sys.stdout = new_stdout
 
-    print(result)
+    exec(batch_code[0])
+    output = new_stdout.getvalue()
+    
+    print("this is code output:", output)
     #executor = PythonExecutor(get_answer_from_stdout=True)
     #predictions = executor.apply(batch_code[0])
     #print(predictions)
