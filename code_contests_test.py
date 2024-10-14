@@ -33,18 +33,19 @@ def _test():
         tests = example['public_tests']
         
         if status == 1:
+            print('--------------------------------------------\n')
+            print(pycode)
+
             for test_input, test_output in zip(tests['input'], tests['output']):
                 old_stdout = sys.stdout
                 sys.stdout = io.StringIO()
                 
                 sys.stdin = io.StringIO(test_input)
-                print('--------------------------------------------\n')
-                print(pycode)
                 exec(pycode)
                 output = sys.stdout.getvalue()
-
                 sys.stdout = old_stdout
-
+                
+                print('--------------------------------------------\n')
                 print(test_output, output)
 
         if status == 1:
