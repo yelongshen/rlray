@@ -107,7 +107,7 @@ print(str(res)[1:-1].replace(' ', '').replace(',', '\\n'))
                 sys.stdout = io.StringIO()
                 
                 sys.stdin = io.StringIO(test_input)
-                exec(pycode)
+                exec(pycode, globals())
                 output = sys.stdout.getvalue()
                 sys.stdout = old_stdout
                 
