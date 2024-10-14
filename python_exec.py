@@ -26,13 +26,12 @@ print("Hello World!", a, b)
     old_stdout = sys.stdout
     old_stdin = sys.stdin
 
-    new_stdout = io.StringIO()
-    sys.stdout = new_stdout
+    sys.stdout = io.StringIO()
     sys.stdin = io.StringIO(input_data)
 
     try:
         exec(batch_code[0])
-        output = new_stdout.getvalue()
+        output = sys.stdout.getvalue()
     except EOFError:
         output = "Error: Unexpected end of input. Make sure to provide the necessary input."
     except Exception as e:
