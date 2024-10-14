@@ -19,14 +19,16 @@ print("Hello World!")
         """
     ]
 
-    #old_stdout = sys.stdout
-    #new_stdout = io.StringIO()
-    #sys.stdout = new_stdout
+    old_stdout = sys.stdout
+    new_stdout = io.StringIO()
+    sys.stdout = new_stdout
 
     exec(batch_code[0])
-    #output = new_stdout.getvalue()
+    output = new_stdout.getvalue()
 
-    #print("this is code output:", output)
+    sys.stdout = old_stdout
+    
+    print("this is code output:", output)
     #executor = PythonExecutor(get_answer_from_stdout=True)
     #predictions = executor.apply(batch_code[0])
     #print(predictions)
