@@ -26,7 +26,7 @@ def _test():
         pycode = ''
         for (lang, code) in zip(soluts['language'], soluts['solution']):
             if lang == 3:
-                print(code)
+                
                 pycode = code
                 status = 1
                 break
@@ -38,6 +38,8 @@ def _test():
                 sys.stdout = io.StringIO()
                 
                 sys.stdin = io.StringIO(test_input)
+                print('--------------------------------------------\n')
+                print(pycode)
                 exec(pycode)
                 output = sys.stdout.getvalue()
 
