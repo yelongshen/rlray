@@ -14,6 +14,12 @@ from datasets import load_dataset
 
 
 def _test():
+    default_imports = """
+import math
+import os
+import sys
+    """
+
     old_stdin = sys.stdin
 
     dataset = load_dataset("deepmind/code_contests")
@@ -41,7 +47,7 @@ def _test():
                 sys.stdout = io.StringIO()
                 
                 sys.stdin = io.StringIO(test_input)
-                exec(pycode)
+                exec(default_imports + pycode)
                 output = sys.stdout.getvalue()
                 sys.stdout = old_stdout
                 
