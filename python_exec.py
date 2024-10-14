@@ -11,6 +11,7 @@ from functools import partial
 from contextlib import redirect_stdout
 import sys
 
+from collections import deque
 
 def _test():
     batch_code = [
