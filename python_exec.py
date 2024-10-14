@@ -15,13 +15,13 @@ import sys
 def _test():
     batch_code = [
         """
-print(input())
-#a, b = map(int, input().split())
-print("Hello World!") #, a, b)
+#print(input())
+a, b = map(int, input().split())
+print("Hello World!", a, b)
         """
     ]
 
-    input_data = '10 100\n\n\n'
+    input_data = '10 100\n'
 
     old_stdout = sys.stdout
     old_stdin = sys.stdin
