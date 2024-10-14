@@ -20,11 +20,14 @@ print("Hello World!", a, b)
         """
     ]
 
+    input_data = '10,100'
+
     old_stdout = sys.stdout
     new_stdout = io.StringIO()
     sys.stdout = new_stdout
-
-    exec(batch_code[0], '10,100')
+    sys.stdin = io.StringIO(input_data)
+    exec(batch_code[0])
+    
     output = new_stdout.getvalue()
 
     sys.stdout = old_stdout
