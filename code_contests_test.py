@@ -18,6 +18,11 @@ def _test():
 import math
 import os
 import sys
+from collections import deque
+d = deque()
+d.append(1)
+d.append(2)
+print(d)
 """
 
     old_stdin = sys.stdin
@@ -33,7 +38,7 @@ import sys
         for (lang, code) in zip(soluts['language'], soluts['solution']):
             if lang == 3:
                 
-                pycode = default_imports + code
+                pycode = default_imports #+ code
                 status = 1
                 break
         tests = example['public_tests']
