@@ -15,7 +15,8 @@ import sys
 def _test():
     batch_code = [
         """
-print("Hello World!")
+a, b = input().split()
+print("Hello World!", a, b)
         """
     ]
 
@@ -23,11 +24,11 @@ print("Hello World!")
     new_stdout = io.StringIO()
     sys.stdout = new_stdout
 
-    exec(batch_code[0])
+    exec(batch_code[0], '10,100')
     output = new_stdout.getvalue()
 
     sys.stdout = old_stdout
-    
+
     print("this is code output:", output)
     #executor = PythonExecutor(get_answer_from_stdout=True)
     #predictions = executor.apply(batch_code[0])

@@ -17,15 +17,18 @@ def _test():
     dataset = load_dataset("deepmind/code_contests")
     train = dataset['train']
 
-    
+    idx = 0
     for i in range(0, len(train)):
         example = train[i]
         soluts = example['solutions']
         for (lang, code) in zip(soluts['language'], soluts['solution']):
             if lang == 3:
                 print(example['description'], code)
+                idx = 1
                 break
-
+        
+        if idx == 1:
+            break
 
 if __name__ == '__main__':
     _test()
