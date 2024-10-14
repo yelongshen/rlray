@@ -17,11 +17,11 @@ def _test():
         """
 #print(input())
 a, b = map(int, input().split())
-print("Hello World!", a, b)
+print("Hello World!", a, b, a+b)
         """
     ]
 
-    input_data = '10 100\n'
+    input_data = '10 100'
 
     old_stdout = sys.stdout
     old_stdin = sys.stdin
