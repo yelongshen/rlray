@@ -22,7 +22,6 @@ from collections import deque
 d = deque()
 d.append(1)
 d.append(2)
-print(d)
 """
 
     old_stdin = sys.stdin
@@ -36,17 +35,16 @@ print(d)
         soluts = example['solutions']
         pycode = ''
         for (lang, code) in zip(soluts['language'], soluts['solution']):
-            if lang == 3:
-                
-                pycode = default_imports #+ code
+            if lang == 3:    
+                pycode = default_imports + code
                 status = 1
                 break
-        tests = example['public_tests']
-        
+
         if status == 1:
             print('--------------------------------------------\n')
             print(pycode)
 
+            tests = example['public_tests']
             for test_input, test_output in zip(tests['input'], tests['output']):
                 old_stdout = sys.stdout
                 sys.stdout = io.StringIO()
@@ -57,7 +55,8 @@ print(d)
                 sys.stdout = old_stdout
                 
                 print('--------------------------------------------\n')
-                print(test_output, output)
+                print("gold output:", test_output)
+                print("exec output:", output)
 
         if status == 1:
             break
