@@ -20,25 +20,23 @@ def main(args):
 
     env = DataEnv(args.env_config)
     if resource_manager.is_actor_node():
-        env.init_actor_mode() #= DataEnv(args.env_config)
+        env.init_actor_mode()
         play(env, actor_model, args)
 
     if resource_manager.is_learned_node():
-        #replay_buffer = ReplayBuffer(args)
-        env.init_learner_mode() #= DataEnv(args.env_config)
+        env.init_learner_mode()
         learn(env, learner_model, args)
 
 def learn(env, learner, args):
     batch_num = 0
     for i in range(0, args.learner_iteration):
-        # rpc.rempte wait for the replay buffer from actor model.
+        # rpc.remote wait for the replay buffer from actor model.
         for batch in env.sample_replaybuffer(args.batch_size):
             learner.train(batch)
             batch_num += 1
             if batch_num % args.sync_freq == 0:
                 env.push_to_modelbuffer(learner.model_weight)
                 
-
 def play(env, actor, args):
     for i in range(0, args.actor_iteration):
         for prompt in env:
