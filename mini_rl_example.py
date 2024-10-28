@@ -32,7 +32,7 @@ def main():
     output = llm.generate([prompt], sampling_params)
 
     # Print the output
-    print(output[0].text)
+    print(output)
 
 
 if __name__ == "__main__":
