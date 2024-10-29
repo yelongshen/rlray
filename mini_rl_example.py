@@ -21,7 +21,7 @@ from datasets import load_dataset
 
 def play():
     # Load a model
-    llm = LLM(model="facebook/opt-6.7b")  # You can specify any Hugging Face model here
+    llm = LLM(model="microsoft/Phi-3-mini-4k-instruct") # "facebook/opt-6.7b")  # You can specify any Hugging Face model here
     # Set sampling parameters
     sampling_params = SamplingParams(temperature=0.8, top_p=0.9, max_tokens=50)
 
