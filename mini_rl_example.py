@@ -22,12 +22,15 @@ from datasets import load_dataset
 import torch 
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline 
 
-
 import logging
 
 from peft import LoraConfig
 from trl import SFTTrainer
 from transformers import TrainingArguments, BitsAndBytesConfig
+
+from accelerate import Accelerator
+from torch.utils.data import DataLoader
+from transformers import AdamW
 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -51,7 +54,8 @@ class ReplayBuffer:
         return batch
 
     def __len__(self):
-        return len(self.buffer)
+        with self.lock:
+            return len(self.buffer)
 
 replaybuffer = ReplayBuffer(500000)
 
@@ -67,18 +71,15 @@ def add_to_buffer(experience):
 def play():
     # Load a model
     llm = LLM(model="microsoft/Phi-3-mini-4k-instruct") # "facebook/opt-6.7b")  # You can specify any Hugging Face model here
-
-    #llm.llm_engine.model_executor.driver_workerinit_process_group(
-    #            master_address, master_port, rank_offset, world_size, group_name
-    #        )
-    #  
+    # llm.llm_engine.model_executor.driver_workerinit_process_group(
+    #            master_address, master_port, rank_offset, world_size, group_name)
     # Set sampling parameters
     sampling_params = SamplingParams(temperature=0.8, top_p=0.9, max_tokens=1024)
 
     dataset = load_dataset("deepmind/code_contests")
     train = dataset['train']
 
-    outputs = []
+    #outputs = []
     for i in range(0, len(train)):
         example = train[i]
         soluts = example['solutions']
@@ -93,55 +94,42 @@ def play():
         target_rank = 4
         rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
 
-        print(ans)
-        outputs.append(ans)
+        #print(ans)
+        #outputs.append(ans)
 
 def learn():    
-    training_config = {
-        "bf16": True,
-        "do_eval": False,
-        "learning_rate": 5.0e-06,
-        "log_level": "info",
-        "logging_steps": 20,
-        "logging_strategy": "steps",
-        "lr_scheduler_type": "cosine",
-        "num_train_epochs": 1,
-        "max_steps": -1,
-        "output_dir": "./checkpoint_dir",
-        "overwrite_output_dir": True,
-        "per_device_eval_batch_size": 4,
-        "per_device_train_batch_size": 4,
-        "remove_unused_columns": True,
-        "save_steps": 100,
-        "save_total_limit": 1,
-        "seed": 0,
-        "gradient_checkpointing": True,
-        "gradient_checkpointing_kwargs":{"use_reentrant": False},
-        "gradient_accumulation_steps": 1,
-        "warmup_ratio": 0.2,
-    }
-
-    peft_config = {
-        "r": 16,
-        "lora_alpha": 32,
-        "lora_dropout": 0.05,
-        "bias": "none",
-        "task_type": "CAUSAL_LM",
-        "target_modules": "all-linear",
-        "modules_to_save": None,
-    }
-    train_conf = TrainingArguments(**training_config)
-    peft_conf = LoraConfig(**peft_config)
-
+    rank = int(os.environ['RANK'])
     torch.random.manual_seed(0) 
+    
+    # give up huggingface model.
     model = AutoModelForCausalLM.from_pretrained( 
         "microsoft/Phi-3-mini-4k-instruct",  
         device_map="cuda",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
     ) 
-
     tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct") 
+    tokenizer.model_max_length = 2048
+    tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
+    tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
+    tokenizer.padding_side = 'right'
+
+    i_num = 0
+    while i_num < 1000:
+        if len(replaybuffer) > 20:
+            # Sample batch of experiences from the replay buffer
+            #(x, y) = buffer.sample(2)
+            #print("[Consumer] Sampled batch:", x, y)
+
+            z = buffer.sample(2)
+            print("[Consumer] Sampled batch:", z)
+            time.sleep(1)
+            i = i + 1
+            
+            if i % 20 == 0:
+                # model weight sync.
+                send_model_weight_to_producer(model.weight.cpu())
+                print('push model weight...........')
 
     ################
     # Model Loading
@@ -154,11 +142,18 @@ def learn():
         torch_dtype=torch.bfloat16,
         device_map=None
     )
-    tokenizer.model_max_length = 2048
-    tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
-    tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
-    tokenizer.padding_side = 'right'
     
+    
+    def tokenize_data(example):
+    return tokenizer(
+        example["text"],
+        max_length=1024,  # Adjust as needed
+        truncation=True,
+        padding="max_length"
+    )
+
+    #tokenized_dataset = dataset.map(tokenize_data, batched=True)
+
     processed_train_dataset = train_dataset.map(
         apply_chat_template,
         fn_kwargs={"tokenizer": tokenizer},
@@ -218,12 +213,12 @@ def main():
     
     rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
 
-
     # suppose we use 4 gpus for vllm and 4 gpus 
     if rank in [0,1,2,3]:
         play()
 
     if rank in [4,5,6,7]:
         learn()
+
 if __name__ == "__main__":
     main()

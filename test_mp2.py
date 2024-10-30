@@ -13,10 +13,10 @@ import random
 
 def get_init_model(rank):
     # rank in predictor mode.
-    if rank == 0:
+    if rank in [0, 1]:
         model = torch.nn.Linear(4, 16).to(rank)
     # rank in trainer model.
-    elif rank == 1:
+    elif rank == [2, 3]:
         model = torch.nn.Linear(4, 16).to(rank)
     return model
 
@@ -73,60 +73,73 @@ def add_to_buffer(experience):
     global buffer
     buffer.add(experience)
 
+def len_buffer():
+    global buffer
+    return len(buffer)
+
 model_buffer = ModelBuffer()
 def sync_weight(model_weight):
     global model_buffer
     model_buffer.push(model_weight)
 
-def send_experience_to_consumer(experience, consumer_worker="worker1"):
+def send_experience_to_consumer(experience, consumer_worker="worker1", proceduer="worker0"):
     # Use RPC to send experience data to the consumer node
-    rpc.rpc_sync(consumer_worker, add_to_buffer, args=("i am a big big girl, in a big big world",))
+    rpc.rpc_sync(consumer_worker, add_to_buffer, args=("i am a big big girl, in a big big world by"+ proceduer,))
 
 
 def send_model_weight_to_producer(model_weight):
     rpc.rpc_sync("worker0", sync_weight, args=(model_weight,))
 
+def rev_experience_len(server_worker='worker1'):
+    return rpc.rpc_sync(server_worker, len_buffer)
+
 if __name__ == "__main__":
-    world_size = 2
+    world_size = 4
     rank = int(os.environ['RANK'])
 
-    num_pred_gpus = 1
-    num_trainer_gpus = 1
+    num_pred_gpus = 2
+    num_trainer_gpus = 2
 
     print('gpu rank', rank)
     model = get_init_model(rank) #
 
-    dist.init_process_group('nccl', rank=rank, world_size=world_size)
+    #dist.init_process_group('nccl', rank=rank, world_size=world_size)
     rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
 
     # predictor running.
-    if rank == 0:
+    if rank in [0, 1]:
         for i in range(0, 100000):
             x = torch.randn(2, 4).to(rank)
             y = model(x)
-            send_experience_to_consumer((x.cpu(),y.cpu()), consumer_worker="worker1")
-            print("[Producer] Sent experience to consumer.")
+            send_experience_to_consumer((x.cpu(),y.cpu()), consumer_worker="worker3", proceduer = str(rank))
+            print("[Producer] Sent experience to consumer. {rank}")
             time.sleep(1)
 
-            if model_buffer.check_new():
-                model_buffer.pull(model.weight)
-                print('pull model weight.............')
+            #if model_buffer.check_new():
+            #    model_buffer.pull(model.weight)
+            #    print('pull model weight.............')
     # trainer running loop.
-    if rank == 1:
+    if rank in [2, 3]:
         i = 0
         while i < 1000:
-            if len(buffer) > 20:
+            l = len(buffer) in rank == 2 or rev_experience_len('worker3')
+
+            print('work{rank}', l)
+
+            time.sleep(1)
+
+            i = i + 1
                 # Sample batch of experiences from the replay buffer
                 #(x, y) = buffer.sample(2)
                 #print("[Consumer] Sampled batch:", x, y)
 
-                z = buffer.sample(2)
-                print("[Consumer] Sampled batch:", z)
-                time.sleep(1)
-                i = i + 1
+            #    z = buffer.sample(2)
+            #    print("[Consumer] Sampled batch:", z)
+            #    time.sleep(1)
+            #    i = i + 1
                 
-                if i % 20 == 0:
-                    # model weight sync.
-                    send_model_weight_to_producer(model.weight.cpu())
-                    print('push model weight...........')
+                #if i % 20 == 0:
+                #    # model weight sync.
+                #    send_model_weight_to_producer(model.weight.cpu())
+                #    print('push model weight...........')
     print('done!')
