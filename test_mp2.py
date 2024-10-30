@@ -84,7 +84,7 @@ def sync_weight(model_weight):
 
 def send_experience_to_consumer(experience, consumer_worker="worker1", proceduer="worker0"):
     # Use RPC to send experience data to the consumer node
-    rpc.rpc_sync(consumer_worker, add_to_buffer, args=("i am a big big girl, in a big big world by"+ proceduer,))
+    rpc.rpc_sync(consumer_worker, add_to_buffer, args=("i am a big big girl, in a big big world by" + proceduer,))
 
 
 def send_model_weight_to_producer(model_weight):
@@ -111,7 +111,7 @@ if __name__ == "__main__":
         for i in range(0, 100000):
             x = torch.randn(2, 4).to(rank)
             y = model(x)
-            send_experience_to_consumer((x.cpu(),y.cpu()), consumer_worker="worker3", proceduer = str(rank))
+            send_experience_to_consumer((x.cpu(),y.cpu()), consumer_worker="worker2", proceduer = str(rank))
             print("[Producer] Sent experience to consumer. {rank}")
             time.sleep(1)
 
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     if rank in [2, 3]:
         i = 0
         while i < 1000:
-            l = len(buffer) if rank == 2 else rev_experience_len('worker3')
+            l = len(buffer) if rank == 2 else rev_experience_len('worker2')
 
             print('work', rank, l)
 
