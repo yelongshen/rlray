@@ -124,7 +124,7 @@ if __name__ == "__main__":
         while i < 1000:
             l = len(buffer) if rank == 2 else rev_experience_len('worker3')
 
-            print('work{rank}', l)
+            print('work', rank, l)
 
             time.sleep(1)
 
