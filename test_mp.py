@@ -81,7 +81,7 @@ def sync_weight(model_weight):
 
 def send_experience_to_consumer(experience, consumer_worker="worker1"):
     # Use RPC to send experience data to the consumer node
-    rpc.rpc_sync(consumer_worker, add_to_buffer, args=(experience,))
+    rpc.rpc_sync(consumer_worker, add_to_buffer, args=("i am a big big girl, in a big big world",))
 
 
 def send_model_weight_to_producer(model_weight):
@@ -118,8 +118,11 @@ if __name__ == "__main__":
         while i < 1000:
             if len(buffer) > 20:
                 # Sample batch of experiences from the replay buffer
-                (x, y) = buffer.sample(2)
-                print("[Consumer] Sampled batch:", x, y)
+                #(x, y) = buffer.sample(2)
+                #print("[Consumer] Sampled batch:", x, y)
+
+                z = buffer.sample(2)
+                print("[Consumer] Sampled batch:", z)
                 time.sleep(1)
                 i = i + 1
                 
