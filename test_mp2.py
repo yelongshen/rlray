@@ -16,7 +16,7 @@ def get_init_model(rank):
     if rank in [0, 1]:
         model = torch.nn.Linear(4, 16).to(rank)
     # rank in trainer model.
-    elif rank == [2, 3]:
+    elif rank in [2, 3]:
         model = torch.nn.Linear(4, 16).to(rank)
     return model
 
