@@ -122,7 +122,7 @@ if __name__ == "__main__":
     if rank in [2, 3]:
         i = 0
         while i < 1000:
-            l = len(buffer) in rank == 2 or rev_experience_len('worker3')
+            l = len(buffer) if rank == 2 else rev_experience_len('worker3')
 
             print('work{rank}', l)
 
