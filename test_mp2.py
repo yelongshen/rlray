@@ -97,7 +97,7 @@ def send_model_weight_to_producer(model_weight):
 def rev_experience_len(server_worker='worker1'):
     return rpc.rpc_sync(server_worker, len_buffer)
 
-def rev_experience_data(server_worker='worker1', batchsize):
+def rev_experience_data(server_worker='worker1', batchsize=2):
     return rpc.rpc_sync(server_worker, pop_from_buffer, args=(batchsize, ))
 
 if __name__ == "__main__":
