@@ -130,14 +130,13 @@ if __name__ == "__main__":
         i = 0
         while i < 1000:
             l = len(buffer) if rank == 2 else rev_experience_len('worker2')
-
             print('work', rank, l)
 
-            data = buffer.sample(2) if rank == 2 else rev_experience_data('worker2', 2)
+            if l > 10:
+                data = buffer.sample(2) if rank == 2 else rev_experience_data('worker2', 2)
+                print('learner data', data, rank)
 
-            print('learner data', data, rank)
             time.sleep(1)
-
             i = i + 1
                 # Sample batch of experiences from the replay buffer
                 #(x, y) = buffer.sample(2)
