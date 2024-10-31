@@ -126,6 +126,8 @@ if __name__ == "__main__":
 
             print('work', rank, l)
 
+            data = buffer.sample(2) if rank == 2 else 
+            print('learner data', data, rank)
             time.sleep(1)
 
             i = i + 1
