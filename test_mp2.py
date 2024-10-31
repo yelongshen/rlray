@@ -77,6 +77,10 @@ def len_buffer():
     global buffer
     return len(buffer)
 
+def pop_from_buffer(batchsize):
+    global buffer
+    return buffer.sample(batchsize)
+
 model_buffer = ModelBuffer()
 def sync_weight(model_weight):
     global model_buffer
@@ -92,6 +96,9 @@ def send_model_weight_to_producer(model_weight):
 
 def rev_experience_len(server_worker='worker1'):
     return rpc.rpc_sync(server_worker, len_buffer)
+
+def rev_experience_data(server_worker='worker1', batchsize):
+    return rpc.rpc_sync(server_worker, pop_from_buffer, args=(batchsize, ))
 
 if __name__ == "__main__":
     world_size = 4
@@ -126,7 +133,8 @@ if __name__ == "__main__":
 
             print('work', rank, l)
 
-            data = buffer.sample(2) if rank == 2 else 
+            data = buffer.sample(2) if rank == 2 else rev_experience_data('worker2', 2)
+
             print('learner data', data, rank)
             time.sleep(1)
 
