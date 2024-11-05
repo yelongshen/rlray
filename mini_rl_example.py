@@ -31,6 +31,10 @@ from transformers import TrainingArguments, BitsAndBytesConfig
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
 from transformers import AdamW
+import numpy as np 
+
+from transformers import get_linear_schedule_with_warmup
+from torch.optim import AdamW
 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -65,6 +69,48 @@ def add_to_buffer(experience):
     global replaybuffer
     replaybuffer.add(experience)
 
+def len_buffer():
+    global replaybuffer
+    return len(replaybuffer)
+
+def pop_from_buffer(batchsize):
+    global replaybuffer
+    return replaybuffer.sample(batchsize)
+############################################### 
+
+def rev_experience_len(server_worker='worker1'):
+    return rpc.rpc_sync(server_worker, len_buffer)
+
+def rev_experience_data(server_worker='worker1', batchsize=2):
+    return rpc.rpc_sync(server_worker, pop_from_buffer, args=(batchsize, ))
+
+
+################################ Model Buffer
+
+
+class ModelBuffer:
+    def __init__(self):
+        self.buffer = None
+        self.is_new = False
+        self.lock = threading.Lock()
+
+    def push(self, model):
+        """ Add new experience to the buffer """
+        with self.lock:
+            self.buffer = model
+            self.is_new = True
+
+    def check_new(self):
+        with self.lock:
+            return self.is_new
+
+    def pull(self, host_model):
+        with self.lock:
+            host_model.data.copy_(self.buffer)
+            self.is_new = False
+
+
+def check_model_update()
 # rpc communication. 
 
 
@@ -80,34 +126,55 @@ def play():
     train = dataset['train']
 
     #outputs = []
-    for i in range(0, len(train)):
-        example = train[i]
-        soluts = example['solutions']
-        problem = example['description']
+    for epoch in range(0, 100):
+        for i in range(0, len(train)):
+            example = train[i]
+            soluts = example['solutions']
+            problem = example['description']
 
-        o = llm.generate([problem], sampling_params)
+            o = llm.generate([problem], sampling_params)
 
-        completion = o[0].outputs[0].text
+            completion = o[0].outputs[0].text
 
-        data = problem + completion
+            data = problem + completion
 
-        target_rank = 4
-        rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
+            target_rank = 4
+            rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
+
+            time.sleep(1)
+            print('push to buffer')
+            #if check_model_update():
+            #    llm.model.load_state_dict()
 
         #print(ans)
         #outputs.append(ans)
 
 def learn():    
+    dist.init_process_group(backend="nccl")
+
     rank = int(os.environ['RANK'])
     torch.random.manual_seed(0) 
     
+    device = torch.device(f"cuda:{rank}")
     # give up huggingface model.
     model = AutoModelForCausalLM.from_pretrained( 
         "microsoft/Phi-3-mini-4k-instruct",  
         device_map="cuda",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
-    ) 
+    ).to(device)
+    
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[4,5,6,7])
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
+    #num_epochs = 3
+    num_training_steps = 10000 # num_epochs * len(train_dataloader)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps=200, num_training_steps=num_training_steps
+    )
+
+    model.train()
+
     tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct") 
     tokenizer.model_max_length = 2048
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
@@ -115,93 +182,50 @@ def learn():
     tokenizer.padding_side = 'right'
 
     i_num = 0
+    batch_size = 2
+    max_seq_len = 128
+
     while i_num < 1000:
-        if len(replaybuffer) > 20:
+        l = len(replaybuffer) if rank == 4 else rpc.rpc_sync('worker4', len_buffer)
+        # data sample threshold there. 
+        if l > 20:
             # Sample batch of experiences from the replay buffer
             #(x, y) = buffer.sample(2)
             #print("[Consumer] Sampled batch:", x, y)
+            data = replaybuffer.sample(batch_size) if rank == 4 else rev_experience_data('worker4', batch_size)
+            print("[Consumer] Sampled batch:", data)
+            #time.sleep(1)
+            batch = tokenizer(data, padding='max_length', truncation=True, max_length=max_seq_len, return_tensors="pt")
 
-            z = buffer.sample(2)
-            print("[Consumer] Sampled batch:", z)
-            time.sleep(1)
-            i = i + 1
+            input_ids = batch["input_ids"]
+    
+            # Shift input_ids to create labels for next-token prediction
+            labels = input_ids.clone()
+            labels[:, :-1] = input_ids[:, 1:]
+            labels[:, -1] = -100  # Mask the last token
             
-            if i % 20 == 0:
-                # model weight sync.
-                send_model_weight_to_producer(model.weight.cpu())
-                print('push model weight...........')
+            # Return the dictionary with input_ids, attention_mask, and labels
+            batch["labels"] = labels
 
-    ################
-    # Model Loading
-    ################
-    checkpoint_path = "microsoft/Phi-3-mini-4k-instruct"
-    model_kwargs = dict(
-        use_cache=False,
-        trust_remote_code=True,
-        attn_implementation="flash_attention_2",  # loading the model with flash-attenstion support
-        torch_dtype=torch.bfloat16,
-        device_map=None
-    )
-    
-    
-    def tokenize_data(example):
-    return tokenizer(
-        example["text"],
-        max_length=1024,  # Adjust as needed
-        truncation=True,
-        padding="max_length"
-    )
+            batch = {k: v.to(device) for k,v in batch.items()}
+            outputs = model(**batch)
 
-    #tokenized_dataset = dataset.map(tokenize_data, batched=True)
+            loss = outputs.loss
+            print('loss', loss)
 
-    processed_train_dataset = train_dataset.map(
-        apply_chat_template,
-        fn_kwargs={"tokenizer": tokenizer},
-        num_proc=10,
-        remove_columns=column_names,
-        desc="Applying chat template to train_sft",
-    )
+            # Backward pass and optimization
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
 
-    processed_test_dataset = test_dataset.map(
-        apply_chat_template,
-        fn_kwargs={"tokenizer": tokenizer},
-        num_proc=10,
-        remove_columns=column_names,
-        desc="Applying chat template to test_sft",
-    )
+            i_num = i_num + 1
 
-    ###########
-    # Training
-    ###########
-    trainer = SFTTrainer(
-        model=model,
-        args=train_conf,
-        peft_config=peft_conf,
-        train_dataset=processed_train_dataset,
-        eval_dataset=processed_test_dataset,
-        max_seq_length=2048,
-        dataset_text_field="text",
-        tokenizer=tokenizer,
-        packing=True
-    )
-    train_result = trainer.train()
-    metrics = train_result.metrics
-
-
-##################
-# Data Processing
-##################
-def apply_chat_template(
-    example,
-    tokenizer,
-):
-    messages = example["messages"]
-    example["text"] = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=False)
-    return example
-
-
-
+            time.sleep(1)
+            #if i_num % 100 == 0:
+            #    # model weight sync.
+            #    send_model_weight_to_producer(model.weight.cpu())
+            #    print('push model weight...........')
 
 def main():
     # system parameters:
