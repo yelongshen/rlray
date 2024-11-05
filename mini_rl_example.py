@@ -110,7 +110,7 @@ class ModelBuffer:
             self.is_new = False
 
 
-def check_model_update()
+#def check_model_update()
 # rpc communication. 
 
 
