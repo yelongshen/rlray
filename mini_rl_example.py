@@ -164,7 +164,7 @@ def learn():
         trust_remote_code=True,  
     ).to(device)
     
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[4,5,6,7])
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank])
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
     #num_epochs = 3
