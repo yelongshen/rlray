@@ -241,7 +241,9 @@ def main():
     if rank in [0,1,2,3]:
         play()
 
-    #if rank in [4,5,6,7]:
+    if rank in [4,5,6,7]:
+        for i in range(0, 1000000):
+            time.sleep(1)
     #    learn()
 
 if __name__ == "__main__":
