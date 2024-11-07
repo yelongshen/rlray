@@ -139,10 +139,10 @@ def play():
             data = problem + completion
 
             target_rank = 4
-            rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
+            #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
 
             time.sleep(1)
-            print('push to buffer')
+            print('push to buffer ... ')
             #if check_model_update():
             #    llm.model.load_state_dict()
 
