@@ -241,8 +241,8 @@ def main():
     if rank in [0,1,2,3]:
         play()
 
-    if rank in [4,5,6,7]:
-        learn()
+    #if rank in [4,5,6,7]:
+    #    learn()
 
 if __name__ == "__main__":
     main()
