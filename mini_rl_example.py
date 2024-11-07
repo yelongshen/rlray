@@ -116,6 +116,7 @@ class ModelBuffer:
 
 def play():
     # Load a model
+    print('start llm data ...')
     llm = LLM(model="microsoft/Phi-3-mini-4k-instruct") # "facebook/opt-6.7b")  # You can specify any Hugging Face model here
     # llm.llm_engine.model_executor.driver_workerinit_process_group(
     #            master_address, master_port, rank_offset, world_size, group_name)
@@ -125,6 +126,8 @@ def play():
     dataset = load_dataset("deepmind/code_contests")
     train = dataset['train']
 
+    print('start sampling data ...')
+    
     #outputs = []
     for epoch in range(0, 100):
         for i in range(0, len(train)):
