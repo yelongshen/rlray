@@ -121,13 +121,15 @@ def play():
     # llm.llm_engine.model_executor.driver_workerinit_process_group(
     #            master_address, master_port, rank_offset, world_size, group_name)
     # Set sampling parameters
+    print('initial llm model ....')
+    
     sampling_params = SamplingParams(temperature=0.8, top_p=0.9, max_tokens=1024)
 
     dataset = load_dataset("deepmind/code_contests")
     train = dataset['train']
 
     print('start sampling data ...')
-    
+
     #outputs = []
     for epoch in range(0, 100):
         for i in range(0, len(train)):
