@@ -246,10 +246,12 @@ def main():
 
     # suppose we use 4 gpus for vllm and 4 gpus 
     if rank in [0]:
+        print('rank', rank, 'play')
         play()
 
     if rank in [1,2,3,4,5,6,7]:
         for i in range(0, 1000000):
+            print('rank', rank, 'sleep.....')
             time.sleep(1)
     #    learn()
 
