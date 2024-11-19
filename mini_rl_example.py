@@ -119,7 +119,7 @@ def play():
     
     rank = int(os.environ['RANK'])
 
-    llm = LLM(model="microsoft/Phi-3-mini-4k-instruct", device_map=f"cuda:{rank}") # "facebook/opt-6.7b")  # You can specify any Hugging Face model here
+    llm = LLM(model="microsoft/Phi-3-mini-4k-instruct") #, device_map=f"cuda:{rank}") # "facebook/opt-6.7b")  # You can specify any Hugging Face model here
     # llm.llm_engine.model_executor.driver_workerinit_process_group(
     #            master_address, master_port, rank_offset, world_size, group_name)
     # Set sampling parameters
@@ -149,7 +149,7 @@ def play():
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
 
             time.sleep(1)
-            print('push to buffer ... ')
+            print('push to buffer ... ', data)
             #if check_model_update():
             #    llm.model.load_state_dict()
 
@@ -245,10 +245,10 @@ def main():
     rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
 
     # suppose we use 4 gpus for vllm and 4 gpus 
-    if rank in [0,1,2,3]:
+    if rank in [0]:
         play()
 
-    if rank in [4,5,6,7]:
+    if rank in [1,2,3,4,5,6,7]:
         for i in range(0, 1000000):
             time.sleep(1)
     #    learn()
