@@ -28,7 +28,7 @@ import logging
 #from trl import SFTTrainer
 #from transformers import TrainingArguments, BitsAndBytesConfig
 
-from accelerate import Accelerator
+#from accelerate import Accelerator
 from torch.utils.data import DataLoader
 #from transformers import AdamW
 #import numpy as np 
