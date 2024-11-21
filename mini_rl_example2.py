@@ -44,10 +44,12 @@ def main():
     # args.nnode_learner
     #world_size = 8
     rank = int(os.environ['RANK'])
-    
-    print('rank', rank)
+    local_rank = int(os.environ['LOCAL_RANK'])
 
+    print('rank', rank)
+    print('local rank', local_rank)
     #rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
+
 
     # suppose we use 4 gpus for vllm and 4 gpus 
     #if rank in [0]:
