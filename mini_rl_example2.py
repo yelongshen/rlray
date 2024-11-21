@@ -86,6 +86,50 @@ def play():
         #print(ans)
         #outputs.append(ans)
 
+def learn():   
+    print('start to learn ....') 
+    rank = int(os.environ['RANK'])
+    local_rank = int(os.environ['LOCAL_RANK'])
+    torch.cuda.set_device(local_rank)
+
+    dist.init_process_group(backend="nccl")
+
+    #rank = int(os.environ['RANK'])
+    torch.random.manual_seed(0) 
+    
+    device = torch.device(f"cuda:{local_rank}")
+    # give up huggingface model.
+    model = AutoModelForCausalLM.from_pretrained( 
+        "microsoft/Phi-3-mini-4k-instruct",  
+        device_map="cuda",  
+        torch_dtype=torch.bfloat16,  
+        trust_remote_code=True,  
+    ).to(device)
+    
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank])
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
+    #num_epochs = 3
+    num_training_steps = 10000 # num_epochs * len(train_dataloader)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps=200, num_training_steps=num_training_steps
+    )
+
+    print('model initialization...')
+    
+    model.train()
+
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct") 
+    tokenizer.model_max_length = 2048
+    tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
+    tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
+    tokenizer.padding_side = 'right'
+
+    i_num = 0
+    batch_size = 2
+    max_seq_len = 128
+
+
 
 def main():
     # system parameters:
@@ -104,11 +148,11 @@ def main():
     node_idx = rank // gpus_per_node
 
     # suppose we use 4 gpus for vllm and 4 gpus 
-    
     if rank in [0]:
         #print('rank', rank, 'play')
         play()
-    #else:
+    else:
+        learn()
 
     #if rank in [1,2,3,4,5,6,7]:
     #    for i in range(0, 1000000):
