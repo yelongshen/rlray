@@ -151,8 +151,8 @@ def main():
     if rank in [0]:
         #print('rank', rank, 'play')
         play()
-    else:
-        learn()
+    #else:
+    #    learn()
 
     #if rank in [1,2,3,4,5,6,7]:
     #    for i in range(0, 1000000):
