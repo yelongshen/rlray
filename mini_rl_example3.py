@@ -88,7 +88,7 @@ def play():
             problem = example['description']
 
             inputs = tokenizer(problem, return_tensors="pt").to("cuda")
-            outputs = llm.generate(inputs["input_ids"], max_length=100)
+            outputs = llm.generate(inputs["input_ids"], max_length=4096)
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
             #o = llm.generate([problem], sampling_params)
@@ -167,6 +167,9 @@ def main():
     #rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
     gpus_per_node = 8
     node_idx = rank // gpus_per_node
+
+    world_size = int(os.environ['WORLD_SIZE'])
+    print('WORLD_SIZE', world_size)
 
     # suppose we use 4 gpus for vllm and 4 gpus 
     if rank in [0,1,2,3,4,5,6,7]:
