@@ -66,7 +66,7 @@ def play():
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
     tokenizer.padding_side = 'right'
-    #llm = LLM(model="microsoft/Phi-3-mini-4k-instruct", disable_custom_all_reduce=True, enforce_eager=True ) #, device_map=f"cuda:{rank}") # "facebook/opt-6.7b")  # You can specify any Hugging Face model here
+    # llm = LLM(model="microsoft/Phi-3-mini-4k-instruct", disable_custom_all_reduce=True, enforce_eager=True ) #, device_map=f"cuda:{rank}") # "facebook/opt-6.7b")  # You can specify any Hugging Face model here
     # llm.llm_engine.model_executor.driver_workerinit_process_group(
     #            master_address, master_port, rank_offset, world_size, group_name)
     # Set sampling parameters
@@ -88,6 +88,8 @@ def play():
             problem = example['description']
 
             inputs = tokenizer(problem, return_tensors="pt").to("cuda")
+            print('input_ids.shape', inputs["input_ids"])
+
             outputs = llm.generate(inputs["input_ids"], max_length=4096)
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
@@ -140,7 +142,7 @@ def learn():
     #num_epochs = 3
     num_training_steps = 10000 # num_epochs * len(train_dataloader)
     scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=200, num_training_steps=num_training_steps
+        optimizer, num_warmup_steps=1000, num_training_steps=num_training_steps
     )
 
     print('model initialization...')
@@ -148,7 +150,7 @@ def learn():
     model.train()
 
     tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct") 
-    tokenizer.model_max_length = 2048
+    tokenizer.model_max_length = 4096
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
     tokenizer.padding_side = 'right'
@@ -183,17 +185,17 @@ def main():
         #print('rank', rank, 'play')
         play()
     else:
-        for i in range(0, 1000000):
-            print('rank', rank, 'sleep.....')
-            time.sleep(1)
+        learn()
+        #for i in range(0, 1000000):
+        #    print('rank', rank, 'sleep.....')
+        #    time.sleep(1)
     #else:
     #    learn()
-
     #if rank in [1,2,3,4,5,6,7]:
     #    
     #       
     #          time.sleep(1)
     #    learn()
-
+    
 if __name__ == "__main__":
     main()
