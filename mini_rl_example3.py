@@ -101,7 +101,7 @@ def play():
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             time.sleep(1)
 
-            print('push to buffer ... ', data)
+            print('push to buffer ... ') #, data)
             #if check_model_update():
             #    llm.model.load_state_dict()
         #print(ans)
@@ -113,8 +113,15 @@ def learn():
     local_rank = int(os.environ['LOCAL_RANK'])
     torch.cuda.set_device(local_rank)
 
-    dist.init_process_group(backend="nccl")
+    dist.init_process_group(backend="nccl", rank=rank, world_size=8)
+    #dist.init_process_group(backend="nccl", rank)
 
+    print('dist initialization')
+
+    dist.barrier()
+
+    print('dist barrier success')
+    
     #rank = int(os.environ['RANK'])
     torch.random.manual_seed(0) 
     
