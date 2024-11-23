@@ -129,14 +129,19 @@ def learn():
     
     device = torch.device(f"cuda:{local_rank}")
     # give up huggingface model.
+    
+    model_name = "microsoft/Phi-3-mini-4k-instruct"
+
     model = AutoModelForCausalLM.from_pretrained( 
-        "microsoft/Phi-3-mini-4k-instruct",  
+        model_name,  
         device_map="cuda",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
-    ).to(device)
+    )
     
+    print('done with model creation.')
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+    print('distributed model creation.')
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
     #num_epochs = 3
@@ -145,11 +150,11 @@ def learn():
         optimizer, num_warmup_steps=1000, num_training_steps=num_training_steps
     )
 
-    print('model initialization...')
+    print('model optimization initialization...')
     
     model.train()
 
-    tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct") 
+    tokenizer = AutoTokenizer.from_pretrained("model_name") 
     tokenizer.model_max_length = 4096
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
