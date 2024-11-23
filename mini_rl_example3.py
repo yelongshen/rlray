@@ -88,7 +88,7 @@ def play():
             problem = example['description']
 
             inputs = tokenizer(problem, return_tensors="pt").to("cuda")
-            print('input_ids.shape', inputs["input_ids"])
+            #print('input_ids.shape', inputs["input_ids"].shape)
 
             outputs = llm.generate(inputs["input_ids"], max_length=4096)
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -115,10 +115,10 @@ def learn():
     local_rank = int(os.environ['LOCAL_RANK'])
     torch.cuda.set_device(local_rank)
 
-    dist.init_process_group(backend="nccl", rank=rank, world_size=8)
+    dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
     #dist.init_process_group(backend="nccl", rank)
 
-    print('dist initialization')
+    print('dist initialization ...', local_rank)
 
     dist.barrier()
 
@@ -136,7 +136,7 @@ def learn():
         trust_remote_code=True,  
     ).to(device)
     
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank])
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
     #num_epochs = 3
