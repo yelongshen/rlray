@@ -116,14 +116,6 @@ def learn():
     local_rank = int(os.environ['LOCAL_RANK'])
     torch.cuda.set_device(local_rank)
 
-    dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
-    #dist.init_process_group(backend="nccl", rank)
-
-    print('dist initialization ...', local_rank)
-
-    dist.barrier()
-
-    print('dist barrier success')
     
     #rank = int(os.environ['RANK'])
     torch.random.manual_seed(0) 
@@ -139,8 +131,17 @@ def learn():
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
     )
-    
     print('done with model creation.')
+
+    dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
+    #dist.init_process_group(backend="nccl", rank)
+
+    print('dist initialization ...', local_rank)
+
+    dist.barrier()
+
+    print('dist barrier success')
+
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
     print('distributed model creation.')
 
