@@ -35,8 +35,9 @@ from torch.utils.data import DataLoader
 #from transformers import AdamW
 #import numpy as np 
 
-#from transformers import get_linear_schedule_with_warmup
-#from torch.optim import AdamW
+
+from transformers import get_linear_schedule_with_warmup
+from torch.optim import AdamW
 
 
 
@@ -154,16 +155,17 @@ def learn():
     
     model.train()
 
-    tokenizer = AutoTokenizer.from_pretrained("model_name") 
+    tokenizer = AutoTokenizer.from_pretrained(model_name) 
     tokenizer.model_max_length = 4096
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
     tokenizer.padding_side = 'right'
 
     i_num = 0
-    batch_size = 2
-    max_seq_len = 128
+    batch_size = 1
+    max_seq_len = 4096
 
+    print('done...')
 
 
 def main():
