@@ -56,7 +56,7 @@ def play():
     model_name = "microsoft/Phi-3.5-mini-instruct"
     llm = AutoModelForCausalLM.from_pretrained( 
         model_name,  
-        device_map="cuda",  
+        #device_map="cuda",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
     ).to(device)
@@ -127,7 +127,7 @@ def learn():
 
     model = AutoModelForCausalLM.from_pretrained( 
         model_name,  
-        device_map="cuda",  
+        #device_map="cuda",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
     )
