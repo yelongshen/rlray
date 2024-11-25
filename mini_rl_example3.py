@@ -53,7 +53,7 @@ def play():
     device = torch.device(f"cuda:{local_rank}")
     # give up huggingface model.
     
-    model_name = "microsoft/Phi-3-mini-4k-instruct"
+    model_name = "microsoft/Phi-3.5-mini-instruct"
     llm = AutoModelForCausalLM.from_pretrained( 
         model_name,  
         device_map="cuda",  
@@ -131,7 +131,7 @@ def learn():
     device = torch.device(f"cuda:{local_rank}")
     # give up huggingface model.
     
-    model_name = "microsoft/Phi-3-mini-4k-instruct"
+    model_name = "microsoft/Phi-3.5-mini-instruct"
 
     model = AutoModelForCausalLM.from_pretrained( 
         model_name,  
