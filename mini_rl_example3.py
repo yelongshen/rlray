@@ -21,25 +21,56 @@ import sys
 from datasets import load_dataset
 
 import torch 
-
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline 
-
 import logging
 
 #from peft import LoraConfig
 #from trl import SFTTrainer
 #from transformers import TrainingArguments, BitsAndBytesConfig
-
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
 #from transformers import AdamW
 #import numpy as np 
-
-
 from transformers import get_linear_schedule_with_warmup
 from torch.optim import AdamW
 
 
+#buff = []
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.buffer = []
+        self.position = 0
+        self.lock = threading.Lock()
+    def add(self, experience):
+        """ Add new experience to the buffer """
+        with self.lock:
+            if len(self.buffer) < self.capacity:
+                self.buffer.append(None)
+            self.buffer[self.position] = experience
+            self.position = (self.position + 1) % self.capacity
+    def sample(self, batch_size):
+        """ Sample a batch of experiences from the buffer """
+        with self.lock:
+            batch = random.sample(self.buffer, batch_size)
+        return batch
+    def __len__(self):
+        return len(self.buffer)
+buffer = ReplayBuffer(100000)
+
+def add_to_buffer(experience):
+    print('[debug] consumer side add.....',  int(os.environ['RANK']) )
+    global buffer
+    buffer.add(experience)
+
+def len_buffer():
+    global buffer
+    return len(buffer)
+
+def pop_from_buffer(batchsize):
+    global buffer
+    return buffer.sample(batchsize)
+################################################################################################
 
 def play():
     # Load a model
@@ -91,6 +122,8 @@ def play():
             inputs = tokenizer(problem, return_tensors="pt").to("cuda")
             #print('input_ids.shape', inputs["input_ids"].shape)
 
+            if inputs["input_ids"].shape[1] > 4000:
+                continue
             outputs = llm.generate(inputs["input_ids"], max_length=4096)
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
@@ -100,11 +133,12 @@ def play():
             completion = response
             data = problem + completion
 
-            target_rank = 4
+            target_rank = 8
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
-            time.sleep(1)
-
-            print('push to buffer ... ') #, data)
+            #time.sleep(1)
+            #print('push to buffer ... ') #, data)
+            rpc.rpc_sync(f"worker-{target_rank}", add_to_buffer, args=(data,))
+            
             #if check_model_update():
             #    llm.model.load_state_dict()
         #print(ans)
