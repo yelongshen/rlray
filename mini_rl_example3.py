@@ -214,7 +214,7 @@ def learn():
             data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, )) #rev_experience_data('worker2', 2)
             inputs = tokenizer(data, padding=True, truncation=True, return_tensors="pt").to(device)
             
-            labels = batch["labels"].to(device)
+            #labels = batch["labels"].to(device)
 
             input_ids = inputs["input_ids"]
     
