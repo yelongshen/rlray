@@ -202,7 +202,7 @@ def learn():
 
     print('done...')
     buffer_rank = 8
-    batch_size = 2
+    batch_size = 1
     sample_idx = 0
     step = 0
     gradient_accumulation_steps = 32
