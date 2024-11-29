@@ -181,6 +181,9 @@ def main():
 
     rank = int(os.environ['RANK'])
     print('rank', rank)
+    
+    rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16) # consider 2 nodes, 16 gpus in this example.
+    
     #rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
     gpus_per_node = 8
     node_idx = rank // gpus_per_node
