@@ -108,6 +108,8 @@ def play():
     dataset = load_dataset("deepmind/code_contests")
     train = dataset['train']
 
+    instruction_prefix = ''
+    instruction_postfix = '\n\nplease only reply with the source code in python. \n'
     print('start sampling data ...')
     # Generate response
     #outputs = []
@@ -119,6 +121,8 @@ def play():
             soluts = example['solutions']
             problem = example['description']
 
+            problem = instruction_prefix + problem + instruction_postfix
+            
             inputs = tokenizer(problem, return_tensors="pt").to("cuda")
             #print('input_ids.shape', inputs["input_ids"].shape)
 
@@ -129,7 +133,24 @@ def play():
 
             #o = llm.generate([problem], sampling_params)
             #completion = o[0].outputs[0].text
+            
+            #tests = example['public_tests']
+            #for test_input, test_output in zip(tests['input'], tests['output']):
+            #    print('------------test input-------------\n')
+            #    print(test_input)
 
+            #    old_stdout = sys.stdout
+            #    sys.stdout = io.StringIO()
+                
+            #    sys.stdin = io.StringIO(test_input)
+            #    exec(pycode, globals())
+            #    output = sys.stdout.getvalue()
+            #    sys.stdout = old_stdout
+                
+            #    print('--------------------------------------------\n')
+            #    print("gold output:", test_output)
+            #    print("exec output:", output)
+                
             completion = response
             data = problem + completion
 
@@ -165,6 +186,9 @@ def learn():
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
     ).to(device)
+
+    model.gradient_checkpointing_enable()
+
     print('done with model creation.')
 
     dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
@@ -187,7 +211,7 @@ def learn():
     )
 
     print('model optimization initialization...')
-    
+
     model.train()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name) 
