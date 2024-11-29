@@ -137,7 +137,7 @@ def play():
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
             #print('push to buffer ... ') #, data)
-            rpc.rpc_sync(f"worker-{target_rank}", add_to_buffer, args=(data,))
+            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data,))
             
             #if check_model_update():
             #    llm.model.load_state_dict()
