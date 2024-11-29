@@ -133,7 +133,7 @@ def play():
             completion = response
             data = problem + completion
 
-            target_rank = 8
+            buffer_rank = 8
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
             #print('push to buffer ... ') #, data)
@@ -201,8 +201,43 @@ def learn():
     max_seq_len = 4096
 
     print('done...')
+    buffer_rank = 8
+    batch_size = 2
+    sample_idx = 0
+    step = 0
+    gradient_accumulation_steps = 32
+    optimizer.zero_grad()
 
+    while step < 40000:
+        l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer) #rev_experience_len('worker2')
+        if l > 20:
+            data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, )) #rev_experience_data('worker2', 2)
+            inputs = tokenizer(data, padding=True, truncation=True, return_tensors="pt").to(device)
+            
+            labels = batch["labels"].to(device)
 
+            input_ids = inputs["input_ids"]
+    
+            # Shift input_ids to create labels for next-token prediction
+            labels = input_ids.clone()
+            labels[:, :-1] = input_ids[:, 1:]
+            labels[:, -1] = -100  # Mask the last token
+            
+            # Return the dictionary with input_ids, attention_mask, and labels
+            inputs["labels"] = labels
+
+            batch = {k: v.to(device) for k,v in inputs.items()}
+            outputs = model(**batch)
+
+            loss = outputs.loss
+            print('loss:', loss, 'rank', rank)
+            loss.backward()
+            if (step + 1) % gradient_accumulation_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+                scheduler.step()  # Update the learning rate
+
+            step = step + 1
 def main():
     # system parameters:
     # args.ngpu_per_node
