@@ -42,13 +42,15 @@ class ReplayBuffer:
         self.buffer = []
         self.position = 0
         self.lock = threading.Lock()
-    def add(self, experience):
+        
+    def add(self, experience, reward):
         """ Add new experience to the buffer """
         with self.lock:
             if len(self.buffer) < self.capacity:
                 self.buffer.append(None)
-            self.buffer[self.position] = experience
+            self.buffer[self.position] = (experience, reward)
             self.position = (self.position + 1) % self.capacity
+    
     def sample(self, batch_size):
         """ Sample a batch of experiences from the buffer """
         with self.lock:
