@@ -144,6 +144,10 @@ def play():
     # Generate response
     #outputs = []
     for epoch in range(0, 100):
+        total_reward = 0
+        total_count = 0
+        
+        print('start to trigger play ...........................\n\n')
         for i in range(0, len(train)):
             if i % 8 != local_rank:
                 continue
@@ -193,6 +197,9 @@ def play():
                 
             reward_score = correct * 1.0 / total
             print('success rate...................', reward_score,'\n\n')
+
+            total_reward = total_reward + reward_score
+            total_count = total_count + 1
             
             completion = response
             data = problem + completion
@@ -207,7 +214,9 @@ def play():
             #    llm.model.load_state_dict()
         #print(ans)
         #outputs.append(ans)
-
+        print('end to trigger play ...........................\n\n')
+        print('average reward: ', total_reward / total_count, '\n\n') 
+        
 def learn():   
     print('start to learn ....') 
     rank = int(os.environ['RANK'])
