@@ -168,9 +168,9 @@ def play():
             #o = llm.generate([problem], sampling_params)
             #completion = o[0].outputs[0].text
 
-            print('code response start .........................................\n\n')
-            print(response)
-            print('code response end .........................................\n\n')
+            #print('code response start .........................................\n\n')
+            #print(response)
+            #print('code response end .........................................\n\n')
             program = code_extraction(response)
             
             tests = example['public_tests']
