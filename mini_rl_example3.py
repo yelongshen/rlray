@@ -177,14 +177,20 @@ def play():
                 old_stdout = sys.stdout
                 sys.stdout = io.StringIO()
                 sys.stdin = io.StringIO(test_input)
-                exec(program, globals())
-                output = sys.stdout.getvalue()
-                sys.stdout = old_stdout
 
-                if test_output == output:
-                    correct = correct + 1
+                try:
+                    exec(program, globals())
+                    output = sys.stdout.getvalue()
+                    if test_output == output:
+                        correct = correct + 1
+                except Exception as e:
+                    output = f"Error: {str(e)}"
+                finally:
+                    sys.stdout = old_stdout
+                    
                 total = total + 1
-
+                
+                
             reward_score = correct * 1.0 / total
             print('success rate...................', reward_score,'\n\n')
             
