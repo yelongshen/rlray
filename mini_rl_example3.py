@@ -255,7 +255,7 @@ def learn():
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
     print('distributed model creation.')
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-6)
     #num_epochs = 3
     num_training_steps = 10000 # num_epochs * len(train_dataloader)
     scheduler = get_linear_schedule_with_warmup(
@@ -296,7 +296,10 @@ def learn():
             #labels = batch["labels"].to(device)
 
             input_ids = inputs["input_ids"]
-    
+
+            if step == 0:
+                print('example input_ids', input_ids)
+                
             # Shift input_ids to create labels for next-token prediction
             labels = input_ids.clone()
             labels[:, :-1] = input_ids[:, 1:]
