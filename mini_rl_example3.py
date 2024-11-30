@@ -279,8 +279,8 @@ def learn():
         l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer) #rev_experience_len('worker2')
         if l > 20:
             data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, )) #rev_experience_data('worker2', 2)
-            text = [data[0] for d in data]
-            score = [data[1] for d in data]
+            text = [d[0] for d in data]
+            score = [d[1] for d in data]
             
             inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt").to(device)
             
