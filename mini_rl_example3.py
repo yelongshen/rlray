@@ -35,6 +35,18 @@ from transformers import get_linear_schedule_with_warmup
 from torch.optim import AdamW
 
 
+import os
+import io
+import pickle
+import traceback
+import copy
+import datetime
+from typing import Any, Dict, Optional
+from concurrent.futures import TimeoutError
+from functools import partial
+from contextlib import redirect_stdout
+import sys
+
 #buff = []
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -136,27 +148,28 @@ def play():
             #o = llm.generate([problem], sampling_params)
             #completion = o[0].outputs[0].text
 
-            print('code response start .........................................\n\n', rank)
+            print('code response start .........................................\n\n')
             print(response)
-            print('code response end .........................................\n\n', rank)
+            print('code response end .........................................\n\n')
             
-            #tests = example['public_tests']
-            #for test_input, test_output in zip(tests['input'], tests['output']):
-            #    print('------------test input-------------\n')
-            #    print(test_input)
+            tests = example['public_tests']
+            correct = 0
+            total = 0
+            for test_input, test_output in zip(tests['input'], tests['output']):
+                old_stdout = sys.stdout
+                sys.stdout = io.StringIO()
+                sys.stdin = io.StringIO(test_input)
+                exec(response, globals())
+                output = sys.stdout.getvalue()
+                sys.stdout = old_stdout
 
-            #    old_stdout = sys.stdout
-            #    sys.stdout = io.StringIO()
-                
-            #    sys.stdin = io.StringIO(test_input)
-            #    exec(pycode, globals())
-            #    output = sys.stdout.getvalue()
-            #    sys.stdout = old_stdout
-                
-            #    print('--------------------------------------------\n')
-            #    print("gold output:", test_output)
-            #    print("exec output:", output)
-                
+                if test_output == output:
+                    correct = correct + 1
+                total = total + 1
+
+            reward_score = correct * 1.0 / total
+            print('success rate...................', reward_score,'\n\n')
+            
             completion = response
             data = problem + completion
 
@@ -164,7 +177,7 @@ def play():
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
             #print('push to buffer ... ') #, data)
-            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data,))
+            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score))
             
             #if check_model_update():
             #    llm.model.load_state_dict()
@@ -242,7 +255,10 @@ def learn():
         l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer) #rev_experience_len('worker2')
         if l > 20:
             data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, )) #rev_experience_data('worker2', 2)
-            inputs = tokenizer(data, padding=True, truncation=True, return_tensors="pt").to(device)
+            text = [data[0] for d in data]
+            score = [data[1] for d in data]
+            
+            inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt").to(device)
             
             #labels = batch["labels"].to(device)
 
