@@ -312,7 +312,7 @@ def learn():
             outputs = model(**batch)
 
             loss = outputs.loss
-            print('loss:', loss, 'rank', rank)
+            print('loss:', loss, 'rank', rank,'step', step)
             loss.backward()
             if (step + 1) % gradient_accumulation_steps == 0:
                 optimizer.step()
