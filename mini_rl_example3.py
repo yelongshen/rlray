@@ -135,6 +135,10 @@ def play():
 
             #o = llm.generate([problem], sampling_params)
             #completion = o[0].outputs[0].text
+
+            print('code response start .........................................\n\n', rank)
+            print(response)
+            print('code response end .........................................\n\n', rank)
             
             #tests = example['public_tests']
             #for test_input, test_output in zip(tests['input'], tests['output']):
