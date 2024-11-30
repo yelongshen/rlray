@@ -72,10 +72,10 @@ class ReplayBuffer:
         return len(self.buffer)
 buffer = ReplayBuffer(100000)
 
-def add_to_buffer(experience):
+def add_to_buffer(experience, reward):
     print('[debug] consumer side add.....',  int(os.environ['RANK']) )
     global buffer
-    buffer.add(experience)
+    buffer.add(experience, reward)
 
 def len_buffer():
     global buffer
