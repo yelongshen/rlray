@@ -195,7 +195,7 @@ def play():
                 total = total + 1
                 
                 
-            reward_score = correct * 1.0 / total
+            reward_score = correct * 1.0 / (total+0.0001)
             print('success rate...................', reward_score,'\n\n')
 
             total_reward = total_reward + reward_score
@@ -215,7 +215,7 @@ def play():
         #print(ans)
         #outputs.append(ans)
         print('end to trigger play ...........................\n\n')
-        print('average reward: ', total_reward / total_count, '\n\n') 
+        print('average reward: ', total_reward / (total_count + 0.00001), '\n\n') 
         
 def learn():   
     print('start to learn ....') 
