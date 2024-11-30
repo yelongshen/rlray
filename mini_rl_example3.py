@@ -86,7 +86,7 @@ def pop_from_buffer(batchsize):
     return buffer.sample(batchsize)
 ################################################################################################
 
-def code_extraction(response):
+def code_extraction(input_text):
     lines = input_text.splitlines()
     code_lines = []
     in_code_block = False
