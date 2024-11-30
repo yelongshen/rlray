@@ -86,6 +86,22 @@ def pop_from_buffer(batchsize):
     return buffer.sample(batchsize)
 ################################################################################################
 
+def code_extraction(response):
+    lines = input_text.splitlines()
+    code_lines = []
+    in_code_block = False
+
+    for line in lines:
+        if line.strip() == "```python":  # Start of Python code block
+            in_code_block = True
+        elif line.strip() == "```":  # End of code block
+            if in_code_block:
+                break  # End the extraction when the code block ends
+        elif in_code_block:
+            code_lines.append(line)
+
+    return "\n".join(code_lines)
+
 def play():
     # Load a model
     
@@ -151,15 +167,17 @@ def play():
             print('code response start .........................................\n\n')
             print(response)
             print('code response end .........................................\n\n')
+            program = code_extraction(response)
             
             tests = example['public_tests']
             correct = 0
             total = 0
+            
             for test_input, test_output in zip(tests['input'], tests['output']):
                 old_stdout = sys.stdout
                 sys.stdout = io.StringIO()
                 sys.stdin = io.StringIO(test_input)
-                exec(response, globals())
+                exec(program, globals())
                 output = sys.stdout.getvalue()
                 sys.stdout = old_stdout
 
