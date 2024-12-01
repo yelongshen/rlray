@@ -160,7 +160,7 @@ def play():
             inputs = tokenizer(problem, return_tensors="pt").to("cuda")
             #print('input_ids.shape', inputs["input_ids"].shape)
 
-            if inputs["input_ids"].shape[1] > 4000:
+            if inputs["input_ids"].shape[1] > 2000:
                 continue
             outputs = llm.generate(inputs["input_ids"], max_length=4096)
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -306,8 +306,6 @@ def learn():
             labels = input_ids.clone()
             labels[:, :-1] = input_ids[:, 1:]
             labels[:, -1] = -100  # Mask the last token
-
-            
             # Return the dictionary with input_ids, attention_mask, and labels
             inputs["labels"] = labels
 
