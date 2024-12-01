@@ -70,7 +70,7 @@ class ReplayBuffer:
         return batch
     def __len__(self):
         return len(self.buffer)
-buffer = ReplayBuffer(100000)
+buffer = ReplayBuffer(1024)
 
 def add_to_buffer(experience, reward):
     print('[debug] consumer side add.....',  int(os.environ['RANK']) )
