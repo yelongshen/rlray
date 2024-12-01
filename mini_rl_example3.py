@@ -255,7 +255,7 @@ def learn():
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
     print('distributed model creation.')
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-6)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0e-6)
     #num_epochs = 3
     num_training_steps = 10000 # num_epochs * len(train_dataloader)
     scheduler = get_linear_schedule_with_warmup(
@@ -266,7 +266,7 @@ def learn():
 
     model.train()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name) 
+    tokenizer = AutoTokenizer.from_pretrained(model_name, add_eos_token=True)
     tokenizer.model_max_length = 4096
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
@@ -291,10 +291,12 @@ def learn():
             text = [d[0] for d in data]
             score = [d[1] for d in data]
             
-            inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt").to(device)
-            
-            #labels = batch["labels"].to(device)
+            inputs = tokenizer(text, add_special_tokens=True, padding=True, truncation=True, return_tensors="pt").to(device)
 
+            if inputs["input_ids"].shape[1] > 4096:
+                continue
+                
+            #labels = batch["labels"].to(device)
             input_ids = inputs["input_ids"]
 
             if step == 0:
@@ -304,6 +306,7 @@ def learn():
             labels = input_ids.clone()
             labels[:, :-1] = input_ids[:, 1:]
             labels[:, -1] = -100  # Mask the last token
+
             
             # Return the dictionary with input_ids, attention_mask, and labels
             inputs["labels"] = labels
