@@ -296,6 +296,9 @@ def learn():
 
             if inputs["input_ids"].shape[1] > 4096:
                 continue
+
+            if inputs['input_ids'].shape[1] < 16:
+                continue
                 
             #labels = batch["labels"].to(device)
             input_ids = inputs["input_ids"]
@@ -311,7 +314,7 @@ def learn():
             inputs["labels"] = labels
 
             batch = {k: v.to(device) for k,v in inputs.items()}
-            print('1. forward', rank)
+            print('1. forward', rank, inputs['input_ids'].shape)
             outputs = model(**batch)
 
             loss = outputs.loss
