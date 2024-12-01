@@ -239,6 +239,8 @@ def learn():
         trust_remote_code=True,  
     ).to(device)
 
+    tokenizer = AutoTokenizer.from_pretrained(model_name, add_eos_token=True)
+
     model.gradient_checkpointing_enable()
 
     print('done with model creation.')
@@ -266,7 +268,6 @@ def learn():
 
     model.train()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name, add_eos_token=True)
     tokenizer.model_max_length = 4096
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
