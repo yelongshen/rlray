@@ -311,12 +311,16 @@ def learn():
             inputs["labels"] = labels
 
             batch = {k: v.to(device) for k,v in inputs.items()}
+            print('1. forward', rank)
             outputs = model(**batch)
 
             loss = outputs.loss
             print('loss:', loss, 'rank', rank,'step', step)
+
+            print('2. backward', rank)
             loss.backward()
             if (step + 1) % gradient_accumulation_steps == 0:
+                print('3. optimization', rank)
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()  # Update the learning rate
