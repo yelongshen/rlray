@@ -67,13 +67,15 @@ class ReplayBuffer:
         """ Sample a batch of experiences from the buffer """
         with self.lock:
             batch = random.sample(self.buffer, batch_size)
-        return batch
+            return batch
+    
     def __len__(self):
-        return len(self.buffer)
+        with self.lock:
+            return len(self.buffer)
 buffer = ReplayBuffer(1024)
 
 def add_to_buffer(experience, reward):
-    print('[debug] consumer side add.....',  int(os.environ['RANK']) )
+    #print('[debug] consumer side add.....',  int(os.environ['RANK']) )
     global buffer
     buffer.add(experience, reward)
 
