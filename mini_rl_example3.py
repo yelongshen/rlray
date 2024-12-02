@@ -210,7 +210,7 @@ def play():
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
             #print('push to buffer ... ') #, data)
-            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score))
+            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
             
             #if check_model_update():
             #    llm.model.load_state_dict()
@@ -288,11 +288,11 @@ def learn():
     optimizer.zero_grad()
 
     while step < 40000:
-        l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer) #rev_experience_len('worker2')
+        l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
         if l > 20:
             torch.cuda.empty_cache()
             
-            data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, )) #rev_experience_data('worker2', 2)
+            data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
             text = [d[0] for d in data]
             score = [d[1] for d in data]
             
