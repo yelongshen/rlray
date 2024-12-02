@@ -345,8 +345,10 @@ def main():
 
     rank = int(os.environ['RANK'])
     print('rank', rank)
+
+    rpc.init_rpc(f"worker-{rank}", backend=rpc.BackendType.TENSORPIPE, rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method="tcp://localhost:29500"))
     
-    rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16) # consider 2 nodes, 16 gpus in this example.
+    # rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16) # consider 2 nodes, 16 gpus in this example.
     
     #rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
     gpus_per_node = 8
