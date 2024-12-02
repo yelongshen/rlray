@@ -210,7 +210,8 @@ def play():
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
             #print('push to buffer ... ') #, data)
-            #rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
+        
+            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
             
             #if check_model_update():
             #    llm.model.load_state_dict()
@@ -218,7 +219,7 @@ def play():
         #outputs.append(ans)
         print('end to trigger play ...........................\n\n')
         print('average reward: ', total_reward / (total_count + 0.00001), '\n\n') 
-        break
+        #break
         
 def learn():   
     print('start to learn ....') 
@@ -319,21 +320,21 @@ def learn():
             inputs["labels"] = labels
 
             batch = {k: v.to(device) for k,v in inputs.items()}
-            print('1. forward', rank, inputs['input_ids'].shape)
+            #print('1. forward', rank, inputs['input_ids'].shape)
 
-            time.sleep(10)
-            #outputs = model(**batch)
+            #time.sleep(10)
+            outputs = model(**batch)
 
-            #loss = outputs.loss
+            loss = outputs.loss
             #print('loss:', loss, 'rank', rank,'step', step, 'shape', inputs['input_ids'].shape)
 
             #print('2. backward', rank, inputs['input_ids'].shape)
-            #loss.backward()
-            #if (step + 1) % gradient_accumulation_steps == 0:
-            #    print('3. optimization', rank)
-            #    optimizer.step()
-            #    optimizer.zero_grad()
-            #    scheduler.step()  # Update the learning rate
+            loss.backward()
+            if (step + 1) % gradient_accumulation_steps == 0:
+                #print('3. optimization', rank)
+                optimizer.step()
+                optimizer.zero_grad()
+                scheduler.step()  # Update the learning rate
             step = step + 1
 def main():
     # system parameters:
@@ -350,7 +351,7 @@ def main():
 
     # rpc.init_rpc(f"worker-{rank}", backend=rpc.BackendType.TENSORPIPE, rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method="tcp://localhost:29500"))
     
-    # rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16) # consider 2 nodes, 16 gpus in this example.
+    rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16) # consider 2 nodes, 16 gpus in this example.
     
     #rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
     gpus_per_node = 8
