@@ -316,19 +316,18 @@ def learn():
 
             batch = {k: v.to(device) for k,v in inputs.items()}
             print('1. forward', rank, inputs['input_ids'].shape)
-            outputs = model(**batch)
+            #outputs = model(**batch)
 
-            loss = outputs.loss
-            print('loss:', loss, 'rank', rank,'step', step, 'shape', inputs['input_ids'].shape)
+            #loss = outputs.loss
+            #print('loss:', loss, 'rank', rank,'step', step, 'shape', inputs['input_ids'].shape)
 
-            print('2. backward', rank, inputs['input_ids'].shape)
-            loss.backward()
-            if (step + 1) % gradient_accumulation_steps == 0:
-                print('3. optimization', rank)
-                optimizer.step()
-                optimizer.zero_grad()
-                scheduler.step()  # Update the learning rate
-
+            #print('2. backward', rank, inputs['input_ids'].shape)
+            #loss.backward()
+            #if (step + 1) % gradient_accumulation_steps == 0:
+            #    print('3. optimization', rank)
+            #    optimizer.step()
+            #    optimizer.zero_grad()
+            #    scheduler.step()  # Update the learning rate
             step = step + 1
 def main():
     # system parameters:
