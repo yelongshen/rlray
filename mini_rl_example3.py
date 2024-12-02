@@ -210,7 +210,7 @@ def play():
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
             #print('push to buffer ... ') #, data)
-            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
+            #rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
             
             #if check_model_update():
             #    llm.model.load_state_dict()
@@ -218,6 +218,7 @@ def play():
         #outputs.append(ans)
         print('end to trigger play ...........................\n\n')
         print('average reward: ', total_reward / (total_count + 0.00001), '\n\n') 
+        break
         
 def learn():   
     print('start to learn ....') 
@@ -286,7 +287,8 @@ def learn():
     step = 0
     gradient_accumulation_steps = 32
     optimizer.zero_grad()
-
+    time.sleep(10000)
+    
     while step < 40000:
         l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
         if l > 20:
@@ -346,9 +348,9 @@ def main():
     rank = int(os.environ['RANK'])
     print('rank', rank)
 
-    rpc.init_rpc(f"worker-{rank}", backend=rpc.BackendType.TENSORPIPE, rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method="tcp://localhost:29500"))
+    # rpc.init_rpc(f"worker-{rank}", backend=rpc.BackendType.TENSORPIPE, rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method="tcp://localhost:29500"))
     
-    # rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16) # consider 2 nodes, 16 gpus in this example.
+    rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16) # consider 2 nodes, 16 gpus in this example.
     
     #rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
     gpus_per_node = 8
