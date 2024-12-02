@@ -360,7 +360,7 @@ def main():
     print('WORLD_SIZE', world_size)
 
     # suppose we use 4 gpus for vllm and 4 gpus 
-    if rank in [0,1,2,3,4,5,6,7]:
+    if rank in [0,1,2,3,4,5,6,7, 8, 9, 10, 11, 12, 13, 14, 15]:
         #print('rank', rank, 'play')
         play()
     else:
