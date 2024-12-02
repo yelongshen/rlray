@@ -318,6 +318,8 @@ def learn():
 
             batch = {k: v.to(device) for k,v in inputs.items()}
             print('1. forward', rank, inputs['input_ids'].shape)
+
+            time.sleep(10)
             #outputs = model(**batch)
 
             #loss = outputs.loss
