@@ -48,6 +48,7 @@ from contextlib import redirect_stdout
 import sys
 
 from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM
+from transformers.models.phi3.configuration_phi3 import Phi3Config
 from transformers import AutoConfig
 
 class Phi4_o1LM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
