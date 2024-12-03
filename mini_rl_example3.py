@@ -174,7 +174,7 @@ def play():
 
     phi4_o1_llm = phi4_o1_llm.to(device)
     #print(phi4_o1_llm)
-
+    llm = phi4_o1_llm
     #base_model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
