@@ -167,11 +167,12 @@ def play():
 
     phi4_o1_llm = Phi4_o1LM(llm_config)
     
-    missing_keys, unexpected_keys = phi4_o1_llm.load_state_dict(llm_state_dict, strict=False).to(device)
+    missing_keys, unexpected_keys = phi4_o1_llm.load_state_dict(llm_state_dict, strict=False)
     
     print("Missing keys:", missing_keys)
     print("Unexpected keys:", unexpected_keys)
-    
+
+    phi4_o1_llm = phi4_o1_llm.to(device)
     #print(phi4_o1_llm)
 
     #base_model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
