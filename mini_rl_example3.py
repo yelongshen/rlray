@@ -51,12 +51,12 @@ from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM
 from transformers.models.phi3.configuration_phi3 import Phi3Config
 from transformers import AutoConfig
 
-class Phi4_o1LM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
+class Phi4rLM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
     def __init__(self, config):
         super().__init__(config)    
 #buff = []
 
-class Phi4_o1Config(Phi3Config):
+class Phi4rConfig(Phi3Config):
     def __init__(
         self,
         vocab_size=32064,
@@ -165,16 +165,16 @@ def play():
     # Load configuration from a pre-trained model
     llm_config = AutoConfig.from_pretrained(model_name)
 
-    phi4_o1_llm = Phi4_o1LM(llm_config)
+    phi4rllm = Phi4_o1LM(llm_config)
     
-    missing_keys, unexpected_keys = phi4_o1_llm.load_state_dict(llm_state_dict, strict=False)
+    missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
     
     print("Missing keys:", missing_keys)
     print("Unexpected keys:", unexpected_keys)
 
-    phi4_o1_llm = phi4_o1_llm.to(device)
+    phi4rllm = phi4rllm.to(device)
     #print(phi4_o1_llm)
-    llm = phi4_o1_llm
+    llm = phi4rllm
     #base_model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
