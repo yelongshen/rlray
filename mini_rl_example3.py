@@ -47,7 +47,43 @@ from functools import partial
 from contextlib import redirect_stdout
 import sys
 
+from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM
+from transformers import AutoConfig
+
+class Phi4_o1LM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
+    def __init__(self, config):
+        super().__init__(config)    
 #buff = []
+
+class Phi4_o1Config(Phi3Config):
+    def __init__(
+        self,
+        vocab_size=32064,
+        hidden_size=3072,
+        intermediate_size=8192,
+        num_hidden_layers=32,
+        num_attention_heads=32,
+        num_key_value_heads=None,
+        resid_pdrop=0.0,
+        embd_pdrop=0.0,
+        attention_dropout=0.0,
+        hidden_act="silu",
+        max_position_embeddings=4096,
+        original_max_position_embeddings=4096,
+        initializer_range=0.02,
+        rms_norm_eps=1e-5,
+        use_cache=True,
+        tie_word_embeddings=False,
+        rope_theta=10000.0,
+        rope_scaling=None,
+        bos_token_id=1,
+        eos_token_id=32000,
+        pad_token_id=32000,
+        sliding_window=None,
+        **kwargs,
+    ):
+        super().__init__(config)
+
 class ReplayBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -115,14 +151,29 @@ def play():
     torch.cuda.set_device(local_rank)
     device = torch.device(f"cuda:{local_rank}")
     # give up huggingface model.
-    
     model_name = "microsoft/Phi-3.5-mini-instruct"
     llm = AutoModelForCausalLM.from_pretrained( 
         model_name,  
-        device_map="cuda",  
+        device_map='cpu',
+        #device_map="cuda",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
-    ).to(device)
+    )#.to(device)
+    llm_state_dict = llm.state_dict()
+
+    # Load configuration from a pre-trained model
+    llm_config = AutoConfig.from_pretrained(model_name)
+
+    phi4_o1_llm = Phi4_o1LM(llm_config)
+    
+    missing_keys, unexpected_keys = phi4_o1_llm.load_state_dict(llm_state_dict, strict=False).to(device)
+    
+    print("Missing keys:", missing_keys)
+    print("Unexpected keys:", unexpected_keys)
+    
+    #print(phi4_o1_llm)
+
+    #base_model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -151,7 +202,7 @@ def play():
         
         print('start to trigger play ...........................\n\n')
         for i in range(0, len(train)):
-            if i % 8 != local_rank:
+            if i % 16 != local_rank:
                 continue
             example = train[i]
             soluts = example['solutions']
@@ -211,7 +262,7 @@ def play():
             #time.sleep(1)
             #print('push to buffer ... ') #, data)
         
-            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
+            #rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
             
             #if check_model_update():
             #    llm.model.load_state_dict()
