@@ -210,15 +210,14 @@ def play():
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
             #print('push to buffer ... ') #, data)
-            #rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
-            
+            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
             #if check_model_update():
             #    llm.model.load_state_dict()
         #print(ans)
         #outputs.append(ans)
         print('end to trigger play ...........................\n\n')
         print('average reward: ', total_reward / (total_count + 0.00001), '\n\n') 
-        break
+        #break
         
 def learn():   
     print('start to learn ....') 
@@ -321,19 +320,19 @@ def learn():
             batch = {k: v.to(device) for k,v in inputs.items()}
             print('1. forward', rank, inputs['input_ids'].shape)
 
-            time.sleep(10)
-            #outputs = model(**batch)
+            #time.sleep(10)
+            outputs = model(**batch)
 
-            #loss = outputs.loss
+            loss = outputs.loss
             #print('loss:', loss, 'rank', rank,'step', step, 'shape', inputs['input_ids'].shape)
 
             #print('2. backward', rank, inputs['input_ids'].shape)
-            #loss.backward()
-            #if (step + 1) % gradient_accumulation_steps == 0:
+            loss.backward()
+            if (step + 1) % gradient_accumulation_steps == 0:
             #    print('3. optimization', rank)
-            #    optimizer.step()
-            #    optimizer.zero_grad()
-            #    scheduler.step()  # Update the learning rate
+                optimizer.step()
+                optimizer.zero_grad()
+                scheduler.step()  # Update the learning rate
             step = step + 1
 def main():
     # system parameters:
@@ -360,7 +359,7 @@ def main():
     print('WORLD_SIZE', world_size)
 
     # suppose we use 4 gpus for vllm and 4 gpus 
-    if rank in [0,1,2,3,4,5,6,7, 8, 9, 10, 11, 12, 13, 14, 15]:
+    if rank in [0,1,2,3,4,5,6,7]: #, 8, 9, 10, 11, 12, 13, 14, 15]:
         #print('rank', rank, 'play')
         play()
     else:
