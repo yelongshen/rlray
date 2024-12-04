@@ -165,7 +165,7 @@ def play():
     # Load configuration from a pre-trained model
     llm_config = AutoConfig.from_pretrained(model_name)
 
-    phi4rllm = Phi4_o1LM(llm_config)
+    phi4rllm = Phi4rLM(llm_config)
     
     missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
     
@@ -173,7 +173,7 @@ def play():
     print("Unexpected keys:", unexpected_keys)
 
     phi4rllm = phi4rllm.to(device)
-    #print(phi4_o1_llm)
+    #print(phi4rllm)
     llm = phi4rllm
     #base_model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
 
