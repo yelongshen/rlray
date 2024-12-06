@@ -54,6 +54,8 @@ from transformers import AutoConfig
 import torch.nn as nn
 import multiprocessing
 
+import signal
+
 class Phi4rLM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
     def __init__(self, config):
         super().__init__(config)    
