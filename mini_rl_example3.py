@@ -87,26 +87,20 @@ class Phi4rConfig(Phi3Config):
     ):
         super().__init__(config)
 
-class Phi4hyMLP(nn.Module):
-    def __init__(self, original_mlp, lora_r=16):
-        super().__init__()
-        self.original_mlp = mlp
-
-        self.lora_down = nn.Linear(original_mlp.
-
-        self.config = config
-        self.gate_up_proj = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
-
-        self.activation_fn = ACT2FN[config.hidden_act]
-
-    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        up_states = self.gate_up_proj(hidden_states)
-
-        gate, up_states = up_states.chunk(2, dim=-1)
-        up_states = up_states * self.activation_fn(gate)
-
-        return self.down_proj(up_states)
+#class Phi4hyMLP(nn.Module):
+#    def __init__(self, original_mlp, lora_r=16):
+#        super().__init__()
+#        self.original_mlp = mlp
+#        self.lora_down = nn.Linear(original_mlp.
+#        self.config = config
+#        self.gate_up_proj = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
+#        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+#        self.activation_fn = ACT2FN[config.hidden_act]
+#    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+#        up_states = self.gate_up_proj(hidden_states)
+#        gate, up_states = up_states.chunk(2, dim=-1)
+#        up_states = up_states * self.activation_fn(gate)
+#        return self.down_proj(up_states)
         
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -163,6 +157,38 @@ def code_extraction(input_text):
             code_lines.append(line)
 
     return "\n".join(code_lines)
+
+def evaluate_program(program, test_input, test_output):    
+    def run_program(conn, program, test_input):        
+        try:            
+            local_stdout = io.StringIO()            
+            local_stdin = io.StringIO(test_input)            
+            sys.stdout = local_stdout            
+            sys.stdin = local_stdin            
+            local_globals = {}            
+            exec(program, local_globals)            
+            output = local_stdout.getvalue().strip()            
+            conn.send(output)  
+            # Send output through Pipe        
+        except Exception as e:            
+            conn.send(f"Error: {str(e)}")        
+        finally:            
+            conn.close()  
+    parent_conn, child_conn = multiprocessing.Pipe()    
+    process = multiprocessing.Process(target=run_program, args=(child_conn, program, test_input))    
+    process.start()    
+    process.join(5)    
+    if process.is_alive():        
+        logging.error("Process timed out. Forcibly killing...")        
+        os.kill(process.pid, signal.SIGKILL)        
+        process.join()    
+    if parent_conn.poll():  
+        # Check if there's data to read        
+        output = parent_conn.recv()  
+        # Non-blocking receive        
+        return test_output.strip() == output.strip()    
+    else:        
+        return "Error: No output from program"
 
 def play():
     # Load a model
@@ -256,20 +282,9 @@ def play():
             total = 0
             
             for test_input, test_output in zip(tests['input'], tests['output']):
-                old_stdout = sys.stdout
-                sys.stdout = io.StringIO()
-                sys.stdin = io.StringIO(test_input)
-
-                try:
-                    exec(program, globals())
-                    output = sys.stdout.getvalue()
-                    if test_output == output:
-                        correct = correct + 1
-                except Exception as e:
-                    output = f"Error: {str(e)}"
-                finally:
-                    sys.stdout = old_stdout
-                    
+                o = evaluate_program(program, test_input, test_output)
+                if o == True:
+                    correct = correct + 1
                 total = total + 1
                 
                 
