@@ -52,6 +52,7 @@ from transformers.models.phi3.configuration_phi3 import Phi3Config
 from transformers import AutoConfig
 
 import torch.nn as nn
+import multiprocessing
 
 class Phi4rLM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
     def __init__(self, config):
