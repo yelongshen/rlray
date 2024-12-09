@@ -47,8 +47,9 @@ from functools import partial
 from contextlib import redirect_stdout
 import sys
 
-from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM
+from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP
 from transformers.models.phi3.configuration_phi3 import Phi3Config
+
 from transformers import AutoConfig
 
 import torch.nn as nn
@@ -94,7 +95,13 @@ class Phi4LM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
     def __init__(self, base_model, r=8, lora_alpha=1.0):
         super().__init__()    
         self.base_model = base_model
-        
+        for name, module in self.base_model.named_modules():
+            if name in 'mlp' and isinstance(module, Phi3MLP):
+                lora_mlp = LoRAMLP(module)
+                print(name)
+                print(name.split('.')[0])
+                setattr(self.base_model, name.split('.')[0], lora_mlp)
+
 
 #class Phi4Critic(Phi3ForCausalLM):
         
@@ -232,29 +239,28 @@ def play():
         #device_map="cuda",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
-    )#.to(device)
-    llm_state_dict = llm.state_dict()
+    ).to(device)
+    #llm_state_dict = llm.state_dict()
 
     # Load configuration from a pre-trained model
     llm_config = AutoConfig.from_pretrained(model_name)
 
-    actor_model = 
+    actor_model = Phi4LM(llm, r=8, lora_alpha=1.0)
+    critic_model = Phi4LM(llm, r=8, lora_alpha=1.0)
     
-    phi4rllm = Phi4rLM(llm_config)
+    #phi4rllm = Phi4rLM(llm_config)
     
     # to avoid copy two times of model-weight.
     
-    missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
-    print("Missing keys:", missing_keys)
-    print("Unexpected keys:", unexpected_keys)
-
-    for name, module in phi4rllm.named_modules():
-        
-
-
-    phi4rllm = phi4rllm.to(device)
+    #missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
+    #print("Missing keys:", missing_keys)
+    #print("Unexpected keys:", unexpected_keys)
+   
+    actor_model = actor_model.to(device)
+    critic_model = critic_model.to(device)
     #print(phi4rllm)
-    llm = phi4rllm
+    
+    llm = actor_model
     #base_model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
