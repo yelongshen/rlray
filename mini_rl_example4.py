@@ -47,7 +47,64 @@ from functools import partial
 from contextlib import redirect_stdout
 import sys
 
+from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM
+from transformers.models.phi3.configuration_phi3 import Phi3Config
+from transformers import AutoConfig
+
+import torch.nn as nn
+import multiprocessing
+
+import signal
+
+class Phi4rLM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
+    def __init__(self, config):
+        super().__init__(config)    
 #buff = []
+
+class Phi4rConfig(Phi3Config):
+    def __init__(
+        self,
+        vocab_size=32064,
+        hidden_size=3072,
+        intermediate_size=8192,
+        num_hidden_layers=32,
+        num_attention_heads=32,
+        num_key_value_heads=None,
+        resid_pdrop=0.0,
+        embd_pdrop=0.0,
+        attention_dropout=0.0,
+        hidden_act="silu",
+        max_position_embeddings=4096,
+        original_max_position_embeddings=4096,
+        initializer_range=0.02,
+        rms_norm_eps=1e-5,
+        use_cache=True,
+        tie_word_embeddings=False,
+        rope_theta=10000.0,
+        rope_scaling=None,
+        bos_token_id=1,
+        eos_token_id=32000,
+        pad_token_id=32000,
+        sliding_window=None,
+        **kwargs,
+    ):
+        super().__init__(config)
+
+#class Phi4hyMLP(nn.Module):
+#    def __init__(self, original_mlp, lora_r=16):
+#        super().__init__()
+#        self.original_mlp = mlp
+#        self.lora_down = nn.Linear(original_mlp.
+#        self.config = config
+#        self.gate_up_proj = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
+#        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+#        self.activation_fn = ACT2FN[config.hidden_act]
+#    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+#        up_states = self.gate_up_proj(hidden_states)
+#        gate, up_states = up_states.chunk(2, dim=-1)
+#        up_states = up_states * self.activation_fn(gate)
+#        return self.down_proj(up_states)
+        
 class ReplayBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -104,6 +161,38 @@ def code_extraction(input_text):
 
     return "\n".join(code_lines)
 
+def evaluate_program(program, test_input, test_output):    
+    def run_program(conn, program, test_input):        
+        try:            
+            local_stdout = io.StringIO()            
+            local_stdin = io.StringIO(test_input)            
+            sys.stdout = local_stdout            
+            sys.stdin = local_stdin            
+            local_globals = {}            
+            exec(program, local_globals)            
+            output = local_stdout.getvalue().strip()            
+            conn.send(output)  
+            # Send output through Pipe        
+        except Exception as e:            
+            conn.send(f"Error: {str(e)}")        
+        finally:            
+            conn.close()  
+    parent_conn, child_conn = multiprocessing.Pipe()    
+    process = multiprocessing.Process(target=run_program, args=(child_conn, program, test_input))    
+    process.start()    
+    process.join(5)    
+    if process.is_alive():        
+        logging.error("Process timed out. Forcibly killing...")        
+        os.kill(process.pid, signal.SIGKILL)        
+        process.join()    
+    if parent_conn.poll():  
+        # Check if there's data to read        
+        output = parent_conn.recv()  
+        # Non-blocking receive        
+        return test_output.strip() == output.strip()    
+    else:        
+        return "Error: No output from program"
+
 def play():
     # Load a model
     
@@ -115,14 +204,30 @@ def play():
     torch.cuda.set_device(local_rank)
     device = torch.device(f"cuda:{local_rank}")
     # give up huggingface model.
-    
     model_name = "microsoft/Phi-3.5-mini-instruct"
     llm = AutoModelForCausalLM.from_pretrained( 
         model_name,  
-        device_map="cuda",  
+        device_map='cpu',
+        #device_map="cuda",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
-    ).to(device)
+    )#.to(device)
+    llm_state_dict = llm.state_dict()
+
+    # Load configuration from a pre-trained model
+    llm_config = AutoConfig.from_pretrained(model_name)
+
+    phi4rllm = Phi4rLM(llm_config)
+    
+    missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
+    
+    print("Missing keys:", missing_keys)
+    print("Unexpected keys:", unexpected_keys)
+
+    phi4rllm = phi4rllm.to(device)
+    #print(phi4rllm)
+    llm = phi4rllm
+    #base_model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -151,7 +256,7 @@ def play():
         
         print('start to trigger play ...........................\n\n')
         for i in range(0, len(train)):
-            if i % 8 != local_rank:
+            if i % 16 != local_rank:
                 continue
             example = train[i]
             soluts = example['solutions']
@@ -180,20 +285,9 @@ def play():
             total = 0
             
             for test_input, test_output in zip(tests['input'], tests['output']):
-                old_stdout = sys.stdout
-                sys.stdout = io.StringIO()
-                sys.stdin = io.StringIO(test_input)
-
-                try:
-                    exec(program, globals())
-                    output = sys.stdout.getvalue()
-                    if test_output == output:
-                        correct = correct + 1
-                except Exception as e:
-                    output = f"Error: {str(e)}"
-                finally:
-                    sys.stdout = old_stdout
-                    
+                o = evaluate_program(program, test_input, test_output)
+                if o == True:
+                    correct = correct + 1
                 total = total + 1
                 
                 
@@ -210,7 +304,9 @@ def play():
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
             #print('push to buffer ... ') #, data)
-            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
+        
+            #rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
+            
             #if check_model_update():
             #    llm.model.load_state_dict()
         #print(ans)
@@ -289,10 +385,11 @@ def learn():
     time.sleep(10000)
     
     while step < 40000:
-        l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
+        l = 0 # len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
         if l > 20:
-            #torch.cuda.empty_cache()
-            data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
+            torch.cuda.empty_cache()
+            
+            data = None # buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
             text = [d[0] for d in data]
             score = [d[1] for d in data]
             
@@ -317,7 +414,7 @@ def learn():
             inputs["labels"] = labels
 
             batch = {k: v.to(device) for k,v in inputs.items()}
-            print('1. forward', rank, inputs['input_ids'].shape)
+            #print('1. forward', rank, inputs['input_ids'].shape)
 
             #time.sleep(10)
             outputs = model(**batch)
@@ -328,7 +425,7 @@ def learn():
             #print('2. backward', rank, inputs['input_ids'].shape)
             loss.backward()
             if (step + 1) % gradient_accumulation_steps == 0:
-            #    print('3. optimization', rank)
+                #print('3. optimization', rank)
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()  # Update the learning rate
@@ -348,7 +445,7 @@ def main():
 
     # rpc.init_rpc(f"worker-{rank}", backend=rpc.BackendType.TENSORPIPE, rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method="tcp://localhost:29500"))
     
-    # rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16) # consider 2 nodes, 16 gpus in this example.
+    rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16) # consider 2 nodes, 16 gpus in this example.
     
     #rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
     gpus_per_node = 8
@@ -358,7 +455,7 @@ def main():
     print('WORLD_SIZE', world_size)
 
     # suppose we use 4 gpus for vllm and 4 gpus 
-    if rank in [0,1,2,3,4,5,6,7]: #, 8, 9, 10, 11, 12, 13, 14, 15]:
+    if rank in [0,1,2,3,4,5,6,7, 8, 9, 10, 11, 12, 13, 14, 15]:
         #print('rank', rank, 'play')
         play()
     else:
