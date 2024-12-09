@@ -55,6 +55,7 @@ import torch.nn as nn
 import multiprocessing
 
 import signal
+from transformers.activations import ACT2FN
 
 class Phi4rLM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
     def __init__(self, config):
@@ -89,6 +90,47 @@ class Phi4rConfig(Phi3Config):
         **kwargs,
     ):
         super().__init__(config)
+
+class LoRALayer(nn.Module):
+    def __init__(self, original_linear, r=8, lora_alpha=1.0):
+        super(LoRALayer, self).__init__()
+        self.original_linear = original_linear
+        self.r = r
+        self.lora_down = nn.Linear(original_linear.in_features, r, bias=False)
+        self.lora_up = nn.Linear(r, original_linear.out_features, bias=False)
+        self.lora_alpha = lora_alpha
+        self.scaling = lora_alpha / (r ** 0.5)
+        
+        nn.init.zeros_(self.lora_down.weight)
+        nn.init.normal_(self.lora_up.weight)
+    
+    def forward(self, x):
+        original_output = self.original_linear(x)
+        lora_update = self.lora_up(self.lora_down(x)) * self.scaling
+        return original_output + lora_update
+
+class LoRAMLP(nn.Module):
+    def __init__(self, original_mlp, r=8, lora_alpha=1.0):
+        super(LoRAMLP, self).__init__()
+        self.original_mlp = original_mlp
+        self.r = r 
+        self.lora_up = LoRALayer(original_mlp.gate_up_proj, r, lora_alpha)
+        self.lora_down = LoRALayer(original_mlp.down_proj, r, lora_alpha)
+        
+        self.activation_fn = ACT2FN[original_mlp.config.hidden_act]
+    def forward(self, x):
+        up_states = self.lora_up(hidden_states)
+        gate, up_states = up_states.chunk(2, dim=-1)
+        up_states = up_states * self.activation_fn(gate)
+        return self.lora_down(up_states)
+
+
+class HydraMLP(nn.Module):
+    def __init__(self, base_model):
+        super(HydraNLP, self).__init__()
+        self.base_model = base_model
+        self.scalar_head = nn.Linear(base_model.config.hidden_size, 1)
+        
 
 #class Phi4hyMLP(nn.Module):
 #    def __init__(self, original_mlp, lora_r=16):
