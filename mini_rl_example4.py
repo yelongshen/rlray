@@ -47,7 +47,7 @@ from functools import partial
 from contextlib import redirect_stdout
 import sys
 
-from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP
+from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel
 from transformers.models.phi3.configuration_phi3 import Phi3Config
 
 from transformers import AutoConfig
@@ -91,17 +91,12 @@ class LoRAMLP(nn.Module):
         up_states = up_states * self.activation_fn(gate)
         return self.lora_down(up_states)
 
-class Phi4LM(nn.Module): #(Phi3PreTrainedModel, GenerationMixin):
-    def __init__(self, base_model, r=8, lora_alpha=1.0):
-        super().__init__()    
-        self.base_model = base_model
-        for name, module in self.base_model.named_modules():
-            if name in 'mlp' and isinstance(module, Phi3MLP):
-                lora_mlp = LoRAMLP(module)
-                print(name)
-                print(name.split('.')[0])
-                setattr(self.base_model, name.split('.')[0], lora_mlp)
-
+def wrap_up_lora(base_model):
+    new_model = base_model
+    for layer_idx in range(0, len(base_model.model.layers)):
+        new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp)
+    return new_model
+    
 
 #class Phi4Critic(nn.Module):
 #    def __init__(self, base_model, r=8, lora_alpha=1.0):
