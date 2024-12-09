@@ -91,10 +91,13 @@ class LoRAMLP(nn.Module):
         up_states = up_states * self.activation_fn(gate)
         return self.lora_down(up_states)
 
-def wrap_up_lora(base_model):
+def wrap_up_lora(base_model, cx = 0):
     new_model = base_model
     for layer_idx in range(0, len(base_model.model.layers)):
-        new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp)
+        if cx == 0:
+            new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp)
+        else:
+            new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp.original_mlp)
     return new_model
 
 def wrap_up_critic(base_model):
