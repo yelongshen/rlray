@@ -57,39 +57,8 @@ import multiprocessing
 import signal
 from transformers.activations import ACT2FN
 
-class Phi4rLM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
-    def __init__(self, config):
-        super().__init__(config)    
+        
 #buff = []
-
-class Phi4rConfig(Phi3Config):
-    def __init__(
-        self,
-        vocab_size=32064,
-        hidden_size=3072,
-        intermediate_size=8192,
-        num_hidden_layers=32,
-        num_attention_heads=32,
-        num_key_value_heads=None,
-        resid_pdrop=0.0,
-        embd_pdrop=0.0,
-        attention_dropout=0.0,
-        hidden_act="silu",
-        max_position_embeddings=4096,
-        original_max_position_embeddings=4096,
-        initializer_range=0.02,
-        rms_norm_eps=1e-5,
-        use_cache=True,
-        tie_word_embeddings=False,
-        rope_theta=10000.0,
-        rope_scaling=None,
-        bos_token_id=1,
-        eos_token_id=32000,
-        pad_token_id=32000,
-        sliding_window=None,
-        **kwargs,
-    ):
-        super().__init__(config)
 
 class LoRALayer(nn.Module):
     def __init__(self, original_linear, r=8, lora_alpha=1.0):
@@ -124,13 +93,23 @@ class LoRAMLP(nn.Module):
         up_states = up_states * self.activation_fn(gate)
         return self.lora_down(up_states)
 
+class Phi4rLM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
+    def __init__(self, base_model, r=8, lora_alpha=1.0):
+        super().__init__()    
 
-class HydraMLP(nn.Module):
-    def __init__(self, base_model):
-        super(HydraNLP, self).__init__()
-        self.base_model = base_model
-        self.scalar_head = nn.Linear(base_model.config.hidden_size, 1)
+#class HydraMLP(nn.Module):
+#    def __init__(self, base_model, r=8, lora_alpha=1.0):
+#        super(HydraNLP, self).__init__()
+#        self.base_model = base_model
+#        self.lm_mlp = LoRAMLP(base_model, r, lora_alpha)
+#        self.critic_mlp = LoRAMLP(base_model, r, lora_alpha)
+#    def forward(self, x1, x2):
+#        y1 = self.lm_mlp(x1)
+#        y2 = self.critic_mlp(x2)
+#        return (y1, y2)
         
+        
+# parallel KV cache. 
 
 #class Phi4hyMLP(nn.Module):
 #    def __init__(self, original_mlp, lora_r=16):
@@ -237,7 +216,6 @@ def evaluate_program(program, test_input, test_output):
 
 def play():
     # Load a model
-    
     print('start llm data ...')
     
     rank = int(os.environ['RANK'])
@@ -259,12 +237,19 @@ def play():
     # Load configuration from a pre-trained model
     llm_config = AutoConfig.from_pretrained(model_name)
 
+    actor_model = 
+    
     phi4rllm = Phi4rLM(llm_config)
     
-    missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
+    # to avoid copy two times of model-weight.
     
+    missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
     print("Missing keys:", missing_keys)
     print("Unexpected keys:", unexpected_keys)
+
+    for name, module in phi4rllm.named_modules():
+        
+
 
     phi4rllm = phi4rllm.to(device)
     #print(phi4rllm)
