@@ -91,7 +91,7 @@ class LoRAMLP(nn.Module):
         up_states = up_states * self.activation_fn(gate)
         return self.lora_down(up_states)
 
-class Phi4LM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
+class Phi4LM(nn.Module): #(Phi3PreTrainedModel, GenerationMixin):
     def __init__(self, base_model, r=8, lora_alpha=1.0):
         super().__init__()    
         self.base_model = base_model
@@ -103,7 +103,10 @@ class Phi4LM(Phi3ForCausalLM): #(Phi3PreTrainedModel, GenerationMixin):
                 setattr(self.base_model, name.split('.')[0], lora_mlp)
 
 
-#class Phi4Critic(Phi3ForCausalLM):
+#class Phi4Critic(nn.Module):
+#    def __init__(self, base_model, r=8, lora_alpha=1.0):
+#        super().__init__()
+        
         
 #class HydraMLP(nn.Module):
 #    def __init__(self, base_model, r=8, lora_alpha=1.0):
