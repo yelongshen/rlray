@@ -101,6 +101,7 @@ def wrap_up_critic(base_model):
     new_model = base_model
     new_model.lm_head = nn.Linear(base_model.config.hidden_size, 1, bias=False)
     nn.init.zeros_(new_model.lm_head.weight)
+    return new_model
     
 #class Phi4Critic(nn.Module):
 #    def __init__(self, base_model, r=8, lora_alpha=1.0):
@@ -247,8 +248,8 @@ def play():
     # Load configuration from a pre-trained model
     llm_config = AutoConfig.from_pretrained(model_name)
 
-    actor_model = Phi4LM(llm, r=8, lora_alpha=1.0)
-    critic_model = Phi4LM(llm, r=8, lora_alpha=1.0)
+    actor_model = wrap_up_lora(llm)
+    critic_model = wrap_up_critic(wrap_up_lora(llm)) # Phi4LM(llm, r=8, lora_alpha=1.0)
     
     #phi4rllm = Phi4rLM(llm_config)
     
