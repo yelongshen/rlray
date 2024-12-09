@@ -96,8 +96,12 @@ def wrap_up_lora(base_model):
     for layer_idx in range(0, len(base_model.model.layers)):
         new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp)
     return new_model
-    
 
+def wrap_up_critic(base_model):
+    new_model = base_model
+    new_model.lm_head = nn.Linear(base_model.config.hidden_size, 1, bias=False)
+    nn.init.zeros_(new_model.lm_head.weight)
+    
 #class Phi4Critic(nn.Module):
 #    def __init__(self, base_model, r=8, lora_alpha=1.0):
 #        super().__init__()
