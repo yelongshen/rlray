@@ -47,7 +47,7 @@ from functools import partial
 from contextlib import redirect_stdout
 import sys
 
-from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel
+from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel, Phi3Model
 from transformers.models.phi3.configuration_phi3 import Phi3Config
 
 from transformers import AutoConfig
@@ -90,6 +90,22 @@ class LoRAMLP(nn.Module):
         gate, up_states = up_states.chunk(2, dim=-1)
         up_states = up_states * self.activation_fn(gate)
         return self.lora_down(up_states)
+
+
+class Phi3rModel(Phi3Model):
+    def __init__(self, config: Phi3Config):
+        
+
+
+class Phi3rCausalLM(Phi3ForCausalLM):
+    def __init__(self, config, base_model):
+        Phi3PreTrainedModel.__init__(self, config)
+        
+        self.model = Phi3Model(config)
+        self.vocab_size = config.vocab_size
+        self.lm_head = base_model.lm_head # nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        # Initialize weights and apply final processing
+        self.post_init()
 
 def wrap_up_lora(base_model, cx = 0):
     new_model = base_model
