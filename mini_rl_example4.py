@@ -92,35 +92,66 @@ class LoRAMLP(nn.Module):
         return self.lora_down(up_states)
 
 
-class Phi3rModel(Phi3Model):
-    def __init__(self, config: Phi3Config):
+class Phi3rDecoderLayer(Phi3DecoderLayer):
+    def __init__(self, config: Phi3Config, base_model):
+        #super().__init__()
+        self.config = config
+        self.self_attn = base_model.self_attn # PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
+
+        self.mlp = LoRAMLP(base_model.mlp) # Phi3MLP(config)
         
+        self.input_layernorm = base_model.input_layernorm # Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+        self.resid_attn_dropout = base_model.resid_attn_dropout # nn.Dropout(config.resid_pdrop)
+        self.resid_mlp_dropout = base_model.resid_mlp_dropout # nn.Dropout(config.resid_pdrop)
+        self.post_attention_layernorm = base_model.post_attention_layernorm # Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        
+class Phi3rModel(Phi3Model):
+    def __init__(self, config: Phi3Config, base_model):
+        Phi3PreTrainedModel.__init__(self, config)
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+
+        self.embed_tokens = base_model.embed_tokens # nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.embed_dropout = base_model.embed_dropout # nn.Dropout(config.embd_pdrop)
+        
+        self._attn_implementation = config._attn_implementation
+        self.norm = base_model.norm # Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+        self.gradient_checkpointing = False
+        # Initialize weights and apply final processing
+        
+        self.layers = nn.ModuleList()
+        for layer_idx in range(config.num_hidden_layers):
+            self.layers.append(Phi3rDecoderLayer(config, base_model.layers[layer_idx]))
+        #[Phi3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
+        self.post_init()
 
 
 class Phi3rCausalLM(Phi3ForCausalLM):
     def __init__(self, config, base_model):
         Phi3PreTrainedModel.__init__(self, config)
         
-        self.model = Phi3Model(config)
+        self.model = Phi3rModel(config, base_model.model)
         self.vocab_size = config.vocab_size
         self.lm_head = base_model.lm_head # nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         # Initialize weights and apply final processing
         self.post_init()
 
-def wrap_up_lora(base_model, cx = 0):
-    new_model = base_model
-    for layer_idx in range(0, len(base_model.model.layers)):
-        if cx == 0:
-            new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp)
-        else:
-            new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp.original_mlp)
-    return new_model
+#def wrap_up_lora(base_model, cx = 0):
+#    new_model = base_model
+#    for layer_idx in range(0, len(base_model.model.layers)):
+#        if cx == 0:
+#            new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp)
+#        else:
+#            new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp.original_mlp)
+#    return new_model
 
-def wrap_up_critic(base_model):
-    new_model = base_model
-    new_model.lm_head = nn.Linear(base_model.config.hidden_size, 1, bias=False)
-    nn.init.zeros_(new_model.lm_head.weight)
-    return new_model
+#def wrap_up_critic(base_model):
+#    new_model = base_model
+#    new_model.lm_head = nn.Linear(base_model.config.hidden_size, 1, bias=False)
+#    nn.init.zeros_(new_model.lm_head.weight)
+#    return new_model
     
 #class Phi4Critic(nn.Module):
 #    def __init__(self, base_model, r=8, lora_alpha=1.0):
