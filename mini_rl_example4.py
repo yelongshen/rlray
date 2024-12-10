@@ -365,6 +365,13 @@ def play():
             if inputs["input_ids"].shape[1] > 2000:
                 continue
             outputs = llm.generate(inputs["input_ids"], max_length=4096)
+
+            print('input_ids', inputs["input_ids"], inputs["input_ids"].shape)
+            print('outputs[0]', outputs[0], outputs[0].shape)
+
+            
+            #critic_model(inputs["input_ids"])
+            
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
             #o = llm.generate([problem], sampling_params)
