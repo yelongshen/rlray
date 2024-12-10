@@ -136,7 +136,8 @@ class Phi3rCausalLM(Phi3ForCausalLM):
         self.vocab_size = config.vocab_size
         if is_critic:
             self.lm_head = nn.Linear(base_model.config.hidden_size, 1, bias=False)
-            nn.init.zeros_(self.lm_head.weight)
+            nn.init.normal_(self.lm_head.weight)
+            #nn.init.zeros_(self.lm_head.weight)
         else:
             self.lm_head = base_model.lm_head # nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         # Initialize weights and apply final processing
