@@ -125,18 +125,22 @@ class Phi3rModel(Phi3Model):
         for layer_idx in range(config.num_hidden_layers):
             self.layers.append(Phi3rDecoderLayer(config, base_model.layers[layer_idx]))
         #[Phi3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
-        self.post_init()
+        #self.post_init()
 
 
 class Phi3rCausalLM(Phi3ForCausalLM):
-    def __init__(self, config, base_model):
+    def __init__(self, config, base_model, is_critic=False):
         Phi3PreTrainedModel.__init__(self, config)
         
         self.model = Phi3rModel(config, base_model.model)
         self.vocab_size = config.vocab_size
-        self.lm_head = base_model.lm_head # nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        if is_critic:
+            self.lm_head = nn.Linear(base_model.config.hidden_size, 1, bias=False)
+            nn.init.zeros_(self.lm_head.weight)
+        else:
+            self.lm_head = base_model.lm_head # nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         # Initialize weights and apply final processing
-        self.post_init()
+        #self.post_init()
 
 #def wrap_up_lora(base_model, cx = 0):
 #    new_model = base_model
@@ -298,8 +302,11 @@ def play():
     # Load configuration from a pre-trained model
     llm_config = AutoConfig.from_pretrained(model_name)
 
-    actor_model = wrap_up_lora(llm)
-    critic_model = wrap_up_critic(wrap_up_lora(llm)) # Phi4LM(llm, r=8, lora_alpha=1.0)
+    #Phi3rCausalLM(Phi3ForCausalLM):
+    #def __init__(self, config, base_model, is_critic=False):
+        
+    actor_model = Phi3rCausalLM(llm_config, llm)
+    critic_model = Phi3rCausalLM(llm_config, llm, is_critic=True) # Phi4LM(llm, r=8, lora_alpha=1.0)
     
     #phi4rllm = Phi4rLM(llm_config)
     
