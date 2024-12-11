@@ -171,13 +171,13 @@ class Phi3rCausalLM(Phi3ForCausalLM):
 
         output = super().forward(input_ids, attention_mask, position_ids, past_key_values, inputs_embeds, labels, use_cache, output_attentions, output_hidden_states, True)
 
-        logits = self.critic_head(hidden_states)
-        logits = logits.float()
+        critics = self.critic_head(output.hidden_states[-1])
+        critics = critics.float()
         
         return CausalLMOutputCriticWithPastCritic(
             loss=output.loss,
             logits=output.logits,
-            critics = 
+            critics = critics,
             past_key_values=output.past_key_values,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
@@ -351,9 +351,8 @@ def play():
 
     #Phi3rCausalLM(Phi3ForCausalLM):
     #def __init__(self, config, base_model, is_critic=False):
-        
-    actor_model = Phi3rCausalLM(llm_config, llm)
-    critic_model = Phi3rCausalLM(llm_config, llm, is_critic=True) # Phi4LM(llm, r=8, lora_alpha=1.0)
+    llm_model = Phi3rCausalLM(llm_config, llm, is_critic=True)
+    # critic_model = Phi3rCausalLM(llm_config, llm, is_critic=True) # Phi4LM(llm, r=8, lora_alpha=1.0)
     
     #phi4rllm = Phi4rLM(llm_config)
     
@@ -363,11 +362,11 @@ def play():
     #print("Missing keys:", missing_keys)
     #print("Unexpected keys:", unexpected_keys)
    
-    actor_model = actor_model.to(device)
-    critic_model = critic_model.to(device)
+    llm_model = llm_model.to(device)
+    #critic_model = critic_model.to(device)
     #print(phi4rllm)
     
-    llm = actor_model
+    llm = llm_model
     #base_model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
