@@ -63,7 +63,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class CausalLMOutputCriticWithPastCritic(CausalLMOutputWithPast):
+class CausalLMOutputCriticWithPast(CausalLMOutputWithPast):
     critics: torch.FloatTensor = None
     
     #loss: Optional[torch.FloatTensor] = None
@@ -167,14 +167,14 @@ class Phi3rCausalLM(Phi3ForCausalLM):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, CausalLMOutputCriticWithPastCritic]:
+    ) -> Union[Tuple, CausalLMOutputCriticWithPast]:
 
         output = super().forward(input_ids, attention_mask, position_ids, past_key_values, inputs_embeds, labels, use_cache, output_attentions, output_hidden_states, True)
 
         critics = self.critic_head(output.hidden_states[-1])
         critics = critics.float()
         
-        return CausalLMOutputCriticWithPastCritic(
+        return CausalLMOutputCriticWithPast(
             loss=output.loss,
             logits=output.logits,
             critics = critics,
