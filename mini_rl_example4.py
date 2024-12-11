@@ -113,6 +113,8 @@ class LoRAMLP(nn.Module):
 class Phi3rDecoderLayer(Phi3DecoderLayer):
     def __init__(self, config: Phi3Config, base_model):
         #super().__init__()
+        nn.Module.__init__(self)
+        
         self.config = config
         self.self_attn = base_model.self_attn # PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
 
