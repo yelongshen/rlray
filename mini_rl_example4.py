@@ -421,8 +421,11 @@ def play():
 
             if inputs["input_ids"].shape[1] > 2000:
                 continue
+                
+            llm.begin_generation()
             outputs = llm.generate(inputs["input_ids"], max_length=4096)
-
+            llm.end_generation()
+            
             for _i in range(0, len(llm.critic_list)):
                 print('critic', _i, llm.critic_list[_i], llm.critic_list[_i].shape)
             
