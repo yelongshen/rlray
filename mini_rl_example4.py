@@ -154,7 +154,17 @@ class Phi3rCausalLM(Phi3ForCausalLM):
         if is_critic:
             self.critic_head = nn.Linear(base_model.config.hidden_size, 1, bias=False)
             nn.init.normal_(self.critic_head.weight)
-            
+
+        self.generation_mode = False
+        self.critic_list = []
+        
+    def begin_generation(self):
+        self.critic_list.clear()
+        self.generation_mode = True
+
+    def end_generation(self):
+        self.generation_mode = False
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -173,6 +183,8 @@ class Phi3rCausalLM(Phi3ForCausalLM):
 
         critics = self.critic_head(output.hidden_states[-1])
         critics = critics.float()
+
+        self.critic_list.append(critics)
         
         return CausalLMOutputCriticWithPast(
             loss=output.loss,
@@ -411,6 +423,9 @@ def play():
                 continue
             outputs = llm.generate(inputs["input_ids"], max_length=4096)
 
+            for _i in range(0, len(llm.critic_list)):
+                print('critic', _i, llm.critic_list[_i], llm.critic_list[_i].shape)
+            
             print('input_ids', inputs["input_ids"], inputs["input_ids"].shape)
             print('outputs[0]', outputs[0], outputs[0].shape)
 
