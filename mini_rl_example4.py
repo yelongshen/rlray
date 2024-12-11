@@ -47,7 +47,7 @@ from functools import partial
 from contextlib import redirect_stdout
 import sys
 
-from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel, Phi3Model
+from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel, Phi3Model, Phi3DecoderLayer
 from transformers.models.phi3.configuration_phi3 import Phi3Config
 
 from transformers import AutoConfig
