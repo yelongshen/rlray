@@ -58,6 +58,21 @@ import multiprocessing
 import signal
 from transformers.activations import ACT2FN
 
+from transformers.modeling_outputs import CausalLMOutputWithPast
+from dataclasses import dataclass
+
+
+@dataclass
+class CausalLMOutputCriticWithPastCritic(CausalLMOutputWithPast):
+    critics: torch.FloatTensor = None
+    
+    #loss: Optional[torch.FloatTensor] = None
+    #logits: torch.FloatTensor = None
+    #past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    #hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    #attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+
+
 class LoRALayer(nn.Module):
     def __init__(self, original_linear, r=8, lora_alpha=1.0):
         super(LoRALayer, self).__init__()
@@ -134,12 +149,43 @@ class Phi3rCausalLM(Phi3ForCausalLM):
         
         self.model = Phi3rModel(config, base_model.model)
         self.vocab_size = config.vocab_size
+        self.lm_head = base_model.lm_head # nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        
         if is_critic:
-            self.lm_head = nn.Linear(base_model.config.hidden_size, 1, bias=False)
-            nn.init.normal_(self.lm_head.weight)
+            self.critic_head = nn.Linear(base_model.config.hidden_size, 1, bias=False)
+            nn.init.normal_(self.critic_head.weight)
+            
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, CausalLMOutputCriticWithPastCritic]:
+
+        output = super().forward(input_ids, attention_mask, position_ids, past_key_values, inputs_embeds, labels, use_cache, output_attentions, output_hidden_states, True)
+
+        logits = self.critic_head(hidden_states)
+        logits = logits.float()
+        
+        return CausalLMOutputCriticWithPastCritic(
+            loss=output.loss,
+            logits=output.logits,
+            critics = 
+            past_key_values=output.past_key_values,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
+        
             #nn.init.zeros_(self.lm_head.weight)
-        else:
-            self.lm_head = base_model.lm_head # nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        #else:
+            
         # Initialize weights and apply final processing
         #self.post_init()
 
