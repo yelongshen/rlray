@@ -65,15 +65,14 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from dataclasses import dataclass
 
 
-@dataclass
-class CausalLMOutputCriticWithPast(CausalLMOutputWithPast):
-    critics: torch.FloatTensor = None
-    
-    #loss: Optional[torch.FloatTensor] = None
-    #logits: torch.FloatTensor = None
-    #past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
-    #hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
-    #attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+#@dataclass
+#class CausalLMOutputCriticWithPast(CausalLMOutputWithPast):
+#    critics: torch.FloatTensor = None   
+#    #loss: Optional[torch.FloatTensor] = None
+#    #logits: torch.FloatTensor = None
+#    #past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+#    #hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+#    #attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
 
 
 class LoRALayer(nn.Module):
@@ -182,23 +181,16 @@ class Phi3rCausalLM(Phi3ForCausalLM):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, CausalLMOutputCriticWithPast]:
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
 
-        output = super().forward(input_ids, attention_mask, position_ids, past_key_values, inputs_embeds, labels, use_cache, output_attentions, output_hidden_states, True)
+        output = super().forward(input_ids, attention_mask, position_ids, past_key_values, inputs_embeds, labels, use_cache, output_attentions, output_hidden_states, return_dict)
 
         critics = self.critic_head(output.hidden_states[-1])
         critics = critics.float()
 
         self.critic_list.append(critics)
         
-        return CausalLMOutputCriticWithPast(
-            loss=output.loss,
-            logits=output.logits,
-            critics = critics,
-            past_key_values=output.past_key_values,
-            hidden_states=output.hidden_states,
-            attentions=output.attentions,
-        )
+        return output
         
             #nn.init.zeros_(self.lm_head.weight)
         #else:
