@@ -169,21 +169,9 @@ class Phi3rCausalLM(Phi3ForCausalLM):
     def end_generation(self):
         self.generation_mode = False
 
-    def forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, CausalLMOutputWithPast]:
+    def forward(self, *args, **kwargs) -> Union[Tuple, CausalLMOutputWithPast]:
 
-        output = super().forward(input_ids, attention_mask, position_ids, past_key_values, inputs_embeds, labels, use_cache, output_attentions, output_hidden_states, return_dict)
+        output = super().forward(*args, **kwargs)
 
         critics = self.critic_head(output.hidden_states[-1])
         critics = critics.float()
