@@ -64,6 +64,7 @@ from transformers.activations import ACT2FN
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from dataclasses import dataclass
 
+from transformers.cache_utils import Cache, DynamicCache
 
 #@dataclass
 #class CausalLMOutputCriticWithPast(CausalLMOutputWithPast):
