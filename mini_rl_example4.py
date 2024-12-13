@@ -387,13 +387,16 @@ def play():
     llm_config = AutoConfig.from_pretrained(model_name)
     
     #print(llm_config)
-    
-    llm_state_dict = llm.state_dict()
 
-    print('state key begin.......')
-    for key in llm_state_dict:
-        print(key)
-    print('state key end  .......')
+    print('attn_implemention', llm_config._attn_implementation)
+    print('config.rope_scaling', llm_config.rope_scaling)
+    
+    #llm_state_dict = llm.state_dict()
+
+    #print('state key begin.......')
+    #for key in llm_state_dict:
+    #    print(key)
+    #print('state key end  .......')
     
     
     # Load configuration from a pre-trained model
