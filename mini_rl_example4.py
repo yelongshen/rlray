@@ -385,11 +385,17 @@ def play():
         trust_remote_code=True,  
     )#.to(device)
     llm_config = AutoConfig.from_pretrained(model_name)
-
-    print(llm_config)
     
-    #llm_state_dict = llm.state_dict()
+    #print(llm_config)
+    
+    llm_state_dict = llm.state_dict()
 
+    print('state key begin.......')
+    for key in llm_state_dict:
+        print(key)
+    print('state key end  .......')
+    
+    
     # Load configuration from a pre-trained model
     
     #Phi3rCausalLM(Phi3ForCausalLM):
