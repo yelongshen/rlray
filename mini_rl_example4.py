@@ -383,12 +383,15 @@ def play():
         #device_map="cuda",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
-    ).to(device)
+    )#.to(device)
+    llm_config = AutoConfig.from_pretrained(model_name)
+
+    print(llm_config)
+    
     #llm_state_dict = llm.state_dict()
 
     # Load configuration from a pre-trained model
-    llm_config = AutoConfig.from_pretrained(model_name)
-
+    
     #Phi3rCausalLM(Phi3ForCausalLM):
     #def __init__(self, config, base_model, is_critic=False):
     llm_model = Phi3rCausalLM(llm_config, llm, is_critic=True)
