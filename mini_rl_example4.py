@@ -452,7 +452,9 @@ def play():
             problem = example['description']
 
             problem = instruction_prefix + problem + instruction_postfix
-            
+
+            # x = tokenizer([problem])
+            # input_ids = x['input_ids']
             inputs = tokenizer(problem, return_tensors="pt").to("cuda")
             #print('input_ids.shape', inputs["input_ids"].shape)
 
