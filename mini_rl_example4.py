@@ -178,7 +178,9 @@ class Phi3rCausalLM(Phi3ForCausalLM):
         critics = critics.float()
 
         self.critic_list.append(critics)
-        
+
+        print('forward one time')
+
         return output
 
         
