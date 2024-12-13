@@ -152,7 +152,7 @@ class Phi3rCausalLM(Phi3ForCausalLM):
     def __init__(self, config, base_model, is_critic=False):
         Phi3PreTrainedModel.__init__(self, config)
         
-        self.model = Phi3rModel(config, base_model.model)
+        self.model = base_model.model # Phi3rModel(config, base_model.model)
         self.vocab_size = config.vocab_size
         self.lm_head = base_model.lm_head # nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         
