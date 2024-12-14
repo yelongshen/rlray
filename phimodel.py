@@ -86,7 +86,7 @@ class _Phi3RotaryEmbedding(nn.Module):
         self.register_buffer("inv_freq", None, persistent=False)
 
     @torch.no_grad()
-    def forward(self, x, position_ids, seq_len=None):
+    def forward(self, x, position_ids):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if self.inv_freq is None:
             self.inv_freq = 1.0 / (
@@ -105,93 +105,6 @@ class _Phi3RotaryEmbedding(nn.Module):
             sin = emb.sin()
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
-
-class _Phi3SuScaledRotaryEmbedding(_Phi3RotaryEmbedding):
-    def __init__(self, dim, config, device=None):
-        warnings.warn(
-            "The class Phi3SuScaledRotaryEmbedding is deprecated and will be removed in version 5 of Transformers. Please"
-            " use Phi3LongRoPEScaledRotaryEmbedding instead.",
-            FutureWarning,
-        )
-        super().__init__(dim, config.max_position_embeddings, config.rope_theta, device)
-
-        self.short_factor = config.rope_scaling["short_factor"]
-        self.long_factor = config.rope_scaling["long_factor"]
-        self.original_max_position_embeddings = config.original_max_position_embeddings
-
-    @torch.no_grad()
-    def forward(self, x, position_ids, seq_len=None):
-        seq_len = torch.max(position_ids) + 1
-        if seq_len > self.original_max_position_embeddings:
-            ext_factors = torch.tensor(self.long_factor, dtype=torch.float32, device=x.device)
-        else:
-            ext_factors = torch.tensor(self.short_factor, dtype=torch.float32, device=x.device)
-        inv_freq_shape = torch.arange(0, self.dim, 2, dtype=torch.int64, device=x.device).float() / self.dim
-        self.inv_freq = 1.0 / (ext_factors * self.base**inv_freq_shape)
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
-        position_ids_expanded = position_ids[:, None, :].float()
-        # Force float32 since bfloat16 loses precision on long contexts
-        # See https://github.com/huggingface/transformers/pull/29285
-        device_type = x.device.type
-        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            scale = self.max_position_embeddings / self.original_max_position_embeddings
-            if scale <= 1.0:
-                scaling_factor = 1.0
-            else:
-                scaling_factor = math.sqrt(1 + math.log(scale) / math.log(self.original_max_position_embeddings))
-            cos = emb.cos() * scaling_factor
-            sin = emb.sin() * scaling_factor
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
-
-
-class _Phi3YarnScaledRotaryEmbedding(_Phi3RotaryEmbedding):
-    def __init__(self, dim, config, device=None):
-        warnings.warn(
-            "The class Phi3YarnScaledRotaryEmbedding is deprecated and will be removed in version 5 of Transformers",
-            FutureWarning,
-        )
-        super().__init__(dim, config.max_position_embeddings, config.rope_theta, device)
-
-        self.short_factor = config.rope_scaling["short_factor"]
-        self.long_factor = config.rope_scaling["long_factor"]
-        self.original_max_position_embeddings = config.original_max_position_embeddings
-
-    @torch.no_grad()
-    def forward(self, x, position_ids, seq_len=None):
-        seq_len = torch.max(position_ids) + 1
-        if seq_len > self.original_max_position_embeddings:
-            ext_factors = torch.tensor(self.long_factor, dtype=torch.float32, device=x.device)
-        else:
-            ext_factors = torch.tensor(self.short_factor, dtype=torch.float32, device=x.device)
-
-        inv_freq_shape = torch.arange(0, self.dim, 2, dtype=torch.int64, device=x.device).float() / self.dim
-        self.inv_freq = 1.0 / (ext_factors * self.base**inv_freq_shape)
-
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
-        position_ids_expanded = position_ids[:, None, :].float()
-
-        # Force float32 since bfloat16 loses precision on long contexts
-        # See https://github.com/huggingface/transformers/pull/29285
-        device_type = x.device.type
-        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-
-            scale = self.max_position_embeddings / self.original_max_position_embeddings
-            if scale <= 1.0:
-                scaling_factor = 1.0
-            else:
-                scaling_factor = 0.1 * math.log(scale) + 1.0
-
-            cos = emb.cos() * scaling_factor
-            sin = emb.sin() * scaling_factor
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
-
-
 class _Phi3LongRoPEScaledRotaryEmbedding(_Phi3RotaryEmbedding):
     def __init__(self, dim, config, device=None):
         super().__init__(dim, config.max_position_embeddings, config.rope_theta, device)
@@ -201,8 +114,8 @@ class _Phi3LongRoPEScaledRotaryEmbedding(_Phi3RotaryEmbedding):
         self.original_max_position_embeddings = config.original_max_position_embeddings
 
     @torch.no_grad()
-    def forward(self, x, position_ids, seq_len=None):
-        seq_len = seq_len or torch.max(position_ids) + 1
+    def forward(self, x, position_ids):
+        seq_len = torch.max(position_ids) + 1
         if seq_len > self.original_max_position_embeddings:
             ext_factors = torch.tensor(self.long_factor, dtype=torch.float32, device=x.device)
         else:
@@ -297,6 +210,36 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
+def update_kv_cache(
+    key_states: torch.Tensor,
+    value_states: torch.Tensor,
+    past_key_value: Tuple[torch.Tensor, torch.Tensor], 
+    ):
+            # Update the number of seen tokens
+        if layer_idx == 0:
+            self._seen_tokens += key_states.shape[-2]
+
+        # Update the cache
+        if key_states is not None:
+            if len(self.key_cache) <= layer_idx:
+                # There may be skipped layers, fill them with empty lists
+                for _ in range(len(self.key_cache), layer_idx):
+                    self.key_cache.append([])
+                    self.value_cache.append([])
+                self.key_cache.append(key_states)
+                self.value_cache.append(value_states)
+            elif (
+                len(self.key_cache[layer_idx]) == 0
+            ):  # fills previously skipped layers; checking for tensor causes errors
+                self.key_cache[layer_idx] = key_states
+                self.value_cache[layer_idx] = value_states
+            else:
+                self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
+                self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+
 
 class _Phi3Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -351,14 +294,13 @@ class _Phi3Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
-        #output_attentions: bool = False,
-        #use_cache: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        past_key_value: Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]] = None
+    ) -> Tuple[torch.Tensor, Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]] ]:
+        
         logger.warning_once("You are not running the flash-attention implementation, expect numerical differences.")
-
+        
         bsz, q_len, _ = hidden_states.size()
 
         qkv = self.qkv_proj(hidden_states)
@@ -371,22 +313,23 @@ class _Phi3Attention(nn.Module):
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
-        kv_seq_len = key_states.shape[-2]
-        
-        if past_key_value is not None:
-            if self.layer_idx is None:
-                raise ValueError(
-                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                    "with a layer index."
-                )
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        cos, sin = self.rotary_emb(value_states, position_ids, seq_len=kv_seq_len)
+        #kv_seq_len = key_states.shape[-2]
+        #if past_key_value is not None:
+        #    if self.layer_idx is None:
+        #        raise ValueError(
+        #            f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+        #            "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+        #            "with a layer index."
+        #        )
+        #    kv_seq_len +=  past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+            
+        cos, sin = self.rotary_emb(value_states, position_ids) #, seq_len=kv_seq_len)
 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
+            
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         # repeat k/v heads if n_kv_heads < n_heads
@@ -395,18 +338,17 @@ class _Phi3Attention(nn.Module):
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.size()}"
-            )
-
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                )
-            attn_weights = attn_weights + attention_mask
+        #if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
+        #    raise ValueError(
+        #        f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
+        #        f" {attn_weights.size()}"
+        #    )
+        #if attention_mask is not None:
+        #    if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+        #        raise ValueError(
+        #            f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+        #        )
+        #    attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value_states.dtype)
@@ -452,11 +394,8 @@ class _Phi3FlashAttention2(_Phi3Attention):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
-        **kwargs,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        past_key_value: Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]] = None
+    ) -> Tuple[torch.Tensor, Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]] ]:
         # Phi3FlashAttention2 attention does not support output_attentions
 
         if not _flash_supports_window_size:
@@ -740,100 +679,10 @@ class _Phi3FlashAttention2(_Phi3Attention):
         )
 
 
-# copied from transformers.models.llama.modeling_llama.LlamaSdpaAttention with Llama->Phi3
-# TODO @Arthur no longer copied from LLama after static cache
-class _Phi3SdpaAttention(_Phi3Attention):
-    """
-    Phi3 attention module using torch.nn.functional.scaled_dot_product_attention. This module inherits from
-    `Phi3Attention` as the weights of the module stays untouched. The only changes are on the forward pass to adapt to
-    SDPA API.
-    """
-
-    # Adapted from Phi3Attention.forward
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        if output_attentions:
-            # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
-            logger.warning_once(
-                "Phi3Model is using Phi3SdpaAttention, but `torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to the manual attention implementation, "
-                'but specifying the manual implementation will be required from Transformers version v5.0.0 onwards. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
-            )
-            return super().forward(
-                hidden_states=hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_value,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-            )
-
-        bsz, q_len, _ = hidden_states.size()
-
-        qkv = self.qkv_proj(hidden_states)
-        query_pos = self.num_heads * self.head_dim
-        query_states = qkv[..., :query_pos]
-        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
-        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
-
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-
-        kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        cos, sin = self.rotary_emb(value_states, position_ids, seq_len=kv_seq_len)
-
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
-
-        if past_key_value is not None:
-            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                )
-
-        # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
-        # Reference: https://github.com/pytorch/pytorch/issues/112577.
-        if query_states.device.type == "cuda" and attention_mask is not None:
-            query_states = query_states.contiguous()
-            key_states = key_states.contiguous()
-            value_states = value_states.contiguous()
-
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
-            query_states,
-            key_states,
-            value_states,
-            attn_mask=attention_mask,
-            dropout_p=self.attention_dropout if self.training else 0.0,
-            # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
-            is_causal=self.is_causal and attention_mask is None and q_len > 1,
-        )
-
-        attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.view(bsz, q_len, self.hidden_size)
-
-        attn_output = self.o_proj(attn_output)
-
-        return attn_output, None, past_key_value
 
 _PHI3_ATTENTION_CLASSES = {
     "eager": _Phi3Attention,
-    "flash_attention_2": _Phi3FlashAttention2,
-    "sdpa": _Phi3SdpaAttention,
+    "flash_attention_2": _Phi3FlashAttention2
 }
 
 
@@ -907,9 +756,6 @@ class _Phi3DecoderLayer(nn.Module):
         hidden_states = residual + self.resid_mlp_dropout(hidden_states)
 
         outputs = (hidden_states,)
-
-        if output_attentions:
-            outputs += (self_attn_weights,)
 
         if use_cache:
             outputs += (present_key_value,)
