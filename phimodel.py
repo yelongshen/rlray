@@ -10,6 +10,8 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
+from torch.utils.checkpoint import checkpoint
+
 from transformers.utils import (
     add_code_sample_docstrings,
     add_start_docstrings,
@@ -258,9 +260,7 @@ class _Phi3Attention(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        
         logger.warning_once("You are not running the flash-attention implementation, expect numerical differences.")
-        
         bsz, q_len, _ = hidden_states.size()
 
         qkv = self.qkv_proj(hidden_states)
@@ -272,7 +272,6 @@ class _Phi3Attention(nn.Module):
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-
         #kv_seq_len = key_states.shape[-2]
         #if past_key_value is not None:
         #    if self.layer_idx is None:
@@ -282,7 +281,6 @@ class _Phi3Attention(nn.Module):
         #            "with a layer index."
         #        )
         #    kv_seq_len +=  past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-            
         cos, sin = self.rotary_emb(value_states, position_ids) #, seq_len=kv_seq_len)
 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
@@ -305,7 +303,8 @@ class _Phi3Attention(nn.Module):
         #        f" {attn_weights.size()}"
         #    )
         if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
+            attn_weights = attn_weights.masked_fill(attention_mask < 0.1, float('-inf'))
+            #attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value_states.dtype)
@@ -397,7 +396,6 @@ class _Phi3FlashAttention2(_Phi3Attention):
         #    and getattr(self.config, "sliding_window", None) is not None
         #    and kv_seq_len > self.config.sliding_window
         #)
-        
         if past_key_value is not None:
             key_cache = torch.cat([past_key_value[0], key_states], dim=-2)
             value_cache = torch.cat([past_key_value[1], value_states], dim=-2)
@@ -567,15 +565,15 @@ class _Phi3DecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        **kwargs,
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
-        if "padding_mask" in kwargs:
-            warnings.warn(
-                "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
-            )
+        past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        #output_attentions: Optional[bool] = False,
+        #use_cache: Optional[bool] = False,
+        #**kwargs,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        #if "padding_mask" in kwargs:
+        #    warnings.warn(
+        #        "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
+        #    )
         """
         Args:
             hidden_states (`torch.FloatTensor`):
@@ -593,19 +591,18 @@ class _Phi3DecoderLayer(nn.Module):
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
-
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        attn_outputs, self_attn_weights, present_key_value = self.self_attn(
+        attn_outputs, key_cache, value_cache = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
+            #output_attentions=output_attentions,
+            #use_cache=use_cache,
         )
 
         hidden_states = residual + self.resid_attn_dropout(attn_outputs)
@@ -616,11 +613,9 @@ class _Phi3DecoderLayer(nn.Module):
         hidden_states = residual + self.resid_mlp_dropout(hidden_states)
 
         outputs = (hidden_states,)
-
-        if use_cache:
-            outputs += (present_key_value,)
-
-        return outputs
+        #if use_cache:
+        #    outputs += (present_key_value,)
+        return outputs, key_cache, value_cache
 
 
 class _Phi3PreTrainedModel(nn.Module):
@@ -652,11 +647,9 @@ class _Phi3PreTrainedModel(nn.Module):
 class _Phi3Model(_Phi3PreTrainedModel):
     """
     Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`Phi3DecoderLayer`]
-
     Args:
         config: Phi3Config
     """
-
     def __init__(self, config: Phi3Config):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
@@ -668,12 +661,11 @@ class _Phi3Model(_Phi3PreTrainedModel):
             [_Phi3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self._attn_implementation = config._attn_implementation
-        self.norm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm = _Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
         # self.post_init()
-
     def get_input_embeddings(self):
         return self.embed_tokens
 
@@ -685,15 +677,13 @@ class _Phi3Model(_Phi3PreTrainedModel):
         input_ids: torch.LongTensor = None,
         #attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        
+        past_key_values: Optional[List[Tuple[torch.FloatTensor, torch.FloatTensor]]] = None,
         #inputs_embeds: Optional[torch.FloatTensor] = None,
         #use_cache: Optional[bool] = None,
         #output_attentions: Optional[bool] = None,
         #output_hidden_states: Optional[bool] = None,
         #return_dict: Optional[bool] = None,
     ):  # -> Union[Tuple, BaseModelOutputWithPast]:
-        
         #output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         #output_hidden_states = (
         #    output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -710,35 +700,36 @@ class _Phi3Model(_Phi3PreTrainedModel):
         #    batch_size, seq_length = inputs_embeds.shape[:2]
         #else:
         #    raise ValueError("You have to specify either input_ids or inputs_embeds")
-
         batch_size, seq_length = input_ids.shape[:2]
-        past_key_values_length = 0
+        past_key_values_length = 0 if past_key_values is None else past_key_values[0][0].shape[-2]
 
+        #if past_key_values is None:
+        #else:    
+        #    past_key_values_length = past_key_values[0][0].shape[-2] #.get_usable_length(seq_length)
+        
         #if self.gradient_checkpointing and self.training:
         #    if use_cache:
         #        logger.warning_once(
         #            "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
         #        )
         #        use_cache = False
-
         #if use_cache:
         #    use_legacy_cache = not isinstance(past_key_values, Cache)
         #    if use_legacy_cache:
         #        past_key_values = DynamicCache.from_legacy_cache(past_key_values)
         #    past_key_values_length = past_key_values.get_usable_length(seq_length)
-
+        device = input_ids.device
+        
         if position_ids is None:
-            device = input_ids.device if input_ids is not None else inputs_embeds.device
+             # if input_ids is not None else inputs_embeds.device
             position_ids = torch.arange(
                 past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
             )
             position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
         else:
             position_ids = position_ids.view(-1, seq_length).long()
-
         #if inputs_embeds is None:
         inputs_embeds = self.embed_tokens(input_ids)
-
         #if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
         #    is_padding_right = attention_mask[:, -1].sum().item() != batch_size
         #    if is_padding_right:
@@ -747,76 +738,78 @@ class _Phi3Model(_Phi3PreTrainedModel):
         #            " this may lead to unexpected behaviour for Flash Attention version of Phi3. Make sure to "
         #            " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
         #        )
-
         if self._attn_implementation == "flash_attention_2":
             # 2d mask is passed through the layers
-            attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
+            attention_mask = None # attention_mask if (attention_mask is not None and 0 in attention_mask) else None
         else:
-            # 4d mask is passed through the layers
-            attention_mask = _prepare_4d_causal_attention_mask(
-                attention_mask,
-                (batch_size, seq_length),
-                inputs_embeds,
-                past_key_values_length,
-                sliding_window=self.config.sliding_window,
-            )
-
+            # Add Causal Mask
+            if past_key_values is None:
+                attention_mask = torch.tril(torch.ones((seq_length, seq_length), device=device))
+            else:
+                attention_mask = torch.cat([torch.ones((seq_length, past_key_values_length), device=device), attention_mask], dim=-1) 
+            #attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # Expand for batch & heads
+            # Apply the Mask
+            
         hidden_states = inputs_embeds
 
         # decoder layers
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
-        next_decoder_cache = None
+        #all_hidden_states = () if output_hidden_states else None
+        #all_self_attns = () if output_attentions else None
+        next_decoder_cache = [] #List[Tuple[torch.FloatTensor, torch.FloatTensor]]
 
-        for decoder_layer in self.layers:
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
-
+        for layer_idx, decoder_layer in enumerate(self.layers):
+            #if output_hidden_states:
+            #    all_hidden_states += (hidden_states,)
+            kv_cache = None
+            if past_key_values is not None:
+                kv_cache = past_key_values[layer_idx]
+                
             if self.gradient_checkpointing and self.training:
-                layer_outputs = self._gradient_checkpointing_func(
+                layer_outputs, nk_cache, nv_cache = checkpoint(
                     decoder_layer.__call__,
                     hidden_states,
                     attention_mask,
                     position_ids,
-                    past_key_values,
-                    output_attentions,
-                    use_cache,
+                    past_key_values
                 )
             else:
-                layer_outputs = decoder_layer(
+                layer_outputs, nk_cache, nv_cache = decoder_layer(
                     hidden_states,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
-                    past_key_value=past_key_values,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
+                    past_key_value=kv_cache,
+                    #output_attentions=output_attentions,
+                    #use_cache=use_cache,
                 )
 
-            hidden_states = layer_outputs[0]
+            hidden_states = layer_outputs
+            next_decoder_cache.append((nk_cache, nv_cache))
+            #if use_cache:
+            #    next_decoder_cache = layer_outputs[2 if output_attentions else 1]
 
-            if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1],)
+            #if output_attentions:
+            #    all_self_attns += (layer_outputs[1],)
 
         hidden_states = self.norm(hidden_states)
 
         # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
-
-        next_cache = None
-        if use_cache:
-            next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
-        if not return_dict:
-            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=next_cache,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
-        )
+        #if output_hidden_states:
+        #    all_hidden_states += (hidden_states,)
+        #next_cache = None
+        #if use_cache:
+        #    next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
+        
+        #if not return_dict:
+        #    return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
+        
+        #return BaseModelOutputWithPast(
+        #    last_hidden_state=hidden_states,
+        #    past_key_values=next_cache,
+        #    hidden_states=all_hidden_states,
+        #    attentions=all_self_attns,
+        #)
+        # return lastlayer hidden states, and KV cache.
+        return hidden_states, next_decoder_cache
         
 # PP, TP, DP
 # Causal Large Language Model 
