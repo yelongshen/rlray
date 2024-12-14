@@ -134,13 +134,11 @@ class _Phi3LongRoPEScaledRotaryEmbedding(_Phi3RotaryEmbedding):
         with torch.autocast(device_type=device_type, enabled=False):
             freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
             emb = torch.cat((freqs, freqs), dim=-1)
-
             scale = self.max_position_embeddings / self.original_max_position_embeddings
             if scale <= 1.0:
                 scaling_factor = 1.0
             else:
                 scaling_factor = math.sqrt(1 + math.log(scale) / math.log(self.original_max_position_embeddings))
-
             cos = emb.cos() * scaling_factor
             sin = emb.sin() * scaling_factor
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
@@ -152,11 +150,9 @@ def rotate_half(x):
     x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
 
-
 # Copied from transformers.models.llama.modeling_llama.apply_rotary_pos_emb
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """Applies Rotary Position Embedding to the query and key tensors.
-
     Args:
         q (`torch.Tensor`): The query tensor.
         k (`torch.Tensor`): The key tensor.
@@ -180,24 +176,19 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
-
 class _Phi3MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-
         self.config = config
         self.gate_up_proj = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
         self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
-
         self.activation_fn = ACT2FN[config.hidden_act]
-
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         up_states = self.gate_up_proj(hidden_states)
         gate, up_states = up_states.chunk(2, dim=-1)
         up_states = up_states * self.activation_fn(gate)
         return self.down_proj(up_states)
-
-
+        
 # Copied from transformers.models.llama.modeling_llama.repeat_kv with llama->phi
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
@@ -209,37 +200,6 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         return hidden_states
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
-
-def update_kv_cache(
-    key_states: torch.Tensor,
-    value_states: torch.Tensor,
-    past_key_value: Tuple[torch.Tensor, torch.Tensor], 
-    ):
-            # Update the number of seen tokens
-        if layer_idx == 0:
-            self._seen_tokens += key_states.shape[-2]
-
-        # Update the cache
-        if key_states is not None:
-            if len(self.key_cache) <= layer_idx:
-                # There may be skipped layers, fill them with empty lists
-                for _ in range(len(self.key_cache), layer_idx):
-                    self.key_cache.append([])
-                    self.value_cache.append([])
-                self.key_cache.append(key_states)
-                self.value_cache.append(value_states)
-            elif (
-                len(self.key_cache[layer_idx]) == 0
-            ):  # fills previously skipped layers; checking for tensor causes errors
-                self.key_cache[layer_idx] = key_states
-                self.value_cache[layer_idx] = value_states
-            else:
-                self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
-                self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
-
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
-
-
 
 class _Phi3Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -296,8 +256,8 @@ class _Phi3Attention(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]] = None
-    ) -> Tuple[torch.Tensor, Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]] ]:
+        past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
         logger.warning_once("You are not running the flash-attention implementation, expect numerical differences.")
         
@@ -328,27 +288,24 @@ class _Phi3Attention(nn.Module):
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
-            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
+            key_cache = torch.cat([past_key_value[0], key_states], dim=-2)
+            value_cache = torch.cat([past_key_value[1], value_states], dim=-2)
+        else:
+            key_cache = key_states
+            value_cache = value_states
             
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
         # repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
+        key_states = repeat_kv(key_cache, self.num_key_value_groups)
+        value_states = repeat_kv(value_cache, self.num_key_value_groups)
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
         #if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
         #    raise ValueError(
         #        f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
         #        f" {attn_weights.size()}"
         #    )
-        #if attention_mask is not None:
-        #    if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-        #        raise ValueError(
-        #            f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-        #        )
-        #    attn_weights = attn_weights + attention_mask
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value_states.dtype)
@@ -356,21 +313,12 @@ class _Phi3Attention(nn.Module):
 
         attn_output = torch.matmul(attn_weights, value_states)
 
-        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
-            raise ValueError(
-                f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-                f" {attn_output.size()}"
-            )
-
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
-
+        
         attn_output = self.o_proj(attn_output)
 
-        if not output_attentions:
-            attn_weights = None
-
-        return attn_output, attn_weights, past_key_value
+        return attn_output, key_cache, value_cache
 
 
 class _Phi3FlashAttention2(_Phi3Attention):
@@ -394,8 +342,8 @@ class _Phi3FlashAttention2(_Phi3Attention):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]] = None
-    ) -> Tuple[torch.Tensor, Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]] ]:
+        past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Phi3FlashAttention2 attention does not support output_attentions
 
         if not _flash_supports_window_size:
@@ -404,16 +352,14 @@ class _Phi3FlashAttention2(_Phi3Attention):
             )
             raise ValueError("The current flash attention version does not support sliding window attention.")
 
-        output_attentions = False
+        #output_attentions = False
 
-        if "padding_mask" in kwargs:
-            warnings.warn(
-                "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
-            )
-
-            # overwrite attention_mask with padding_mask
-            attention_mask = kwargs.pop("padding_mask")
-
+        #if "padding_mask" in kwargs:
+        #    warnings.warn(
+        #        "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
+        #    )
+        #    # overwrite attention_mask with padding_mask
+        #    attention_mask = kwargs.pop("padding_mask")
         bsz, q_len, _ = hidden_states.size()
 
         qkv = self.qkv_proj(hidden_states)
@@ -429,60 +375,39 @@ class _Phi3FlashAttention2(_Phi3Attention):
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
-        kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
-            if self.layer_idx is None:
-                raise ValueError(
-                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                    "with a layer index."
-                )
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        #kv_seq_len = key_states.shape[-2]
+        #if past_key_value is not None:
+        #    if self.layer_idx is None:
+        #        raise ValueError(
+        #            f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+        #            "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+        #            "with a layer index."
+        #        )
+        #    kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
 
         # Because the input can be padded, the absolute sequence length depends on the max position id.
-        rotary_seq_len = max(kv_seq_len, position_ids[:, -1].max().item() + 1)
-        cos, sin = self.rotary_emb(value_states, position_ids, seq_len=rotary_seq_len)
+        #rotary_seq_len = max(kv_seq_len, position_ids[:, -1].max().item() + 1)
+        cos, sin = self.rotary_emb(value_states, position_ids) #, seq_len=rotary_seq_len)
 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
-        use_sliding_windows = (
-            _flash_supports_window_size
-            and getattr(self.config, "sliding_window", None) is not None
-            and kv_seq_len > self.config.sliding_window
-        )
-
+        # sliding_window by default is False.
+        #use_sliding_windows = (
+        #    _flash_supports_window_size
+        #    and getattr(self.config, "sliding_window", None) is not None
+        #    and kv_seq_len > self.config.sliding_window
+        #)
+        
         if past_key_value is not None:
-            # Activate slicing cache only if the config has a value `sliding_windows` attribute
-            cache_has_contents = past_key_value.get_seq_length(self.layer_idx) > 0
-            if (
-                getattr(self.config, "sliding_window", None) is not None
-                and kv_seq_len > self.config.sliding_window
-                and cache_has_contents
-            ):
-                slicing_tokens = 1 - self.config.sliding_window
-
-                past_key = past_key_value[self.layer_idx][0]
-                past_value = past_key_value[self.layer_idx][1]
-
-                past_key = past_key[:, :, slicing_tokens:, :].contiguous()
-                past_value = past_value[:, :, slicing_tokens:, :].contiguous()
-
-                if past_key.shape[-2] != self.config.sliding_window - 1:
-                    raise ValueError(
-                        f"past key must have a shape of (`batch_size, num_heads, self.config.sliding_window-1, head_dim`), got"
-                        f" {past_key.shape}"
-                    )
-
-                if attention_mask is not None:
-                    attention_mask = attention_mask[:, slicing_tokens:]
-                    attention_mask = torch.cat([attention_mask, torch.ones_like(attention_mask[:, -1:])], dim=-1)
-
-            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
+            key_cache = torch.cat([past_key_value[0], key_states], dim=-2)
+            value_cache = torch.cat([past_key_value[1], value_states], dim=-2)
+        else:
+            key_cache = key_states
+            value_cache = value_states
+            
         # repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
+        key_states = repeat_kv(key_cache, self.num_key_value_groups)
+        value_states = repeat_kv(value_cache, self.num_key_value_groups)
 
         attn_dropout = self.attention_dropout if self.training else 0.0
 
@@ -491,7 +416,6 @@ class _Phi3FlashAttention2(_Phi3Attention):
         # cast them back in the correct dtype just to be sure everything works as expected.
         # This might slowdown training & inference so it is recommended to not cast the LayerNorms
         # in fp32.
-
         if query_states.dtype == torch.float32:
             if torch.is_autocast_enabled():
                 target_dtype = torch.get_autocast_gpu_dtype()
@@ -523,16 +447,12 @@ class _Phi3FlashAttention2(_Phi3Attention):
             attention_mask,
             q_len,
             dropout=attn_dropout,
-            use_sliding_windows=use_sliding_windows,
         )
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
 
-        if not output_attentions:
-            attn_weights = None
-
-        return attn_output, attn_weights, past_key_value
+        return attn_output, key_cache, value_cache
 
     # Copied from transformers.models.mistral.modeling_mistral.MistralFlashAttention2._flash_attention_forward
     def _flash_attention_forward(
@@ -544,7 +464,6 @@ class _Phi3FlashAttention2(_Phi3Attention):
         query_length,
         dropout=0.0,
         softmax_scale=None,
-        use_sliding_windows=False,
     ):
         """
         Calls the forward method of Flash Attention - if the input hidden states contain at least one padding token
@@ -567,72 +486,13 @@ class _Phi3FlashAttention2(_Phi3Attention):
             use_sliding_windows (`bool`, *optional*):
                 Whether to activate sliding window attention.
         """
-        if not self._flash_attn_uses_top_left_mask:
-            causal = self.is_causal
-        else:
-            # TODO: Remove the `query_length != 1` check once Flash Attention for RoCm is bumped to 2.1. For details, please see the comment in LlamaFlashAttention2 __init__.
-            causal = self.is_causal and query_length != 1
-
-        # Contains at least one padding token in the sequence
-        if attention_mask is not None:
-            batch_size = query_states.shape[0]
-            query_states, key_states, value_states, indices_q, cu_seq_lens, max_seq_lens = self._upad_input(
-                query_states, key_states, value_states, attention_mask, query_length
-            )
-
-            cu_seqlens_q, cu_seqlens_k = cu_seq_lens
-            max_seqlen_in_batch_q, max_seqlen_in_batch_k = max_seq_lens
-
-            if not use_sliding_windows:
-                attn_output_unpad = flash_attn_varlen_func(
-                    query_states,
-                    key_states,
-                    value_states,
-                    cu_seqlens_q=cu_seqlens_q,
-                    cu_seqlens_k=cu_seqlens_k,
-                    max_seqlen_q=max_seqlen_in_batch_q,
-                    max_seqlen_k=max_seqlen_in_batch_k,
-                    dropout_p=dropout,
-                    softmax_scale=softmax_scale,
-                    causal=causal,
-                )
-            else:
-                attn_output_unpad = flash_attn_varlen_func(
-                    query_states,
-                    key_states,
-                    value_states,
-                    cu_seqlens_q=cu_seqlens_q,
-                    cu_seqlens_k=cu_seqlens_k,
-                    max_seqlen_q=max_seqlen_in_batch_q,
-                    max_seqlen_k=max_seqlen_in_batch_k,
-                    dropout_p=dropout,
-                    softmax_scale=softmax_scale,
-                    causal=causal,
-                    window_size=(self.config.sliding_window, self.config.sliding_window),
-                )
-
-            attn_output = pad_input(attn_output_unpad, indices_q, batch_size, query_length)
-        else:
-            if not use_sliding_windows:
-                attn_output = flash_attn_func(
-                    query_states,
-                    key_states,
-                    value_states,
-                    dropout,
-                    softmax_scale=softmax_scale,
-                    causal=causal,
-                )
-            else:
-                attn_output = flash_attn_func(
-                    query_states,
-                    key_states,
-                    value_states,
-                    dropout,
-                    softmax_scale=softmax_scale,
-                    causal=causal,
-                    window_size=(self.config.sliding_window, self.config.sliding_window),
-                )
-
+        attn_output = flash_attn_func(
+            query_states,
+            key_states,
+            value_states,
+            dropout,
+            softmax_scale=softmax_scale,
+            causal=True)
         return attn_output
 
     # Copied from transformers.models.mistral.modeling_mistral.MistralFlashAttention2._upad_input
@@ -1007,7 +867,6 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         ## inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
-        
         ## use_cache: Optional[bool] = None,
         ## output_attentions: Optional[bool] = None,
         ## output_hidden_states: Optional[bool] = None,
@@ -1047,11 +906,11 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         'This is an example script .\n Certainly! Below is a sample script that demonstrates a simple task, such as calculating the sum'
         ```"""
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        #output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        #output_hidden_states = (
+        #    output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        #)
+        #return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
@@ -1078,7 +937,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
 
-        return loss, logits, critics, past_key_values, 
+        return loss, logits, critics, past_key_values 
         #return CausalLMOutputWithPast(
         #    loss=loss,
         #    logits=logits,
