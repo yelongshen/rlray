@@ -251,8 +251,8 @@ def play():
             #inputs = tokenizer(problem, return_tensors="pt").to("cuda")
             #print('input_ids.shape', inputs["input_ids"].shape)
 
-            #if inputs["input_ids"].shape[1] > 2000:
-            #    continue
+            if len(input_ids) > 2000: # inputs["input_ids"].shape[1] > 2000:
+                continue
             #print('input_ids', input_ids)
             #prompt_tokens: List[List[int]],
             #max_gen_len: int,
