@@ -251,21 +251,18 @@ def play():
             #inputs = tokenizer(problem, return_tensors="pt").to("cuda")
             #print('input_ids.shape', inputs["input_ids"].shape)
 
-            if inputs["input_ids"].shape[1] > 2000:
-                continue
-
+            #if inputs["input_ids"].shape[1] > 2000:
+            #    continue
+            print('input_ids', input_ids)
             #prompt_tokens: List[List[int]],
             #max_gen_len: int,
-            
             #llm.begin_generation()
             #outputs = llm.generate(inputs["input_ids"], max_length=4096)
             outputs = llm.generate(input_ids, max_gen_len = 2048)
             #llm.end_generation()
-            
             #for _i in range(0, len(llm.critic_list)):
             #    print('critic', _i, llm.critic_list[_i], llm.critic_list[_i].shape)
-            print('input_ids', inputs["input_ids"], inputs["input_ids"].shape)
-            print('outputs[0]', outputs[0], outputs[0].shape)
+            print('outputs[0]', outputs)
 
             #critic_model(inputs["input_ids"])
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
