@@ -195,16 +195,14 @@ def play():
     #def __init__(self, config, base_model, is_critic=False):
     #llm_model = Phi3rCausalLM(llm_config, llm, is_critic=True)
     llm_model = _Phi3ForCausalLM(llm_config)
-            
+    
+    missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False)
     # critic_model = Phi3rCausalLM(llm_config, llm, is_critic=True) # Phi4LM(llm, r=8, lora_alpha=1.0)
-    
     #phi4rllm = Phi4rLM(llm_config)
-    
     # to avoid copy two times of model-weight.
-    
     #missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
-    #print("Missing keys:", missing_keys)
-    #print("Unexpected keys:", unexpected_keys)
+    print("Missing keys:", missing_keys)
+    print("Unexpected keys:", unexpected_keys)
    
     llm_model = llm_model.to(device)
     #critic_model = critic_model.to(device)
@@ -248,27 +246,28 @@ def play():
 
             problem = instruction_prefix + problem + instruction_postfix
 
-            # x = tokenizer([problem])
-            # input_ids = x['input_ids']
-            inputs = tokenizer(problem, return_tensors="pt").to("cuda")
+            x = tokenizer([problem])
+            input_ids = x['input_ids']
+            #inputs = tokenizer(problem, return_tensors="pt").to("cuda")
             #print('input_ids.shape', inputs["input_ids"].shape)
 
             if inputs["input_ids"].shape[1] > 2000:
                 continue
-                
-            llm.begin_generation()
-            outputs = llm.generate(inputs["input_ids"], max_length=4096)
-            llm.end_generation()
+
+            #prompt_tokens: List[List[int]],
+            #max_gen_len: int,
             
-            for _i in range(0, len(llm.critic_list)):
-                print('critic', _i, llm.critic_list[_i], llm.critic_list[_i].shape)
+            #llm.begin_generation()
+            #outputs = llm.generate(inputs["input_ids"], max_length=4096)
+            outputs = llm.generate(input_ids, max_gen_len = 2048)
+            #llm.end_generation()
             
+            #for _i in range(0, len(llm.critic_list)):
+            #    print('critic', _i, llm.critic_list[_i], llm.critic_list[_i].shape)
             print('input_ids', inputs["input_ids"], inputs["input_ids"].shape)
             print('outputs[0]', outputs[0], outputs[0].shape)
 
-            
             #critic_model(inputs["input_ids"])
-            
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
             #o = llm.generate([problem], sampling_params)
