@@ -982,7 +982,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         max_gen_len: int,
         temperature: float = 0.2,
         top_p: float = 0.9,
-    ) -> Tuple[ List[List[int]], List[List[float]], List[List[float]] ]: # these are the actions[token index, critic score, prob] 
+    ) -> Tuple[ List[List[int]], List[List[float]] ]: # these are the actions[token index, critic score, prob] 
         """
         Generate text sequences based on provided prompts using the language generation model.
         Args:
@@ -1038,9 +1038,9 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         #labels: Optional[torch.LongTensor] = None,
             
         for cur_pos in range(min_prompt_len, total_len):
-            _, logits, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], num_logits_to_keep=1)
+            _, logits, past_kv  = self.forward(tokens[:, prev_pos:cur_pos])
 
-            #print('logits.shape', logits.shape)
+            print('logits.shape', logits.shape)
             #print('past_kv len', len(past_kv))
             #print('past_kv[0][0].shape', past_kv[0][0].shape)
             #print('past_kv[0][1].shape', past_kv[0][1].shape)
@@ -1063,22 +1063,23 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             #print(logits.shape)
             
             #if logprobs:
-            token_logprobs[:, prev_pos + 1 : cur_pos + 1] = -F.cross_entropy(
-                input=logits.transpose(1, 2),
+            token_logprobs[:, prev_pos: cur_pos] = -F.cross_entropy(
+                input=logits, #.transpose(1, 2),
                 target=tokens[:, prev_pos + 1 : cur_pos + 1],
                 reduction="none",
                 ignore_index=pad_id,
             )
             
             eos_reached |= (~input_text_mask[:, cur_pos]) & (
-                next_token == self.tokenizer.eos_id
+                next_token == eos_id
             )
             prev_pos = cur_pos
             if all(eos_reached):
                 break
 
-        token_logprobs = token_logprobs.tolist()
-
+        print('generation done...................')
+        #token_logprobs = token_logprobs.tolist()
+        print('token_logprobs', token_logprobs.shape, token_logprobs.tolist())
         
         out_tokens, out_logprobs, out_critics = [], [], []
         for i, toks in enumerate(tokens.tolist()):
