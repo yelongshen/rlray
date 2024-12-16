@@ -67,71 +67,6 @@ from dataclasses import dataclass
 from transformers.cache_utils import Cache, DynamicCache
 
 from phimodel import _Phi3ForCausalLM
-
-#@dataclass
-#class CausalLMOutputCriticWithPast(CausalLMOutputWithPast):
-#    critics: torch.FloatTensor = None   
-#    #loss: Optional[torch.FloatTensor] = None
-#    #logits: torch.FloatTensor = None
-#    #past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
-#    #hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
-#    #attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
-
-
-            #nn.init.zeros_(self.lm_head.weight)
-        #else:
-            
-        # Initialize weights and apply final processing
-        #self.post_init()
-
-#def wrap_up_lora(base_model, cx = 0):
-#    new_model = base_model
-#    for layer_idx in range(0, len(base_model.model.layers)):
-#        if cx == 0:
-#            new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp)
-#        else:
-#            new_model.model.layers[layer_idx].mlp = LoRAMLP(base_model.model.layers[layer_idx].mlp.original_mlp)
-#    return new_model
-
-#def wrap_up_critic(base_model):
-#    new_model = base_model
-#    new_model.lm_head = nn.Linear(base_model.config.hidden_size, 1, bias=False)
-#    nn.init.zeros_(new_model.lm_head.weight)
-#    return new_model
-    
-#class Phi4Critic(nn.Module):
-#    def __init__(self, base_model, r=8, lora_alpha=1.0):
-#        super().__init__()
-        
-        
-#class HydraMLP(nn.Module):
-#    def __init__(self, base_model, r=8, lora_alpha=1.0):
-#        super(HydraNLP, self).__init__()
-#        self.base_model = base_model
-#        self.lm_mlp = LoRAMLP(base_model, r, lora_alpha)
-#        self.critic_mlp = LoRAMLP(base_model, r, lora_alpha)
-#    def forward(self, x1, x2):
-#        y1 = self.lm_mlp(x1)
-#        y2 = self.critic_mlp(x2)
-#        return (y1, y2)
-        
-        
-# parallel KV cache. 
-
-#class Phi4hyMLP(nn.Module):
-#    def __init__(self, original_mlp, lora_r=16):
-#        super().__init__()
-#        self.original_mlp = mlp
-#        self.lora_down = nn.Linear(original_mlp.
-#        self.config = config
-#        self.gate_up_proj = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
-#        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
-#        self.activation_fn = ACT2FN[config.hidden_act]
-#    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-#        up_states = self.gate_up_proj(hidden_states)
-#        gate, up_states = up_states.chunk(2, dim=-1)
-#        up_states = up_states * self.activation_fn(gate)
-#        return self.down_proj(up_states)
         
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -258,7 +193,9 @@ def play():
     
     #Phi3rCausalLM(Phi3ForCausalLM):
     #def __init__(self, config, base_model, is_critic=False):
-    llm_model = Phi3rCausalLM(llm_config, llm, is_critic=True)
+    #llm_model = Phi3rCausalLM(llm_config, llm, is_critic=True)
+    llm_model = _Phi3ForCausalLM(llm_config)
+            
     # critic_model = Phi3rCausalLM(llm_config, llm, is_critic=True) # Phi4LM(llm, r=8, lora_alpha=1.0)
     
     #phi4rllm = Phi4rLM(llm_config)
