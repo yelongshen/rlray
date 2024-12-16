@@ -742,10 +742,10 @@ class _Phi3Model(_Phi3PreTrainedModel):
             # 2d mask is passed through the layers
             attention_mask = None # attention_mask if (attention_mask is not None and 0 in attention_mask) else None
         else:
+            attention_mask = torch.tril(torch.ones((seq_length, seq_length), device=device))
+            
             # Add Causal Mask
-            if past_key_values is None:
-                attention_mask = torch.tril(torch.ones((seq_length, seq_length), device=device))
-            else:
+            if past_key_values is not None:
                 attention_mask = torch.cat([torch.ones((seq_length, past_key_values_length), device=device), attention_mask], dim=-1) 
             #attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # Expand for batch & heads
             # Apply the Mask
