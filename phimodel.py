@@ -1040,7 +1040,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         for cur_pos in range(min_prompt_len, total_len):
             _, logits, past_kv  = self.forward(tokens[:, prev_pos:cur_pos])
 
-            print('logits.shape', logits.shape)
+            #print('logits.shape', logits.shape)
             #print('past_kv len', len(past_kv))
             #print('past_kv[0][0].shape', past_kv[0][0].shape)
             #print('past_kv[0][1].shape', past_kv[0][1].shape)
@@ -1059,12 +1059,12 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             )
             tokens[:, cur_pos] = next_token
 
-            print('tokens', tokens)
+            #print('tokens', tokens)
             #print(logits.shape)
             
             #if logprobs:
-            print('logits.shape', logits.shape)
-            print('target.shape', tokens[:, prev_pos + 1 : cur_pos + 1].shape)
+            #print('logits.shape', logits.shape)
+            #print('target.shape', tokens[:, prev_pos + 1 : cur_pos + 1].shape)
             
             token_logprobs[:, prev_pos: cur_pos] = -F.cross_entropy(
                 input=logits.reshape(-1, self.vocab_size), #.transpose(1, 2),
@@ -1080,7 +1080,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             if all(eos_reached):
                 break
 
-        print('generation done...................')
+        #print('generation done...................')
         token_logprobs = token_logprobs.tolist()
         #print('token_logprobs', token_logprobs.shape, token_logprobs.tolist())
         
