@@ -1081,26 +1081,26 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
                 break
 
         print('generation done...................')
-        #token_logprobs = token_logprobs.tolist()
-        print('token_logprobs', token_logprobs.shape, token_logprobs.tolist())
+        token_logprobs = token_logprobs.tolist()
+        #print('token_logprobs', token_logprobs.shape, token_logprobs.tolist())
         
         out_tokens, out_logprobs, out_critics = [], [], []
         for i, toks in enumerate(tokens.tolist()):
             # cut to max gen len
-            start = 0 if echo else len(prompt_tokens[i])
-            toks = toks[start : len(prompt_tokens[i]) + max_gen_len]
-            probs = None
-            if logprobs:
-                probs = token_logprobs[i][start : len(prompt_tokens[i]) + max_gen_len]
+            start = len(prompt_tokens[i])
+            toks = toks[start :]
+            #probs = None
+            #if logprobs:
+            probs = token_logprobs[i][start :]
             # cut to eos tok if any
-            if self.tokenizer.eos_id in toks:
-                eos_idx = toks.index(self.tokenizer.eos_id)
+            if eos_id in toks:
+                eos_idx = toks.index(eos_id)
                 toks = toks[:eos_idx]
-                probs = probs[:eos_idx] if logprobs else None
+                probs = probs[:eos_idx] #if logprobs else None
             out_tokens.append(toks)
             out_logprobs.append(probs)
         
-        return (out_tokens, out_logprobs)
+        return out_tokens, out_logprobs
 
 
 
