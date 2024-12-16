@@ -959,7 +959,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         #    output = (logits,) + outputs[1:]
         #    return (loss,) + output if loss is not None else output
 
-        return loss, logits, critics, next_decoder_cache 
+        return loss, logits, next_decoder_cache 
         #return CausalLMOutputWithPast(
         #    loss=loss,
         #    logits=logits,
@@ -975,27 +975,19 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         max_gen_len: int,
         temperature: float = 0.6,
         top_p: float = 0.9,
-        echo: bool = False,
     ) -> Tuple[ List[List[int]], List[List[float]], List[List[float]] ]: # these are the actions[token index, critic score, prob] 
-        
         """
         Generate text sequences based on provided prompts using the language generation model.
-
         Args:
             prompt_tokens (List[List[int]]): List of tokenized prompts, where each prompt is represented as a list of integers.
             max_gen_len (int): Maximum length of the generated text sequence.
             temperature (float, optional): Temperature value for controlling randomness in sampling. Defaults to 0.6.
             top_p (float, optional): Top-p probability threshold for nucleus sampling. Defaults to 0.9.
-            logprobs (bool, optional): Flag indicating whether to compute token log probabilities. Defaults to False.
-            echo (bool, optional): Flag indicating whether to include prompt tokens in the generated output. Defaults to False.
-
         Returns:
             Tuple[ List[List[int]], List[List[float]], List[List[float]] ]:  A tuple containing generated token sequences and, if logprobs is True, corresponding token log probabilities.
-
         Note:
             This method uses the provided prompts as a basis for generating text. It employs nucleus sampling to produce text with controlled randomness.
             If logprobs is True, token log probabilities are computed for each generated token.
-
         """
         #params = self.model.params
         bsz = len(prompt_tokens)
@@ -1011,18 +1003,19 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         bos_id = self.config.bos_token_id
         
         tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cuda")
+        # position starts with 0.
         pos_ids = torch.full((bsz, total_len), 0, dtype=torch.long, device="cuda")
         
         for k, t in enumerate(prompt_tokens):
             tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
             
         token_logprobs = torch.zeros_like(tokens, dtype=torch.float)
-        token_critics = torch.zeros_like(tokens, dtype=torch.float)
+        #token_critics = torch.zeros_like(tokens, dtype=torch.float)
         
         prev_pos = 0
         eos_reached = torch.tensor([False] * bsz, device="cuda")
         input_text_mask = tokens != pad_id
-
+        
         # decode the last tokens
         #if min_prompt_len == total_len:
         #    _, logits, critics, _ = self.forward(tokens)
@@ -1038,7 +1031,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         #labels: Optional[torch.LongTensor] = None,
             
         for cur_pos in range(min_prompt_len, total_len):
-            _, logits, critics, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], num_logits_to_keep=1)
+            _, logits, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], num_logits_to_keep=1)
             
             if temperature > 0:
                 probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
