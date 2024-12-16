@@ -1043,7 +1043,8 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
                 next_token = sample_top_p(probs, top_p)
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
-
+            print('next_token.shape', next_token.shape)
+            
             next_token = next_token.reshape(-1)
             # only replace token if prompt has already been generated
             next_token = torch.where(
