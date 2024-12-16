@@ -1053,14 +1053,17 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
                 input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
             )
             tokens[:, cur_pos] = next_token
+
+            print(logits.shape)
             
-            if logprobs:
-                token_logprobs[:, prev_pos + 1 : cur_pos + 1] = -F.cross_entropy(
-                    input=logits.transpose(1, 2),
-                    target=tokens[:, prev_pos + 1 : cur_pos + 1],
-                    reduction="none",
-                    ignore_index=pad_id,
-                )
+            #if logprobs:
+            token_logprobs[:, prev_pos + 1 : cur_pos + 1] = -F.cross_entropy(
+                input=logits.transpose(1, 2),
+                target=tokens[:, prev_pos + 1 : cur_pos + 1],
+                reduction="none",
+                ignore_index=pad_id,
+            )
+            
             eos_reached |= (~input_text_mask[:, cur_pos]) & (
                 next_token == self.tokenizer.eos_id
             )
