@@ -621,7 +621,7 @@ class _Phi3DecoderLayer(nn.Module):
 
 class _Phi3PreTrainedModel(nn.Module):
     def __init__(self, config: Phi3Config):
-        
+        super().__init__(config)
         self.config_class = Phi3Config
         self.base_model_prefix = "model"
         self.supports_gradient_checkpointing = True
