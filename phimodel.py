@@ -1067,8 +1067,8 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             print('target.shape', tokens[:, prev_pos + 1 : cur_pos + 1].shape)
             
             token_logprobs[:, prev_pos: cur_pos] = -F.cross_entropy(
-                input=logits, #.transpose(1, 2),
-                target=tokens[:, prev_pos + 1 : cur_pos + 1],
+                input=logits.reshape(-1, self.vocab_size), #.transpose(1, 2),
+                target=tokens[:, prev_pos + 1 : cur_pos + 1].reshape(-1),
                 reduction="none",
                 ignore_index=pad_id,
             )
