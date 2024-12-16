@@ -851,8 +851,8 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         self.model = _Phi3Model(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        self.critic_head = nn.Linear(config.hidden_size, 1, bias=False)
-        nn.init.normal_(self.critic_head.weight)
+        #self.critic_head = nn.Linear(config.hidden_size, 1, bias=False)
+        #nn.init.normal_(self.critic_head.weight)
         self._tied_weights_keys = ["lm_head.weight"]
         # Initialize weights and apply final processing
         #self.post_init()
@@ -946,7 +946,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
 
-        critics = self.critic_head(hidden_states[:, -num_logits_to_keep:, :])
+        #critics = self.critic_head(hidden_states[:, -num_logits_to_keep:, :])
         
         loss = None
         if labels is not None:
