@@ -253,7 +253,7 @@ def play():
 
             #if inputs["input_ids"].shape[1] > 2000:
             #    continue
-            print('input_ids', input_ids)
+            #print('input_ids', input_ids)
             #prompt_tokens: List[List[int]],
             #max_gen_len: int,
             #llm.begin_generation()
@@ -262,7 +262,7 @@ def play():
             #llm.end_generation()
             #for _i in range(0, len(llm.critic_list)):
             #    print('critic', _i, llm.critic_list[_i], llm.critic_list[_i].shape)
-            print('outputs', outputs)
+            #print('outputs', outputs)
 
             #critic_model(inputs["input_ids"])
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
