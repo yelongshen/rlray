@@ -6,11 +6,9 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-import torch.utils.checkpoint
+
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-
-from torch.utils.checkpoint import checkpoint
 
 from transformers.utils import (
     add_code_sample_docstrings,
@@ -31,6 +29,9 @@ from transformers.utils import (
     is_flash_attn_greater_or_equal_2_10,
     logging,
 )
+
+import checkpoint as user_checkpoint
+from torch.utils.checkpoint import checkpoint
 
 logger = logging.get_logger(__name__)
 
@@ -612,10 +613,10 @@ class _Phi3DecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + self.resid_mlp_dropout(hidden_states)
 
-        outputs = (hidden_states,)
+        #outputs = (hidden_states,)
         #if use_cache:
         #    outputs += (present_key_value,)
-        return outputs, key_cache, value_cache
+        return hidden_states, key_cache, value_cache
 
 
 class _Phi3PreTrainedModel(nn.Module):
@@ -765,12 +766,14 @@ class _Phi3Model(_Phi3PreTrainedModel):
                 kv_cache = past_key_values[layer_idx]
                 
             if self.gradient_checkpointing and self.training:
+                #user_cp.CheckpointwithRngFunction.apply(layer_module.forward, len(args_tensors), *full_args)
+                
                 layer_outputs, nk_cache, nv_cache = checkpoint(
                     decoder_layer.__call__,
                     hidden_states,
                     attention_mask,
                     position_ids,
-                    past_key_values
+                    kv_cache
                 )
             else:
                 layer_outputs, nk_cache, nv_cache = decoder_layer(
@@ -810,7 +813,35 @@ class _Phi3Model(_Phi3PreTrainedModel):
         #)
         # return lastlayer hidden states, and KV cache.
         return hidden_states, next_decoder_cache
-        
+
+import torch.nn.functional as F
+
+def sample_top_p(probs, top_p=0.9):
+    """
+    Perform Top-p (Nucleus) Sampling.
+    Args:
+        logits (torch.Tensor): Model logits (batch_size, vocab_size).
+        top_p (float): Probability threshold for top-p sampling.
+        temperature (float): Sampling temperature (default: 1.0).
+    Returns:
+        sampled_token (torch.Tensor): Sampled token index.
+    """
+    # Sort tokens by probability
+    sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+    # Compute cumulative probabilities
+    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+    # Mask tokens where cumulative probability > top_p
+    sorted_indices_to_remove = cumulative_probs > top_p
+    # Keep at least one token
+    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+    sorted_indices_to_remove[..., 0] = False
+    # Set logits of removed tokens to -inf
+    probs[sorted_indices[sorted_indices_to_remove]] = 0.0
+    normalized_probs = probs / probs.sum(dim=-1, keepdim=True)
+    # Sample from the filtered distribution
+    sampled_token = torch.multinomial(normalized_probs, num_samples=1)
+    return sampled_token
+    
 # PP, TP, DP
 # Causal Large Language Model 
 class _Phi3ForCausalLM(_Phi3PreTrainedModel):
@@ -820,13 +851,12 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         self.model = _Phi3Model(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
         self.critic_head = nn.Linear(config.hidden_size, 1, bias=False)
         nn.init.normal_(self.critic_head.weight)
-        
         self._tied_weights_keys = ["lm_head.weight"]
         # Initialize weights and apply final processing
         #self.post_init()
+        self.criterion = nn.CrossEntropyLoss(ignore_index=-1)
 
     # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.get_input_embeddings
     def get_input_embeddings(self):
@@ -857,7 +887,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         input_ids: torch.LongTensor = None,
         ##  attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        past_key_values: Optional[List[Tuple[torch.FloatTensor, torch.FloatTensor]]] = None,
         ## inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         ## use_cache: Optional[bool] = None,
@@ -865,7 +895,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         ## output_hidden_states: Optional[bool] = None,
         ## return_dict: Optional[bool] = None,
         ## cache_position: Optional[torch.LongTensor] = None,
-        ## num_logits_to_keep: int = 0,
+        num_logits_to_keep: int = 0,
         ## **loss_kwargs,
     ):
         r"""
@@ -906,31 +936,31 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         #return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        outputs = self.model(
+        hidden_states, next_decoder_cache = self.model(
             input_ids=input_ids,
-            attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
+            past_key_values=past_key_values
         )
 
-        hidden_states = outputs[0]
+        #hidden_states = outputs[0]
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
 
+        critics = self.critic_head(hidden_states[:, -num_logits_to_keep:, :])
+        
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits, labels, self.vocab_size, **loss_kwargs)
+            #loss = self.loss_function(logits, labels, self.vocab_size, **loss_kwargs)
+            logits_flat = logits.reshape(-1, self.vocab_size)    # Shape: (batch_size * seq_len, vocab_size)
+            target_flat = labels.reshape(-1)            # Shape: (batch_size * seq_len)
+            # Calculate Loss
+            loss = criterion(logits, target_flat)
 
-        if not return_dict:
-            output = (logits,) + outputs[1:]
-            return (loss,) + output if loss is not None else output
+        #if not return_dict:
+        #    output = (logits,) + outputs[1:]
+        #    return (loss,) + output if loss is not None else output
 
-        return loss, logits, critics, past_key_values 
+        return loss, logits, critics, next_decoder_cache 
         #return CausalLMOutputWithPast(
         #    loss=loss,
         #    logits=logits,
@@ -993,23 +1023,24 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         prev_pos = 0
         eos_reached = torch.tensor([False] * bsz, device="cuda")
         input_text_mask = tokens != pad_id
-        if min_prompt_len == total_len:
-            logits = self.forward(tokens, prev_pos)
-            token_logprobs = -F.cross_entropy(
-                input=logits.transpose(1, 2),
-                target=tokens,
-                reduction="none",
-                ignore_index=pad_id,
-            )
 
+        # decode the last tokens
+        #if min_prompt_len == total_len:
+        #    _, logits, critics, _ = self.forward(tokens)
+        #    token_logprobs = -F.cross_entropy(
+        #        input=logits.transpose(1, 2),
+        #        target=tokens,
+        #        reduction="none",
+        #        ignore_index=pad_id,
+        #    )
         #input_ids: torch.LongTensor = None,
         #position_ids: Optional[torch.LongTensor] = None,
         #past_key_values: Optional[List[torch.FloatTensor]] = None,
         #labels: Optional[torch.LongTensor] = None,
             
-
         for cur_pos in range(min_prompt_len, total_len):
-            logits = self.forward(tokens[:, prev_pos:cur_pos], prev_pos)
+            _, logits, critics, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], num_logits_to_keep=1)
+            
             if temperature > 0:
                 probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
                 next_token = sample_top_p(probs, top_p)
@@ -1022,6 +1053,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
                 input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
             )
             tokens[:, cur_pos] = next_token
+            
             if logprobs:
                 token_logprobs[:, prev_pos + 1 : cur_pos + 1] = -F.cross_entropy(
                     input=logits.transpose(1, 2),
@@ -1037,6 +1069,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
                 break
 
         token_logprobs = token_logprobs.tolist()
+
         
         out_tokens, out_logprobs, out_critics = [], [], []
         for i, toks in enumerate(tokens.tolist()):
