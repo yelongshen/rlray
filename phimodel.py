@@ -1036,9 +1036,11 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         #position_ids: Optional[torch.LongTensor] = None,
         #past_key_values: Optional[List[torch.FloatTensor]] = None,
         #labels: Optional[torch.LongTensor] = None,
-            
+
+        past_kv = None
+        pos = None
         for cur_pos in range(min_prompt_len, total_len):
-            _, logits, past_kv  = self.forward(tokens[:, prev_pos:cur_pos])
+            _, logits, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], position_ids = pos, past_key_values=past_kv)
 
             #print('logits.shape', logits.shape)
             #print('past_kv len', len(past_kv))
@@ -1077,6 +1079,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
                 next_token == eos_id
             )
             prev_pos = cur_pos
+            pos = torch.tensor([prev_pos+1] * bsz, dtype=torch.long, device='cuda')
             if all(eos_reached):
                 break
 
