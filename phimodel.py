@@ -837,10 +837,10 @@ def sample_top_p(probs, top_p=0.9):
     # Set logits of removed tokens to -inf
     #print('shape1111', sorted_indices.shape, sorted_indices_to_remove.shape, sorted_indices[sorted_indices_to_remove].shape)
 
-    probs[sorted_indices[sorted_indices_to_remove]] = 0.0
+    #probs[sorted_indices[sorted_indices_to_remove]] = 0.0
 
     for i in range(probs.size(0)):
-        probs[i, sorted_indices[i, sorted_indices_to_remove[i]]] = 0
+        probs[i, sorted_indices[i, sorted_indices_to_remove[i]]] = 0.0
 
     #print('shape2222', probs.shape)
     normalized_probs = probs / probs.sum(dim=-1, keepdim=True)
@@ -1040,17 +1040,17 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         for cur_pos in range(min_prompt_len, total_len):
             _, logits, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], num_logits_to_keep=1)
 
-            print('logits.shape', logits.shape)
-            print('past_kv len', len(past_kv))
-            print('past_kv[0][0].shape', past_kv[0][0].shape)
-            print('past_kv[0][1].shape', past_kv[0][1].shape)
+            #print('logits.shape', logits.shape)
+            #print('past_kv len', len(past_kv))
+            #print('past_kv[0][0].shape', past_kv[0][0].shape)
+            #print('past_kv[0][1].shape', past_kv[0][1].shape)
             
             if temperature > 0:
                 probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
                 next_token = sample_top_p(probs, top_p)
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
-            print('next_token.shape', next_token.shape)
+            #print('next_token.shape', next_token.shape)
             
             next_token = next_token.reshape(-1)
             # only replace token if prompt has already been generated
@@ -1059,7 +1059,8 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             )
             tokens[:, cur_pos] = next_token
 
-            print(logits.shape)
+            print('tokens', tokens)
+            #print(logits.shape)
             
             #if logprobs:
             token_logprobs[:, prev_pos + 1 : cur_pos + 1] = -F.cross_entropy(
