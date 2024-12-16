@@ -267,6 +267,7 @@ def play():
             #critic_model(inputs["input_ids"])
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
+            print('*************', problem + response) 
             #o = llm.generate([problem], sampling_params)
             #completion = o[0].outputs[0].text
 
