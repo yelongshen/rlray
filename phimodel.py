@@ -1035,8 +1035,8 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
 
             print('logits.shape', logits.shape)
             print('past_kv len', len(past_kv))
-            print('past_kv[0][0].shape', past_key[0][0].shape)
-            print('past_kv[0][1].shape', past_key[0][1].shape)
+            print('past_kv[0][0].shape', past_kv[0][0].shape)
+            print('past_kv[0][1].shape', past_kv[0][1].shape)
             
             if temperature > 0:
                 probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
