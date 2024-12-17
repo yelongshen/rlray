@@ -238,7 +238,7 @@ def play():
         
         print('start to trigger play ...........................\n\n')
         for i in range(0, len(train)):
-            if i % 16 != local_rank:
+            if i % 16 != rank:
                 continue
             example = train[i]
             soluts = example['solutions']
