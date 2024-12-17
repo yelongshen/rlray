@@ -203,8 +203,8 @@ def play():
     #missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
     print("Missing keys:", missing_keys)
     print("Unexpected keys:", unexpected_keys)
-   
-    llm_model = llm_model.to(device)
+    llm_model = llm_model.to(torch.bfloat16).to(device)
+    #llm_model = llm_model.to(device)
     #critic_model = critic_model.to(device)
     #print(phi4rllm)
     
