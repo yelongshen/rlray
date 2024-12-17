@@ -346,11 +346,11 @@ class _Phi3FlashAttention2(_Phi3Attention):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Phi3FlashAttention2 attention does not support output_attentions
 
-        if not _flash_supports_window_size:
-            logger.warning_once(
-                "The current flash attention version does not support sliding window attention. Please use `attn_implementation='eager'` or upgrade flash-attn library."
-            )
-            raise ValueError("The current flash attention version does not support sliding window attention.")
+        #if not _flash_supports_window_size:
+        #    logger.warning_once(
+        #        "The current flash attention version does not support sliding window attention. Please use `attn_implementation='eager'` or upgrade flash-attn library."
+        #    )
+        #    raise ValueError("The current flash attention version does not support sliding window attention.")
 
         #output_attentions = False
 
