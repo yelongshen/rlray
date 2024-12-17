@@ -198,6 +198,8 @@ def play():
     llm_model = _Phi3ForCausalLM(llm_config)
     
     missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False)
+    llm_model = llm_model.to(device)
+
     # critic_model = Phi3rCausalLM(llm_config, llm, is_critic=True) # Phi4LM(llm, r=8, lora_alpha=1.0)
     #phi4rllm = Phi4rLM(llm_config)
     # to avoid copy two times of model-weight.
@@ -205,7 +207,6 @@ def play():
     #print("Missing keys:", missing_keys)
     #print("Unexpected keys:", unexpected_keys)
    
-    llm_model = llm_model.to(device)
     #critic_model = critic_model.to(device)
     #print(phi4rllm)
     
@@ -329,33 +330,44 @@ def learn():
     
     device = torch.device(f"cuda:{local_rank}")
     # give up huggingface model.
-    
-    model_name = "microsoft/Phi-3.5-mini-instruct"
 
-    model = AutoModelForCausalLM.from_pretrained( 
+    model_name = "microsoft/Phi-3.5-mini-instruct"
+    llm = AutoModelForCausalLM.from_pretrained( 
         model_name,  
-        device_map="cpu",  
+        device_map='cpu',
+        #device_map="cuda",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
-    ) #.to(device)
-    #tokenizer = AutoTokenizer.from_pretrained(model_name, add_eos_token=True)
-    model.gradient_checkpointing_enable()
-    
-    print('done with model creation.')
+    )#.to(device)
+    llm_config = AutoConfig.from_pretrained(model_name)
 
+    #model_name = "microsoft/Phi-3.5-mini-instruct"
+
+    #model = AutoModelForCausalLM.from_pretrained( 
+    #    model_name,  
+    #    device_map="cpu",  
+    #    torch_dtype=torch.bfloat16,  
+    #    trust_remote_code=True,  
+    #) #.to(device)
+    #tokenizer = AutoTokenizer.from_pretrained(model_name, add_eos_token=True)
+    #model.gradient_checkpointing_enable()
+
+    model = _Phi3ForCausalLM(llm_config)
+    missing_keys, unexpected_keys = model.load_state_dict(llm.state_dict(), strict=False)
+    model = model.to(device)
+
+        
+    print('done with model creation.')
     dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
     #dist.init_process_group(backend="nccl", rank)
-
     print('dist initialization ...', local_rank)
-
     dist.barrier()
-
     print('dist barrier success')
 
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
     print('distributed model creation.')
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0e-6)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=2.0e-6)
     #num_epochs = 3
     num_training_steps = 10000 # num_epochs * len(train_dataloader)
     scheduler = get_linear_schedule_with_warmup(
@@ -366,10 +378,10 @@ def learn():
 
     model.train()
 
-    tokenizer.model_max_length = 4096
-    tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
-    tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
-    tokenizer.padding_side = 'right'
+    #tokenizer.model_max_length = 4096
+    #tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
+    #tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
+    #tokenizer.padding_side = 'right'
 
     i_num = 0
     batch_size = 1
@@ -383,10 +395,12 @@ def learn():
     gradient_accumulation_steps = 32
     optimizer.zero_grad()
     time.sleep(10000)
-    
+
+    # rl training steps;
     while step < 40000:
-        l = 0 # len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
-        if l > 20:
+        # receive data from buffer_rank
+        l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
+        if l > 128:
             torch.cuda.empty_cache()
             
             data = None # buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
