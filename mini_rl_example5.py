@@ -299,9 +299,11 @@ def play():
 
             _tokens = input_ids[0] + outputs[0] 
             _masks = [0] * len(input_ids[0]) + [1] * len(outputs[0])
-            _probs = [0] * len(input_ids[0]) + probs
+            _probs = [0.0] * len(input_ids[0]) + probs[0]
+                
             # discrete tokens, word probabilities, mask, critics. 
-            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
+            # send data into replaybuffer.
+            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(_tokens, _masks, _probs), timeout=0)
 
             #buffer_rank = 8
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
@@ -321,7 +323,6 @@ def learn():
     rank = int(os.environ['RANK'])
     local_rank = int(os.environ['LOCAL_RANK'])
     torch.cuda.set_device(local_rank)
-
     
     #rank = int(os.environ['RANK'])
     torch.random.manual_seed(0) 
@@ -333,15 +334,13 @@ def learn():
 
     model = AutoModelForCausalLM.from_pretrained( 
         model_name,  
-        device_map="cuda",  
+        device_map="cpu",  
         torch_dtype=torch.bfloat16,  
         trust_remote_code=True,  
-    ).to(device)
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name, add_eos_token=True)
-
+    ) #.to(device)
+    #tokenizer = AutoTokenizer.from_pretrained(model_name, add_eos_token=True)
     model.gradient_checkpointing_enable()
-
+    
     print('done with model creation.')
 
     dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
