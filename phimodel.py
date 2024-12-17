@@ -416,14 +416,16 @@ class _Phi3FlashAttention2(_Phi3Attention):
         # This might slowdown training & inference so it is recommended to not cast the LayerNorms
         # in fp32.
         if query_states.dtype == torch.float32:
-            if torch.is_autocast_enabled():
-                target_dtype = torch.get_autocast_gpu_dtype()
+            #if torch.is_autocast_enabled():
+            #    target_dtype = torch.get_autocast_gpu_dtype()
             # Handle the case where the model is quantized
-            elif hasattr(self.config, "_pre_quantization_dtype"):
-                target_dtype = self.config._pre_quantization_dtype
-            else:
-                target_dtype = self.qkv_proj.weight.dtype
+            #elif hasattr(self.config, "_pre_quantization_dtype"):
+            #    target_dtype = self.config._pre_quantization_dtype
+            #else:
+            #    target_dtype = self.qkv_proj.weight.dtype
 
+            target_dtype = torch.float16
+            
             logger.warning_once(
                 f"The input hidden states seems to be silently casted in float32, this might be related to"
                 f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
