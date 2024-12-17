@@ -40,7 +40,7 @@ logger = logging.get_logger(__name__)
 _flash_supports_window_size = False
 try:
     from flash_attn import flash_attn_func, flash_attn_varlen_func
-    from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
+    #from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
     _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
 except ImportError as error:
     logger.warning(
