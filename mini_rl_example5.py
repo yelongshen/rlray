@@ -73,16 +73,16 @@ from phimodel import _Phi3ForCausalLM
 class ReplayBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
-        self.buffer = []
+        self.buffer = [] # every sample is very different. 
         self.position = 0
         self.lock = threading.Lock()
         
-    def add(self, experience, reward):
+    def add(self, experience):
         """ Add new experience to the buffer """
         with self.lock:
             if len(self.buffer) < self.capacity:
                 self.buffer.append(None)
-            self.buffer[self.position] = (experience, reward)
+            self.buffer[self.position] = experience
             self.position = (self.position + 1) % self.capacity
     
     def sample(self, batch_size):
@@ -94,12 +94,16 @@ class ReplayBuffer:
     def __len__(self):
         with self.lock:
             return len(self.buffer)
-buffer = ReplayBuffer(1024)
 
-def add_to_buffer(experience, reward):
+buffer = ReplayBuffer(4096)
+player_node = 1
+learner_node = 1
+buffer_rank = 8
+
+def add_to_buffer(experience):
     #print('[debug] consumer side add.....',  int(os.environ['RANK']) )
     global buffer
-    buffer.add(experience, reward)
+    buffer.add(experience)
 
 def len_buffer():
     global buffer
@@ -177,20 +181,15 @@ def play():
         trust_remote_code=True,  
     )#.to(device)
     llm_config = AutoConfig.from_pretrained(model_name)
-    
     #print(llm_config)
-
-    print('attn_implemention', llm_config._attn_implementation)
-    print('config.rope_scaling', llm_config.rope_scaling)
+    #print('attn_implemention', llm_config._attn_implementation)
+    #print('config.rope_scaling', llm_config.rope_scaling)
     
     #llm_state_dict = llm.state_dict()
-
     #print('state key begin.......')
     #for key in llm_state_dict:
     #    print(key)
     #print('state key end  .......')
-    
-    
     # Load configuration from a pre-trained model
     
     #Phi3rCausalLM(Phi3ForCausalLM):
@@ -203,8 +202,8 @@ def play():
     #phi4rllm = Phi4rLM(llm_config)
     # to avoid copy two times of model-weight.
     #missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
-    print("Missing keys:", missing_keys)
-    print("Unexpected keys:", unexpected_keys)
+    #print("Missing keys:", missing_keys)
+    #print("Unexpected keys:", unexpected_keys)
    
     llm_model = llm_model.to(device)
     #critic_model = critic_model.to(device)
@@ -240,7 +239,7 @@ def play():
         
         print('start to trigger play ...........................\n\n')
         for i in range(0, len(train)):
-            if i % 8 != local_rank:
+            if i % (8 * player_node) != rank:
                 continue
             example = train[i]
             soluts = example['solutions']
@@ -298,12 +297,16 @@ def play():
             completion = response
             data = problem + completion
 
-            buffer_rank = 8
+            _tokens = input_ids[0] + outputs[0] 
+            _masks = [0] * len(input_ids[0]) + [1] * len(outputs[0])
+            _probs = [0] * len(input_ids[0]) + probs
+            # discrete tokens, word probabilities, mask, critics. 
+            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
+
+            #buffer_rank = 8
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
             #print('push to buffer ... ') #, data)
-        
-            #rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(data, reward_score), timeout=0)
             
             #if check_model_update():
             #    llm.model.load_state_dict()
@@ -455,7 +458,7 @@ def main():
     # one node inference; one node training; as an example; 
         
     # suppose we use 4 gpus for vllm and 4 gpus 
-    if rank in [0,1,2,3,4,5,6,7] #, 8, 9, 10, 11, 12, 13, 14, 15]:
+    if rank in [0,1,2,3,4,5,6,7]: #, 8, 9, 10, 11, 12, 13, 14, 15]:
         #print('rank', rank, 'play')
         play()
     else:
