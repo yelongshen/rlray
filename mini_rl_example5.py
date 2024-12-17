@@ -198,7 +198,7 @@ def play():
     llm_model = _Phi3ForCausalLM(llm_config)
     
     missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False)
-    llm_model = llm_model.to(device)
+    llm_model = llm_model.to(torch.bfloat16).to(device)
 
     # critic_model = Phi3rCausalLM(llm_config, llm, is_critic=True) # Phi4LM(llm, r=8, lora_alpha=1.0)
     #phi4rllm = Phi4rLM(llm_config)
@@ -424,36 +424,36 @@ def learn():
             # re-evaluate the policy.     
             logprobs, _ = model(_tokens)
 
+            ###### PPO algorithm here.     
             ratios = torch.exp(logprobs - old_logprobs.detach())
 
             gamma = 0.95
             #rewards = []
             discounted_reward = 0
-            for reward, is_terminal in zip(reversed(self.buffer.rewards), reversed(self.buffer.is_terminals)):
-                if is_terminal:
-                    discounted_reward = 0
-                discounted_reward = reward + (self.gamma * discounted_reward)
+            for reward in reversed(_rewards): 
+                discounted_reward = reward + (gamma * discounted_reward)
                 rewards.insert(0, discounted_reward)
                     
             # Normalizing the rewards
             rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
             rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
         
-                # convert list to tensor
-                old_states = torch.squeeze(torch.stack(self.buffer.states, dim=0)).detach().to(device)
-                old_actions = torch.squeeze(torch.stack(self.buffer.actions, dim=0)).detach().to(device)
-                old_logprobs = torch.squeeze(torch.stack(self.buffer.logprobs, dim=0)).detach().to(device)
-                old_state_values = torch.squeeze(torch.stack(self.buffer.state_values, dim=0)).detach().to(device)
+            # convert list to tensor
+            old_states = torch.squeeze(torch.stack(self.buffer.states, dim=0)).detach().to(device)
+            old_actions = torch.squeeze(torch.stack(self.buffer.actions, dim=0)).detach().to(device)
+            old_logprobs = torch.squeeze(torch.stack(self.buffer.logprobs, dim=0)).detach().to(device)
+            old_state_values = torch.squeeze(torch.stack(self.buffer.state_values, dim=0)).detach().to(device)
         
-                # calculate advantages
-                advantages = rewards.detach() - old_state_values.detach()
-            
+            # calculate advantages
+            advantages = rewards.detach() - old_state_values.detach()
+
+            eps_clip = 0.2
             # Finding Surrogate Loss  
             surr1 = ratio * advantages # (optimize logprobs) 
-            surr2 = torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages
+            surr2 = torch.clamp(ratios, 1-eps_clip, 1+eps_clip) * advantages
 
-            # final loss of clipped objective PPO
-            loss = -torch.min(surr1, surr2) + 0.5 * self.MseLoss(state_values, rewards) - 0.01 * dist_entropy
+            # final loss of clipped objective PPO objective. 
+            loss = -torch.min(surr1, surr2) + 0.5 * self.MseLoss(state_values, rewards) #- 0.01 * dist_entropy
             
             # take gradient step
             self.optimizer.zero_grad()
@@ -490,17 +490,14 @@ def main():
     # args.nnode_actor
     # args.nnode_learner
     #world_size = 8
-
     local_rank = int(os.environ['LOCAL_RANK'])
     print('local rank', local_rank)
 
     rank = int(os.environ['RANK'])
     print('rank', rank)
-
     # rpc.init_rpc(f"worker-{rank}", backend=rpc.BackendType.TENSORPIPE, rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method="tcp://localhost:29500"))
     
     rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16) # consider 2 nodes, 16 gpus in this example.
-    
     #rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
     gpus_per_node = 8
     node_idx = rank // gpus_per_node
