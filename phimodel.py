@@ -759,9 +759,12 @@ class _Phi3Model(_Phi3PreTrainedModel):
         #all_self_attns = () if output_attentions else None
         next_decoder_cache = [] #List[Tuple[torch.FloatTensor, torch.FloatTensor]]
 
+
         for layer_idx, decoder_layer in enumerate(self.layers):
             #if output_hidden_states:
             #    all_hidden_states += (hidden_states,)
+            print('layer_idx', layer_idx, 'hidden_state.dtype', hidden_state.dtype, 'decoder_layer.dtype', decoder_layer.self_attn.qkv_proj.weight.dtype)
+
             kv_cache = None
             if past_key_values is not None:
                 kv_cache = past_key_values[layer_idx]
