@@ -240,7 +240,7 @@ def play():
         
         print('start to trigger play ...........................\n\n')
         for i in range(0, len(train)):
-            if i % 16 != local_rank:
+            if i % 8 != local_rank:
                 continue
             example = train[i]
             soluts = example['solutions']
@@ -452,8 +452,10 @@ def main():
     world_size = int(os.environ['WORLD_SIZE'])
     print('WORLD_SIZE', world_size)
 
+    # one node inference; one node training; as an example; 
+        
     # suppose we use 4 gpus for vllm and 4 gpus 
-    if rank in [0,1,2,3,4,5,6,7, 8, 9, 10, 11, 12, 13, 14, 15]:
+    if rank in [0,1,2,3,4,5,6,7] #, 8, 9, 10, 11, 12, 13, 14, 15]:
         #print('rank', rank, 'play')
         play()
     else:
