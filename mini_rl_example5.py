@@ -300,11 +300,11 @@ def play():
 
             _tokens = input_ids[0] + outputs[0] 
             _masks = [0] * len(input_ids[0]) + [1] * len(outputs[0])
-            _probs = [0.0] * len(input_ids[0]) + probs[0]
-                
+            _probs = [0.0] * len(input_ids[0]) + probs[0]    
+            _reward = [0.0] * (len(_tokens)-1) + [reward_score]
             # discrete tokens, word probabilities, mask, critics. 
             # send data into replaybuffer.
-            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(_tokens, _masks, _probs), timeout=0)
+            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(_tokens, _masks, _probs, _reward), timeout=0)
 
             #buffer_rank = 8
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
@@ -388,7 +388,7 @@ def learn():
     max_seq_len = 4096
 
     print('done...')
-    buffer_rank = 8
+    #buffer_rank = 8
     batch_size = 1
     sample_idx = 0
     step = 0
@@ -403,22 +403,62 @@ def learn():
         if l > 128:
             torch.cuda.empty_cache()
             
-            data = None # buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
-            text = [d[0] for d in data]
-            score = [d[1] for d in data]
+            data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
             
-            inputs = tokenizer(text, add_special_tokens=True, padding=True, truncation=True, return_tensors="pt").to(device)
-            if inputs["input_ids"].shape[1] > 4096:
-                continue
-
-            if inputs['input_ids'].shape[1] < 16:
-                continue
+            _tokens = [d[0] for d in data]
+            _masks = [d[1] for d in data]
+            _probs = [d[2] for d in data]
+            _rewards = [d[3] for d in data] 
+                
+            #inputs = tokenizer(text, add_special_tokens=True, padding=True, truncation=True, return_tensors="pt").to(device)
+            #if inputs["input_ids"].shape[1] > 4096:
+            #    continue
+            #if inputs['input_ids'].shape[1] < 16:
+            #    continue
                 
             #labels = batch["labels"].to(device)
-            input_ids = inputs["input_ids"]
-
+            #input_ids = inputs["input_ids"]
             if step == 0:
-                print('example input_ids', input_ids)
+                print('example:', _tokens, _masks, _probs, _rewards)
+
+            # re-evaluate the policy.     
+            logprobs, _ = model(_tokens)
+
+            ratios = torch.exp(logprobs - old_logprobs.detach())
+
+            gamma = 0.95
+            #rewards = []
+            discounted_reward = 0
+            for reward, is_terminal in zip(reversed(self.buffer.rewards), reversed(self.buffer.is_terminals)):
+                if is_terminal:
+                    discounted_reward = 0
+                discounted_reward = reward + (self.gamma * discounted_reward)
+                rewards.insert(0, discounted_reward)
+                    
+            # Normalizing the rewards
+            rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
+            rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
+        
+                # convert list to tensor
+                old_states = torch.squeeze(torch.stack(self.buffer.states, dim=0)).detach().to(device)
+                old_actions = torch.squeeze(torch.stack(self.buffer.actions, dim=0)).detach().to(device)
+                old_logprobs = torch.squeeze(torch.stack(self.buffer.logprobs, dim=0)).detach().to(device)
+                old_state_values = torch.squeeze(torch.stack(self.buffer.state_values, dim=0)).detach().to(device)
+        
+                # calculate advantages
+                advantages = rewards.detach() - old_state_values.detach()
+            
+            # Finding Surrogate Loss  
+            surr1 = ratio * advantages # (optimize logprobs) 
+            surr2 = torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages
+
+            # final loss of clipped objective PPO
+            loss = -torch.min(surr1, surr2) + 0.5 * self.MseLoss(state_values, rewards) - 0.01 * dist_entropy
+            
+            # take gradient step
+            self.optimizer.zero_grad()
+            loss.mean().backward()
+            self.optimizer.step()
                 
             # Shift input_ids to create labels for next-token prediction
             labels = input_ids.clone()
