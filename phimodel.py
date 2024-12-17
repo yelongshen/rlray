@@ -550,8 +550,8 @@ class _Phi3DecoderLayer(nn.Module):
         super().__init__()
         self.config = config
         #print('config._attn_implementation', config._attn_implementation)
-        
-        self.self_attn = _PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
+        self.self_attn = _Phi3FlashAttention2(config, layer_idx=layer_idx) 
+        # _PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
 
         self.mlp = _Phi3MLP(config)
         self.input_layernorm = _Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
