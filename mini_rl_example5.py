@@ -260,7 +260,7 @@ def play():
             #max_gen_len: int,
             #llm.begin_generation()
             #outputs = llm.generate(inputs["input_ids"], max_length=4096)
-            outputs, probs = llm.generate(input_ids, max_gen_len = 2048)
+            outputs, probs, crits = llm.generate(input_ids, max_gen_len = 2048)
             #llm.end_generation()
             #for _i in range(0, len(llm.critic_list)):
             #    print('critic', _i, llm.critic_list[_i], llm.critic_list[_i].shape)
@@ -302,6 +302,7 @@ def play():
             _masks = [0] * len(input_ids[0]) + [1] * len(outputs[0])
             _probs = [0.0] * len(input_ids[0]) + probs[0]    
             _reward = [0.0] * (len(_tokens)-1) + [reward_score]
+            _crits = [0.0] * len(input_ids[0]) + crits[0]
             # discrete tokens, word probabilities, mask, critics. 
             # send data into replaybuffer.
             rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(_tokens, _masks, _probs, _reward), timeout=0)
