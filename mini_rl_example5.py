@@ -162,6 +162,27 @@ def evaluate_program(program, test_input, test_output):
     else:        
         return "Error: No output from program"
 
+######################################################################################### #create distributed process group for model syncize.
+
+def initmodel_sync(model:_Phi3ForCausalLM):
+    mgroup = [x for x in range(8 * (player_node + learner_node))]
+    gp = torch.distributed.new_group(mgroup)
+
+    torch.distributed.broadcast(model.critic_head.weight, 0, group=gp, async_op=False)
+    torch.distributed.broadcast(model.critic_head.bias, 0, group=gp, async_op=False)
+    #return gp
+    #mp_groups = [[0,1,2,3], [4,5,6,7]]
+    #groups = torch.LongTensor(range(world_size)).reshape(data_parallel_size, pipeline_length, model_parallel_size)
+    #ranks = groups[i, :, k].tolist()
+    # initial parallel group.
+    #for g in mp_groups:
+    #    group = torch.distributed.new_group(g)
+    #    if args.rank in g:
+    #        mp_group = group #, backend='gloo') # model parallel group.
+    #        mp_master_rank = g[0]
+    #        MP_Group = mp_group
+            
+##########################################################################################
 def play():
     # Load a model
     print('start llm data ...')
@@ -199,6 +220,10 @@ def play():
     
     missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False)
     llm_model = llm_model.to(torch.bfloat16).to(device)
+
+    print('before model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
+    initmodel_sync(model)
+    print('after model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
 
     # critic_model = Phi3rCausalLM(llm_config, llm, is_critic=True) # Phi4LM(llm, r=8, lora_alpha=1.0)
     #phi4rllm = Phi4rLM(llm_config)
@@ -355,8 +380,12 @@ def learn():
 
     model = _Phi3ForCausalLM(llm_config)
     missing_keys, unexpected_keys = model.load_state_dict(llm.state_dict(), strict=False)
-    model = model.to(device)
+    model = model.to(torch.bfloat16).to(device)
 
+    print('before model sync, model parameters', 'rank', rank, model.critic_head.weight)
+    initmodel_sync(model)
+    print('after model sync, model parameters', 'rank', rank, model.critic_head.weight)
+     
         
     print('done with model creation.')
     dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
