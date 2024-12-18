@@ -222,7 +222,7 @@ def play():
     llm_model = llm_model.to(torch.bfloat16).to(device)
 
     print('before model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
-    initmodel_sync(model)
+    initmodel_sync(llm_model)
     print('after model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
 
     # critic_model = Phi3rCausalLM(llm_config, llm, is_critic=True) # Phi4LM(llm, r=8, lora_alpha=1.0)
