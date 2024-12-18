@@ -862,8 +862,11 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         self.model = _Phi3Model(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        #self.critic_head = nn.Linear(config.hidden_size, 1, bias=False)
-        #nn.init.normal_(self.critic_head.weight)
+
+        # model archiecture: connect from intermedia layer possibily.
+        self.critic_head = nn.Linear(config.hidden_size, 1, bias=True)
+        nn.init.normal_(self.critic_head.weight)
+        
         self._tied_weights_keys = ["lm_head.weight"]
         # Initialize weights and apply final processing
         #self.post_init()
@@ -957,7 +960,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
 
-        #critics = self.critic_head(hidden_states[:, -num_logits_to_keep:, :])
+        critics = self.critic_head(hidden_states[:, -num_logits_to_keep:, :])
         
         loss = None
         if labels is not None:
@@ -971,7 +974,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         #    output = (logits,) + outputs[1:]
         #    return (loss,) + output if loss is not None else output
 
-        return loss, logits, next_decoder_cache 
+        return loss, logits, critics, next_decoder_cache 
         #return CausalLMOutputWithPast(
         #    loss=loss,
         #    logits=logits,
@@ -1022,8 +1025,8 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
             
         token_logprobs = torch.zeros_like(tokens, dtype=torch.float)
-        #token_critics = torch.zeros_like(tokens, dtype=torch.float)
-        
+        token_critics = torch.zeros_like(tokens, dtype=torch.float)
+        #token_critics = 
         prev_pos = 0
         eos_reached = torch.tensor([False] * bsz, device="cuda")
         input_text_mask = tokens != pad_id
@@ -1045,7 +1048,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         past_kv = None
         pos = None
         for cur_pos in range(min_prompt_len, total_len):
-            _, logits, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], position_ids = pos, past_key_values=past_kv)
+            _, logits, critics, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], position_ids = pos, past_key_values=past_kv)
 
             #print('logits.shape', logits.shape)
             #print('past_kv len', len(past_kv))
@@ -1065,7 +1068,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
                 input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
             )
             tokens[:, cur_pos] = next_token
-
+            
             #print('tokens', tokens)
             #print(logits.shape)
             
@@ -1080,6 +1083,8 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
                 ignore_index=pad_id,
             )
             
+            token_critics[:, prev_pos: cur_pos] = critics
+            
             eos_reached |= (~input_text_mask[:, cur_pos]) & (
                 next_token == eos_id
             )
@@ -1091,6 +1096,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         #print('generation done...................')
         token_logprobs = token_logprobs.tolist()
         #print('token_logprobs', token_logprobs.shape, token_logprobs.tolist())
+        token_critics = token_critics.tolist()
         
         out_tokens, out_logprobs, out_critics = [], [], []
         for i, toks in enumerate(tokens.tolist()):
@@ -1099,16 +1105,21 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             toks = toks[start :]
             #probs = None
             #if logprobs:
-            probs = token_logprobs[i][start-1 :]
+            probs = token_logprobs[i][start-1 :-1]
             # cut to eos tok if any
+            critics = token_critics[i][start:]
+            
             if eos_id in toks:
                 eos_idx = toks.index(eos_id)
                 toks = toks[:eos_idx+1] # include the last eos token. 
                 probs = probs[:eos_idx] # if logprobs else None
+                critics = critics[:eos_idx+1]
+                
             out_tokens.append(toks)
             out_logprobs.append(probs)
+            out_critics.append(critics)
         
-        return out_tokens, out_logprobs
+        return out_tokens, out_logprobs, out_critics
 
 
 
