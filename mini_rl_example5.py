@@ -388,13 +388,21 @@ def learn():
      
         
     print('done with model creation.')
-    dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
+    ##  精诚所至，金石为开。
+    ##  天地万物皆同力。
+    
+    #mgroup = [x for x in range(8 * (player_node + learner_node))]
+    #gp = torch.distributed.new_group(mgroup)
+        
+    learndp = torch.distributed.new_group([8,9,10,11,12,13,14,15])
+     
+    #dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
     #dist.init_process_group(backend="nccl", rank)
-    print('dist initialization ...', local_rank)
-    dist.barrier()
+    print('dist initialization ...', rank)
+    dist.barrier(learndp)
     print('dist barrier success')
 
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank],  process_group=learndp)
     print('distributed model creation.')
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=2.0e-6)
@@ -438,7 +446,8 @@ def learn():
             _tokens = [d[0] for d in data]
             _masks = [d[1] for d in data]
             _probs = [d[2] for d in data]
-            _rewards = [d[3] for d in data] 
+            _crits = [d[3] for d in data]
+            _rewards = [d[4] for d in data] 
                 
             #inputs = tokenizer(text, add_special_tokens=True, padding=True, truncation=True, return_tensors="pt").to(device)
             #if inputs["input_ids"].shape[1] > 4096:
