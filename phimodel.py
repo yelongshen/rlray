@@ -1082,10 +1082,10 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
                 reduction="none",
                 ignore_index=pad_id,
             )
-            print('critics.shape', critics.shape)
-            print('token_critics[:, prev_pos: cur_pos].shape', token_critics[:, prev_pos: cur_pos].shape)
+            #print('critics.shape', critics.shape)
+            #print('token_critics[:, prev_pos: cur_pos].shape', token_critics[:, prev_pos: cur_pos].shape)
             
-            token_critics[:, prev_pos: cur_pos] = critics
+            token_critics[:, prev_pos: cur_pos] = critics.squeeze(-1)
             
             eos_reached |= (~input_text_mask[:, cur_pos]) & (
                 next_token == eos_id
