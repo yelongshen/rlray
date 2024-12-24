@@ -330,7 +330,9 @@ def play():
             _crits = [0.0] * len(input_ids[0]) + crits[0]
             # discrete tokens, word probabilities, mask, critics. 
             # send data into replaybuffer.
-            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=((_tokens, _masks, _probs, _crits, _reward)), timeout=0)
+
+            _info = (_tokens, _masks, _probs, _reward, _crits)
+            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(_info), timeout=0)
 
             #buffer_rank = 8
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
