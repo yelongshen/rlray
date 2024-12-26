@@ -446,12 +446,14 @@ def learn():
             torch.cuda.empty_cache()
             
             data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
-            
+
+            #(_tokens, _masks, _probs, _reward, _crits)
+                
             _tokens = [d[0] for d in data]
             _masks = [d[1] for d in data]
             _probs = [d[2] for d in data]
-            _crits = [d[3] for d in data]
-            _rewards = [d[4] for d in data] 
+            _reward = [d[3] for d in data]
+            _crits = [d[4] for d in data] 
                 
             #inputs = tokenizer(text, add_special_tokens=True, padding=True, truncation=True, return_tensors="pt").to(device)
             #if inputs["input_ids"].shape[1] > 4096:
@@ -462,7 +464,7 @@ def learn():
             #labels = batch["labels"].to(device)
             #input_ids = inputs["input_ids"]
             if step == 0:
-                print('example:', _tokens, _masks, _probs, _rewards)
+                print('example:', _tokens, _masks, _probs, _rewards, _crits)
 
             # re-evaluate the policy.     
             logprobs, _ = model(_tokens)
