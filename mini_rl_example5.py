@@ -100,9 +100,11 @@ player_node = 1
 learner_node = 1
 buffer_rank = 8
 
-def add_to_buffer(experience):
+def add_to_buffer(_tokens, _masks, _probs, _reward, _crits): # experience):
     #print('[debug] consumer side add.....',  int(os.environ['RANK']) )
     global buffer
+    experience = (_tokens, _masks, _probs, _reward, _crits)
+        
     buffer.add(experience)
 
 def len_buffer():
@@ -332,7 +334,7 @@ def play():
             # send data into replaybuffer.
 
             _info = (_tokens, _masks, _probs, _reward, _crits)
-            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=(_info), timeout=0)
+            rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
 
             #buffer_rank = 8
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
