@@ -475,6 +475,16 @@ def learn():
             # re-evaluate the policy.     
             _, logits, critics, _ = model(_tokens)
 
+            # logits : batch_size, sequence_length, vocab_size;
+            # critics : batch_size, sequence_length, 1 
+                
+            logprobs = -F.cross_entropy(
+                input=logits.reshape(-1, self.vocab_size), #.transpose(1, 2),
+                target=tokens[:, prev_pos + 1 : cur_pos + 1].reshape(-1),
+                reduction="none",
+                ignore_index=pad_id,
+            )
+                
             ###### PPO algorithm here.     
             ratios = torch.exp(logprobs - old_logprobs.detach())
 
