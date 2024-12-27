@@ -98,7 +98,7 @@ class ReplayBuffer:
 buffer = ReplayBuffer(4096)
 player_node = 1
 learner_node = 1
-buffer_rank = 8
+buffer_rank = 0
 
 def add_to_buffer(_tokens, _masks, _probs, _reward, _crits): # experience):
     #print('[debug] consumer side add.....',  int(os.environ['RANK']) )
@@ -400,7 +400,7 @@ def learn():
     #mgroup = [x for x in range(8 * (player_node + learner_node))]
     #gp = torch.distributed.new_group(mgroup)
         
-    learndp = torch.distributed.new_group([8,9,10,11,12,13,14,15])
+    learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])
      
     #dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
     #dist.init_process_group(backend="nccl", rank)
@@ -565,9 +565,11 @@ def main():
     # suppose we use 4 gpus for vllm and 4 gpus 
     if rank in [0,1,2,3,4,5,6,7]: #, 8, 9, 10, 11, 12, 13, 14, 15]:
         #print('rank', rank, 'play')
-        play()
-    else:
+        #play()
         learn()
+    else:
+        play()
+        #learn()
         #for i in range(0, 1000000):
         #    print('rank', rank, 'sleep.....')
         #    time.sleep(1)
