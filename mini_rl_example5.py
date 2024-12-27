@@ -452,7 +452,7 @@ def learn():
             _tokens = [d[0] for d in data]
             _masks = [d[1] for d in data]
             _probs = [d[2] for d in data]
-            _reward = [d[3] for d in data]
+            _rewards = [d[3] for d in data]
             _crits = [d[4] for d in data] 
                 
             #inputs = tokenizer(text, add_special_tokens=True, padding=True, truncation=True, return_tensors="pt").to(device)
