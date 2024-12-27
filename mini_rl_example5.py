@@ -15,7 +15,7 @@ import random
 from typing import List, Optional, Tuple, Union
 
 
-from vllm import LLM, SamplingParams
+#from vllm import LLM, SamplingParams
 
 from typing import Any, Dict, Optional
 from concurrent.futures import TimeoutError
