@@ -865,7 +865,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
 
         # model archiecture: connect from intermedia layer possibily.
         self.critic_head = nn.Linear(config.hidden_size, 1, bias=True)
-        nn.init.normal_(self.critic_head.weight)
+        nn.init.xavier_normal_(self.critic_head.weight)
         
         self._tied_weights_keys = ["lm_head.weight"]
         # Initialize weights and apply final processing
@@ -960,6 +960,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
 
+        # suppose it is next token's Q value. 
         critics = self.critic_head(hidden_states[:, -num_logits_to_keep:, :])
         
         loss = None
@@ -1085,7 +1086,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             #print('critics.shape', critics.shape)
             #print('token_critics[:, prev_pos: cur_pos].shape', token_critics[:, prev_pos: cur_pos].shape)
             
-            token_critics[:, prev_pos: cur_pos] = critics.squeeze(-1)
+            token_critics[:, prev_pos: cur_pos] = critics.squeeze(-1) #[: -1]
             
             eos_reached |= (~input_text_mask[:, cur_pos]) & (
                 next_token == eos_id
@@ -1109,13 +1110,13 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             #if logprobs:
             probs = token_logprobs[i][start-1 :-1]
             # cut to eos tok if any
-            critics = token_critics[i][start:]
+            critics = token_critics[i][start-1: -1]
             
             if eos_id in toks:
                 eos_idx = toks.index(eos_id)
                 toks = toks[:eos_idx+1] # include the last eos token. 
                 probs = probs[:eos_idx] # if logprobs else None
-                critics = critics[:eos_idx+1]
+                critics = critics[:eos_idx]
                 
             out_tokens.append(toks)
             out_logprobs.append(probs)
