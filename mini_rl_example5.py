@@ -471,8 +471,9 @@ def learn():
             if step == 0:
                 print('example:', _tokens, _masks, _probs, _rewards, _crits)
 
+            _tokens = torch.tensor(_tokens).to(torch.long).to(model.device)
             # re-evaluate the policy.     
-            _, logits, critics, _ = model(torch.tensor(_tokens).to(torch.long).to(model.device))
+            _, logits, critics, _ = model(_tokens)
 
             ###### PPO algorithm here.     
             ratios = torch.exp(logprobs - old_logprobs.detach())
