@@ -438,14 +438,16 @@ def learn():
     step = 0
     gradient_accumulation_steps = 32
     optimizer.zero_grad()
-    time.sleep(10000)
+    
 
     print('model.device', model.device)
     # rl training steps;
     while step < 40000:
         # receive data from buffer_rank
         l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
-        if l > 8:
+        if l < 8:
+            time.sleep(1000)    
+        else:
             torch.cuda.empty_cache()
             
             data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
