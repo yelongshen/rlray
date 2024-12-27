@@ -440,11 +440,12 @@ def learn():
     optimizer.zero_grad()
     time.sleep(10000)
 
+    print('model.device', model.device)
     # rl training steps;
     while step < 40000:
         # receive data from buffer_rank
         l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
-        if l > 32:
+        if l > 8:
             torch.cuda.empty_cache()
             
             data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
@@ -469,7 +470,7 @@ def learn():
                 print('example:', _tokens, _masks, _probs, _rewards, _crits)
 
             # re-evaluate the policy.     
-            _, logits, critics, _ = model(torch.tensor(_tokens).to(torch.long).to(device))
+            _, logits, critics, _ = model(torch.tensor(_tokens).to(torch.long).to(model.device))
 
             ###### PPO algorithm here.     
             ratios = torch.exp(logprobs - old_logprobs.detach())
@@ -482,7 +483,7 @@ def learn():
                 rewards.insert(0, discounted_reward)
                     
             # Normalizing the rewards
-            rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
+            rewards = torch.tensor(rewards, dtype=torch.float32).to(model.device)
             rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
         
             # convert list to tensor
