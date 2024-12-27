@@ -267,7 +267,7 @@ def play():
         
         print('start to trigger play ...........................\n\n')
         for i in range(0, len(train)):
-            if i % (8 * player_node) != rank:
+            if i % 8 != local_rank :
                 continue
             example = train[i]
             soluts = example['solutions']
