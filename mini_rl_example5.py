@@ -446,7 +446,7 @@ def learn():
         # receive data from buffer_rank
         l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
         if l < 8:
-            time.sleep(1000)    
+            time.sleep(1)    
         else:
             torch.cuda.empty_cache()
             
