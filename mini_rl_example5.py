@@ -386,7 +386,7 @@ def learn():
     missing_keys, unexpected_keys = model.load_state_dict(llm.state_dict(), strict=False)
     model = model.to(torch.bfloat16).to(device)
 
-    model.model.gradient_checkpointing = False
+    model.model.gradient_checkpointing = True
         
     print('before model sync, model parameters', 'rank', rank, model.critic_head.weight)
     initmodel_sync(model)
@@ -444,7 +444,7 @@ def learn():
     while step < 40000:
         # receive data from buffer_rank
         l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
-        if l > 128:
+        if l > 32:
             torch.cuda.empty_cache()
             
             data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
