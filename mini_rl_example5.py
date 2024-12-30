@@ -69,7 +69,9 @@ from dataclasses import dataclass
 from transformers.cache_utils import Cache, DynamicCache
 
 from phimodel import _Phi3ForCausalLM
-        
+
+import torch.nn.functional as F
+
 class ReplayBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -399,6 +401,8 @@ def learn():
     
     #mgroup = [x for x in range(8 * (player_node + learner_node))]
     #gp = torch.distributed.new_group(mgroup)
+
+    vocab_size = llm_config.vocab_size
         
     learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])
      
@@ -438,7 +442,8 @@ def learn():
     step = 0
     gradient_accumulation_steps = 32
     optimizer.zero_grad()
-    
+
+    pad_id = llm_config.pad_token_id
 
     print('model.device', model.device)
     # rl training steps;
@@ -472,19 +477,25 @@ def learn():
                 print('example:', _tokens, _masks, _probs, _rewards, _crits)
 
             _tokens = torch.tensor(_tokens).to(torch.long).to(model.device)
+            
             # re-evaluate the policy.     
             _, logits, critics, _ = model(_tokens)
 
+            # _tokens : batch_size, sequence_length
             # logits : batch_size, sequence_length, vocab_size;
             # critics : batch_size, sequence_length, 1 
                 
             logprobs = -F.cross_entropy(
-                input=logits.reshape(-1, self.vocab_size), #.transpose(1, 2),
-                target=tokens[:, prev_pos + 1 : cur_pos + 1].reshape(-1),
+                input=logits.reshape(-1, vocab_size)[:-1,:], #.transpose(1, 2),
+                target=_tokens.reshape(-1)[1:], 
                 reduction="none",
                 ignore_index=pad_id,
             )
-                
+
+            print('logprobs.shape', logprobs.shape)
+            old_logprobs = torch.tensor(_probs).to(model.device)
+            print('old_logprobs.shape', old_logprobs.shape)   
+            #print('_probs.shape', 
             ###### PPO algorithm here.     
             ratios = torch.exp(logprobs - old_logprobs.detach())
 
