@@ -962,7 +962,10 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
 
         # suppose it is next token's Q value. 
         critics = self.critic_head(hidden_states[:, -num_logits_to_keep:, :])
-        
+
+        # Apply sigmoid
+        critics = torch.sigmoid(critics)
+
         loss = None
         if labels is not None:
             #loss = self.loss_function(logits, labels, self.vocab_size, **loss_kwargs)
