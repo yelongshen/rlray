@@ -495,6 +495,11 @@ def learn():
             print('logprobs.shape', logprobs.shape)
             old_logprobs = torch.tensor(_probs).to(model.device)
             print('old_logprobs.shape', old_logprobs.shape)   
+            print('len(mask)', len(_masks[0]))
+            print(_masks)
+            _idx = _masks[0].index(1)
+            print('_masks.index', _idx)
+            
             #print('_probs.shape', 
             ###### PPO algorithm here.     
             ratios = torch.exp(logprobs - old_logprobs.detach())
