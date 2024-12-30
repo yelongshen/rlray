@@ -492,17 +492,20 @@ def learn():
                 ignore_index=pad_id,
             )
 
-            print('logprobs.shape', logprobs.shape)
+            #print('logprobs.shape', logprobs.shape)
             old_logprobs = torch.tensor(_probs).to(model.device)
             print('old_logprobs.shape', old_logprobs.shape)   
-            print('len(mask)', len(_masks[0]))
-            print(_masks)
+            print('len(_masks)', len(_masks[0]))
+            print('len(_rewards)', len(_rewards[0]))
+            print('len(_crits)', len(_crits[0]))
+            
+            #print(_masks)
             _idx = _masks[0].index(1)
-            print('_masks.index', _idx)
+            #print('_masks.index', _idx)
             
             #print('_probs.shape', 
             ###### PPO algorithm here.     
-            ratios = torch.exp(logprobs - old_logprobs.detach())
+            ratios = torch.exp(logprobs[:, _idx:] - old_logprobs[:, _idx:].detach())
 
             gamma = 0.95
             #rewards = []
