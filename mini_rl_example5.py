@@ -14,6 +14,7 @@ import random
 
 from typing import List, Optional, Tuple, Union
 
+import torch.nn as nn
 
 #from vllm import LLM, SamplingParams
 
@@ -446,6 +447,9 @@ def learn():
     pad_id = llm_config.pad_token_id
 
     print('model.device', model.device)
+    # 
+    mseLoss = torch.nn.MSELoss(size_average=None, reduce=None, reduction='mean')
+    
     # rl training steps;
     while step < 40000:
         # receive data from buffer_rank
@@ -484,20 +488,22 @@ def learn():
             # _tokens : batch_size, sequence_length
             # logits : batch_size, sequence_length, vocab_size;
             # critics : batch_size, sequence_length, 1 
-                
+            _b, _seq = _tokens.shape
+            
             logprobs = -F.cross_entropy(
                 input=logits.reshape(-1, vocab_size)[:-1,:], #.transpose(1, 2),
                 target=_tokens.reshape(-1)[1:], 
                 reduction="none",
                 ignore_index=pad_id,
             )
-
+            critics = critics.reshape(_b, _seq)
+            
             #print('logprobs.shape', logprobs.shape)
             old_logprobs = torch.tensor(_probs).to(model.device)
-            print('old_logprobs.shape', old_logprobs.shape)   
-            print('len(_masks)', len(_masks[0]))
-            print('len(_rewards)', len(_rewards[0]))
-            print('len(_crits)', len(_crits[0]))
+            #print('old_logprobs.shape', old_logprobs.shape)   
+            #print('len(_masks)', len(_masks[0]))
+            #print('len(_rewards)', len(_rewards[0]))
+            #print('len(_crits)', len(_crits[0]))
             
             #print(_masks)
             _idx = _masks[0].index(1)
@@ -506,24 +512,28 @@ def learn():
             #print('_probs.shape', 
             ###### PPO algorithm here.     
             ratios = torch.exp(logprobs[:, _idx:] - old_logprobs[:, _idx:].detach())
-
+            state_values = critics[:, _idx:] 
+            
             gamma = 0.95
-            #rewards = []
+            rewards = []
             discounted_reward = 0
-            for reward in reversed(_rewards): 
+            for reward in reversed(_rewards[0][_idx:-1]): 
                 discounted_reward = reward + (gamma * discounted_reward)
                 rewards.insert(0, discounted_reward)
                     
             # Normalizing the rewards
-            rewards = torch.tensor(rewards, dtype=torch.float32).to(model.device)
-            rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
+            rewards = torch.tensor([rewards], dtype=torch.bfloat16).to(model.device)
+
+            # global reward sync. 
+            #rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
         
             # convert list to tensor
-            old_states = torch.squeeze(torch.stack(self.buffer.states, dim=0)).detach().to(device)
-            old_actions = torch.squeeze(torch.stack(self.buffer.actions, dim=0)).detach().to(device)
-            old_logprobs = torch.squeeze(torch.stack(self.buffer.logprobs, dim=0)).detach().to(device)
-            old_state_values = torch.squeeze(torch.stack(self.buffer.state_values, dim=0)).detach().to(device)
-        
+            #old_states = torch.squeeze(torch.stack(self.buffer.states, dim=0)).detach().to(device)
+            #old_actions = torch.squeeze(torch.stack(self.buffer.actions, dim=0)).detach().to(device)
+            #old_logprobs = torch.squeeze(torch.stack(self.buffer.logprobs, dim=0)).detach().to(device)
+            #old_state_values = torch.squeeze(torch.stack(self.buffer.state_values, dim=0)).detach().to(device)
+
+            old_state_values = torch.tensor(critics).to(torch.bfloat16).to(model.device)
             # calculate advantages
             advantages = rewards.detach() - old_state_values.detach()
 
@@ -533,27 +543,29 @@ def learn():
             surr2 = torch.clamp(ratios, 1-eps_clip, 1+eps_clip) * advantages
 
             # final loss of clipped objective PPO objective. 
-            loss = -torch.min(surr1, surr2) + 0.5 * self.MseLoss(state_values, rewards) #- 0.01 * dist_entropy
+            loss = -torch.min(surr1, surr2) + 0.5 * mseLoss(state_values, rewards) #- 0.01 * dist_entropy
             
             # take gradient step
-            self.optimizer.zero_grad()
-            loss.mean().backward()
-            self.optimizer.step()
-                
-            # Shift input_ids to create labels for next-token prediction
-            labels = input_ids.clone()
-            labels[:, :-1] = input_ids[:, 1:]
-            labels[:, -1] = -100  # Mask the last token
-            # Return the dictionary with input_ids, attention_mask, and labels
-            inputs["labels"] = labels
+            #self.optimizer.zero_grad()
+            #loss.mean().backward()
+            #self.optimizer.step()
 
-            batch = {k: v.to(device) for k,v in inputs.items()}
+            print('loss', loss)
+            
+            # Shift input_ids to create labels for next-token prediction
+            #labels = input_ids.clone()
+            #labels[:, :-1] = input_ids[:, 1:]
+            #labels[:, -1] = -100  # Mask the last token
+            # Return the dictionary with input_ids, attention_mask, and labels
+            #inputs["labels"] = labels
+
+            #batch = {k: v.to(device) for k,v in inputs.items()}
             #print('1. forward', rank, inputs['input_ids'].shape)
 
             #time.sleep(10)
-            outputs = model(**batch)
+            #outputs = model(**batch)
 
-            loss = outputs.loss
+            #loss = outputs.loss
             #print('loss:', loss, 'rank', rank,'step', step, 'shape', inputs['input_ids'].shape)
 
             #print('2. backward', rank, inputs['input_ids'].shape)
