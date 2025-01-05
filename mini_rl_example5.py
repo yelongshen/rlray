@@ -495,7 +495,7 @@ def learn():
                 target=_tokens.reshape(-1)[1:], 
                 reduction="none",
                 ignore_index=pad_id,
-            )
+            ).reshape(1, -1)
             critics = critics.reshape(_b, _seq)
             
             #print('logprobs.shape', logprobs.shape)
@@ -510,13 +510,19 @@ def learn():
             #print('_masks.index', _idx)
             
             #print('_probs.shape', 
+            #_idx 389
+            #logprobs.shape torch.Size([785])
+            #old_logprobs.shape torch.Size([1, 785])
+            #critics.shape torch.Size([1, 786])
+
             ###### PPO algorithm here.     
             print('_idx', _idx)
             print('logprobs.shape', logprobs.shape)
             print('old_logprobs.shape', old_logprobs.shape)
             print('critics.shape', critics.shape) 
             ratios = torch.exp(logprobs[:, _idx:] - old_logprobs[:, _idx:].detach())
-            state_values = critics[:, _idx:] 
+            
+            state_values = critics[:, _idx:-1] 
             
             gamma = 0.95
             rewards = []
