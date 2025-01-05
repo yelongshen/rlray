@@ -522,7 +522,7 @@ def learn():
             print('critics.shape', critics.shape) 
             ratios = torch.exp(logprobs[:, _idx:] - old_logprobs[:, _idx:].detach())
             
-            state_values = critics[:, _idx:-1] 
+            critics = critics[:, _idx:-1] 
             
             gamma = 0.95
             rewards = []
@@ -530,7 +530,7 @@ def learn():
             for reward in reversed(_rewards[0][_idx:-1]): 
                 discounted_reward = reward + (gamma * discounted_reward)
                 rewards.insert(0, discounted_reward)
-                    
+            
             # Normalizing the rewards
             rewards = torch.tensor([rewards], dtype=torch.bfloat16).to(model.device)
 
