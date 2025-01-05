@@ -511,6 +511,10 @@ def learn():
             
             #print('_probs.shape', 
             ###### PPO algorithm here.     
+            print('_idx', _idx)
+            print('logprobs.shape', logprobs.shape)
+            print('old_logprobs.shape', old_logprobs.shape)
+            print('critics.shape', critics.shape) 
             ratios = torch.exp(logprobs[:, _idx:] - old_logprobs[:, _idx:].detach())
             state_values = critics[:, _idx:] 
             
