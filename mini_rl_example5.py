@@ -330,9 +330,10 @@ def play():
 
             _tokens = input_ids[0] + outputs[0] 
             _masks = [0] * len(input_ids[0]) + [1] * len(outputs[0])
-            _probs = [0.0] * len(input_ids[0]) + probs[0]    
-            _reward = [0.0] * (len(_tokens)-1) + [reward_score]
-            _crits = [0.0] * len(input_ids[0]) + crits[0]
+            _probs = probs[0]    
+            _crits = crits[0]
+            _reward = [0.0] * (len(_crits)-1) + [reward_score]
+
             # discrete tokens, word probabilities, mask, critics. 
             # send data into replaybuffer.
 
@@ -496,6 +497,7 @@ def learn():
                 reduction="none",
                 ignore_index=pad_id,
             ).reshape(1, -1)
+            
             critics = critics.reshape(_b, _seq)
             
             #print('logprobs.shape', logprobs.shape)
@@ -516,18 +518,19 @@ def learn():
             #critics.shape torch.Size([1, 786])
 
             ###### PPO algorithm here.     
-            #print('_idx', _idx)
-            #print('logprobs.shape', logprobs.shape)
-            #print('old_logprobs.shape', old_logprobs.shape)
-            #print('critics.shape', critics.shape) 
-            ratios = torch.exp(logprobs[:, _idx:] - old_logprobs[:, _idx:].detach())
+            print('_idx', _idx)
+            print('logprobs.shape', logprobs.shape)
+            print('old_logprobs.shape', old_logprobs.shape)
+            print('critics.shape', critics.shape) 
             
-            critics = critics[:, _idx:-1] 
+            ratios = torch.exp(logprobs[:, _idx-1:] - old_logprobs.detach())
+            
+            critics = critics[:, _idx-1:-1] 
             
             gamma = 0.95
             rewards = []
             discounted_reward = 0
-            for reward in reversed(_rewards[0][_idx:-1]): 
+            for reward in reversed(_rewards[0]): 
                 discounted_reward = reward + (gamma * discounted_reward)
                 rewards.insert(0, discounted_reward)
             
@@ -549,10 +552,10 @@ def learn():
 
             eps_clip = 0.2
             # Finding Surrogate Loss  
-            print('ratios.shape', ratios.shape)
-            print('advantages.shape', advantages.shape)
-            print('state_values.shape', critics.shape)
-            print('rewards.shape', rewards.shape)
+            #print('ratios.shape', ratios.shape)
+            #print('advantages.shape', advantages.shape)
+            #print('state_values.shape', critics.shape)
+            #print('rewards.shape', rewards.shape)
             
             surr1 = ratios * advantages # (optimize logprobs)
             
