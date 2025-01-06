@@ -450,6 +450,14 @@ def learn():
     print('model.device', model.device)
     # 
     mseLoss = torch.nn.MSELoss(size_average=None, reduce=None, reduction='none')
+
+    critic_loss = 0.0
+    policy_loss = 0.0
+
+    mini_c_loss = 0.0
+    mini_p_loss = 0.0
+
+    update_step = 0
     
     # rl training steps;
     while step < 40000:
@@ -518,11 +526,10 @@ def learn():
             #critics.shape torch.Size([1, 786])
 
             ###### PPO algorithm here.     
-            print('_idx', _idx)
-            print('logprobs.shape', logprobs.shape)
-            print('old_logprobs.shape', old_logprobs.shape)
-            print('critics.shape', critics.shape) 
-            
+            #print('_idx', _idx)
+            #print('logprobs.shape', logprobs.shape)
+            #print('old_logprobs.shape', old_logprobs.shape)
+            #print('critics.shape', critics.shape) 
             ratios = torch.exp(logprobs[:, _idx-1:] - old_logprobs.detach())
             
             critics = critics[:, _idx-1:-1] 
@@ -561,18 +568,21 @@ def learn():
             
             surr2 = torch.clamp(ratios, 1-eps_clip, 1+eps_clip) * advantages
 
+            _p_loss = -torch.min(surr1, surr2).mean()
+            _c_loss = mseLoss(critics, rewards).mean()
+            
             # final loss of clipped objective PPO objective. 
-            loss = -torch.min(surr1, surr2) + 0.5 * mseLoss(critics, rewards) #- 0.01 * dist_entropy
+            loss = _p_loss + 0.5 * _c_loss  #- 0.01 * dist_entropy
             
             # take gradient step
             #self.optimizer.zero_grad()
             #loss.mean().backward()
             #self.optimizer.step()
-            loss = loss.mean()
+            #loss = loss.mean()
             
-            print('loss', loss)
-
-            
+            #print('loss', loss)
+            mini_c_loss = mini_c_loss + _c_loss.detach()
+            mini_p_loss = mini_p_loss + _p_loss.detach()
             # Shift input_ids to create labels for next-token prediction
             #labels = input_ids.clone()
             #labels[:, :-1] = input_ids[:, 1:]
@@ -593,6 +603,22 @@ def learn():
             loss.backward()
             if (step + 1) % gradient_accumulation_steps == 0:
                 #print('3. optimization', rank)
+                #critic_loss = 0.0
+                #policy_loss = 0.0
+                update_step = update_step + 1
+
+                mini_c_loss = mini_c_loss / gradient_accumulation_steps
+                mini_p_loss = mini_p_loss / gradient_accumulation_steps
+
+                critic_loss = critic_loss * (update_step - 1) / update_step + mini_c_loss / update_step
+                policy_loss = policy_loss * (update_step - 1) / update_step + mini_p_loss / update_step
+
+                print('mini_c_loss: ', mini_c_loss, 'critic_loss', critic_loss)
+                print('mini_p_loss: ', mini_p_loss, 'policy_loss', policy_loss)
+ 
+                mini_c_loss = 0.0
+                mini_p_loss = 0.0
+    
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()  # Update the learning rate
