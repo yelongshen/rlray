@@ -448,7 +448,7 @@ def learn():
 
     print('model.device', model.device)
     # 
-    mseLoss = torch.nn.MSELoss(size_average=None, reduce=None, reduction='mean')
+    mseLoss = torch.nn.MSELoss(size_average=None, reduce=None, reduction='none')
     
     # rl training steps;
     while step < 40000:
@@ -565,8 +565,10 @@ def learn():
             #self.optimizer.zero_grad()
             #loss.mean().backward()
             #self.optimizer.step()
-
+            loss = loss.mean()
+            
             print('loss', loss)
+
             
             # Shift input_ids to create labels for next-token prediction
             #labels = input_ids.clone()
