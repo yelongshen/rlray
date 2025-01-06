@@ -613,8 +613,9 @@ def learn():
                 critic_loss = critic_loss * (update_step - 1) / update_step + mini_c_loss / update_step
                 policy_loss = policy_loss * (update_step - 1) / update_step + mini_p_loss / update_step
 
-                print('mini_c_loss: ', mini_c_loss, 'critic_loss', critic_loss)
-                print('mini_p_loss: ', mini_p_loss, 'policy_loss', policy_loss)
+                if rank == 0:
+                    print('mini_c_loss: ', mini_c_loss, 'critic_loss', critic_loss)
+                    print('mini_p_loss: ', mini_p_loss, 'policy_loss', policy_loss)
  
                 mini_c_loss = 0.0
                 mini_p_loss = 0.0
