@@ -551,7 +551,7 @@ def learn():
             # Finding Surrogate Loss  
             print('ratios.shape', ratios.shape)
             print('advantages.shape', advantages.shape)
-            print('state_values.shape', state_values.shape)
+            print('state_values.shape', critics.shape)
             print('rewards.shape', rewards.shape)
             
             surr1 = ratios * advantages # (optimize logprobs)
@@ -559,7 +559,7 @@ def learn():
             surr2 = torch.clamp(ratios, 1-eps_clip, 1+eps_clip) * advantages
 
             # final loss of clipped objective PPO objective. 
-            loss = -torch.min(surr1, surr2) + 0.5 * mseLoss(state_values, rewards) #- 0.01 * dist_entropy
+            loss = -torch.min(surr1, surr2) + 0.5 * mseLoss(critics, rewards) #- 0.01 * dist_entropy
             
             # take gradient step
             #self.optimizer.zero_grad()
