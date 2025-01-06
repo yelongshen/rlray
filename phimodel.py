@@ -1118,8 +1118,8 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
             if eos_id in toks:
                 eos_idx = toks.index(eos_id)
                 toks = toks[:eos_idx+1] # include the last eos token. 
-                probs = probs[:eos_idx] # if logprobs else None
-                critics = critics[:eos_idx]
+                probs = probs[:eos_idx+1] # if logprobs else None
+                critics = critics[:eos_idx+1]
                 
             out_tokens.append(toks)
             out_logprobs.append(probs)
