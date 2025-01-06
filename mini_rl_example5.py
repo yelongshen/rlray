@@ -516,10 +516,10 @@ def learn():
             #critics.shape torch.Size([1, 786])
 
             ###### PPO algorithm here.     
-            print('_idx', _idx)
-            print('logprobs.shape', logprobs.shape)
-            print('old_logprobs.shape', old_logprobs.shape)
-            print('critics.shape', critics.shape) 
+            #print('_idx', _idx)
+            #print('logprobs.shape', logprobs.shape)
+            #print('old_logprobs.shape', old_logprobs.shape)
+            #print('critics.shape', critics.shape) 
             ratios = torch.exp(logprobs[:, _idx:] - old_logprobs[:, _idx:].detach())
             
             critics = critics[:, _idx:-1] 
@@ -549,7 +549,13 @@ def learn():
 
             eps_clip = 0.2
             # Finding Surrogate Loss  
-            surr1 = ratio * advantages # (optimize logprobs) 
+            print('ratios.shape', ratios.shape)
+            print('advantages.shape', advantages.shape)
+            print('state_values.shape', state_values.shape)
+            print('rewards.shape', rewards.shape)
+            
+            surr1 = ratios * advantages # (optimize logprobs)
+            
             surr2 = torch.clamp(ratios, 1-eps_clip, 1+eps_clip) * advantages
 
             # final loss of clipped objective PPO objective. 
