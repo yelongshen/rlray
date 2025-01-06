@@ -460,7 +460,7 @@ def learn():
     update_step = 0
     
     # rl training steps;
-    while step < 40000:
+    while step < num_training_steps:
         # receive data from buffer_rank
         l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
         if l < 8:
