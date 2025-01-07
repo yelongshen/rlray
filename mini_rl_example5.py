@@ -95,6 +95,15 @@ class ModelBuffer:
             self.is_new = False
 
 
+model_buffer = ModelBuffer()
+def save_weight(model_weight):
+    global model_buffer
+    model_buffer.push(model_weight)
+
+def send_model_weight_to_producer(model_weight):
+    rpc.rpc_sync("worker0", sync_weight, args=(model_weight,))
+    
+
 ######################################################################## REPLAY BUFFER
 class ReplayBuffer:
     def __init__(self, capacity):
