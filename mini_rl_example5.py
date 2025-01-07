@@ -72,7 +72,30 @@ from transformers.cache_utils import Cache, DynamicCache
 from phimodel import _Phi3ForCausalLM
 
 import torch.nn.functional as F
+######################################################################## MODEL BUFFER
+class ModelBuffer:
+    def __init__(self):
+        self.buffer = None
+        self.is_new = False
+        self.lock = threading.Lock()
 
+    def push(self, model):
+        """ Add new experience to the buffer """
+        with self.lock:
+            self.buffer = model
+            self.is_new = True
+
+    def check_new(self):
+        with self.lock:
+            return self.is_new
+
+    def pull(self, host_model):
+        with self.lock:
+            host_model.data.copy_(self.buffer)
+            self.is_new = False
+
+
+######################################################################## REPLAY BUFFER
 class ReplayBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
