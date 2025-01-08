@@ -393,7 +393,7 @@ def play():
             rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
 
             if msg.check():
-                allmodel_sync(llm, device_ids=[local_rank], mdg)
+                allmodel_sync(llm, device_ids=[local_rank], mdg=mdg)
             #buffer_rank = 8
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
@@ -690,7 +690,7 @@ def learn():
                     # notify the producer to boardcast the model weight to 
                     if rank == 0:
                         notify_model_update()
-                        allmodel_sync(model, device_ids=[local_rank], mdg)
+                        allmodel_sync(model, device_ids=[local_rank], mdg=mdg)
 
                     #rpc.rpc_sync(f"worker-{buffer_rank}", notify_model_update, args=_info, timeout=0)
                 dist.barrier(learndp)
