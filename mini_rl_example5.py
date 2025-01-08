@@ -310,7 +310,7 @@ def play():
     ### model distributed group.
     print('player: rank', rank, 'create mdg...')
     mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-    dist.barrier(mdg)
+    dist.barrier(mdg, device_ids=[local_rank])
     print('dist mdg barrier success..', rank)
 
 
@@ -473,7 +473,7 @@ def learn():
     if rank == 0:
         print('learner: rank', rank, 'create mdg...')
         mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-        dist.barrier(mdg)
+        dist.barrier(mdg, device_ids=[local_rank])
         print('dist mdg barrier success')
 
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank],  process_group=learndp)
