@@ -151,12 +151,12 @@ def notify_model_update():
     for worker in range(8, 16):
         rpc.rpc_sync(f"worker-{worker}", msg_push, timeout=0)
 
-def allmodel_sync(model:_Phi3ForCausalLM, mdg):
+def allmodel_sync(model:_Phi3ForCausalLM, device_ids, mdg):
     #mgroup = [x for x in range(8 * (player_node + learner_node))]
     #gp = torch.distributed.new_group(mgroup)
     global msg
     for param in model.state_dict().values():
-        torch.distributed.broadcast(param, 0, group=mdg, async_op=False)
+        torch.distributed.broadcast(param, 0, group=mdg, device_ids = device_ids, async_op=False)
     msg.pull()
 ######################################################################## MODEL BUFFER
 
@@ -393,7 +393,7 @@ def play():
             rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
 
             if msg.check():
-                allmodel_sync(llm, mdg)
+                allmodel_sync(llm, device_ids=[local_rank], mdg)
             #buffer_rank = 8
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
@@ -690,7 +690,7 @@ def learn():
                     # notify the producer to boardcast the model weight to 
                     if rank == 0:
                         notify_model_update()
-                        allmodel_sync(model, mdg)
+                        allmodel_sync(model, device_ids=[local_rank], mdg)
 
                     #rpc.rpc_sync(f"worker-{buffer_rank}", notify_model_update, args=_info, timeout=0)
                 dist.barrier(learndp)
