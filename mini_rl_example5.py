@@ -307,6 +307,9 @@ def play():
 
     ### model distributed group.
     mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
+    dist.barrier(mdg)
+    print('dist mdg barrier success..', rank)
+
 
     # Generate response
     #outputs = []
@@ -466,6 +469,8 @@ def learn():
     
     if rank == 0:
         mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
+        dist.barrier(mdg)
+        print('dist mdg barrier success')
 
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank],  process_group=learndp)
     print('distributed model creation.')
