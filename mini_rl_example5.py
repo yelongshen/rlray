@@ -237,8 +237,10 @@ def play():
     rank = int(os.environ['RANK'])
 
     local_rank = int(os.environ['LOCAL_RANK'])
-    torch.cuda.set_device(local_rank)
+    torch.cuda.set_device(local_rank) # local_rank)
+    #device = torch.device(f"cuda:{local_rank}")
     device = torch.device(f"cuda:{local_rank}")
+
     # give up huggingface model.
     model_name = "microsoft/Phi-3.5-mini-instruct"
     llm = AutoModelForCausalLM.from_pretrained( 
@@ -306,6 +308,7 @@ def play():
     print('start sampling data ...')
 
     ### model distributed group.
+    print('player: rank', rank, 'create mdg...')
     mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
     dist.barrier(mdg)
     print('dist mdg barrier success..', rank)
@@ -468,6 +471,7 @@ def learn():
 
     
     if rank == 0:
+        print('learner: rank', rank, 'create mdg...')
         mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
         dist.barrier(mdg)
         print('dist mdg barrier success')
