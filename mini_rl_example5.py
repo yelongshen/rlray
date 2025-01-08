@@ -72,37 +72,7 @@ from transformers.cache_utils import Cache, DynamicCache
 from phimodel import _Phi3ForCausalLM
 
 import torch.nn.functional as F
-######################################################################## MODEL BUFFER
-class ModelBuffer:
-    def __init__(self):
-        self.buffer = None
-        self.is_new = False
-        self.lock = threading.Lock()
 
-    def push(self, model):
-        """ Add new experience to the buffer """
-        with self.lock:
-            self.buffer = model
-            self.is_new = True
-
-    def check_new(self):
-        with self.lock:
-            return self.is_new
-
-    def pull(self, host_model):
-        with self.lock:
-            host_model.data.copy_(self.buffer)
-            self.is_new = False
-
-
-model_buffer = ModelBuffer()
-def save_weight(model_weight):
-    global model_buffer
-    model_buffer.push(model_weight)
-
-def send_model_weight_to_producer(model_weight):
-    rpc.rpc_sync("worker0", sync_weight, args=(model_weight,))
-    
 
 ######################################################################## REPLAY BUFFER
 class ReplayBuffer:
@@ -149,7 +119,47 @@ def len_buffer():
 def pop_from_buffer(batchsize):
     global buffer
     return buffer.sample(batchsize)
+
 ################################################################################################
+class ModelUpdateMessage:
+    def __init__(self):
+        self.is_new = False
+        self.lock = threading.Lock()
+
+    def push(self):
+        """ Add new experience to the buffer """
+        with self.lock:
+            self.is_new = True
+
+    def check(self):
+        with self.lock:
+            return self.is_new
+
+    def pull(self):
+        with self.lock:
+            #host_model.data.copy_(self.buffer)
+            self.is_new = False
+
+msg = ModelUpdateMessage()
+
+def msg_push():
+    global msg
+    msg.push()
+
+def notify_model_update():
+    global msg
+    for worker in range(8, 16):
+        rpc.rpc_sync(f"worker-{worker}", msg_push, timeout=0)
+
+def allmodel_sync(model:_Phi3ForCausalLM, mdg):
+    #mgroup = [x for x in range(8 * (player_node + learner_node))]
+    #gp = torch.distributed.new_group(mgroup)
+    global msg
+    for param in model.state_dict().values():
+        torch.distributed.broadcast(param, 0, group=mdg)
+    msg.pull()
+######################################################################## MODEL BUFFER
+
 
 def code_extraction(input_text):
     lines = input_text.splitlines()
@@ -294,6 +304,10 @@ def play():
     instruction_prefix = ''
     instruction_postfix = '\n\nplease only reply with the source code in python. \n'
     print('start sampling data ...')
+
+    ### model distributed group.
+    mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
+
     # Generate response
     #outputs = []
     for epoch in range(0, 100):
@@ -372,6 +386,8 @@ def play():
             _info = (_tokens, _masks, _probs, _reward, _crits)
             rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
 
+            if msg.check():
+                allmodel_sync(llm, mdg)
             #buffer_rank = 8
             #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
             #time.sleep(1)
@@ -379,6 +395,7 @@ def play():
             
             #if check_model_update():
             #    llm.model.load_state_dict()
+            
         #print(ans)
         #outputs.append(ans)
         print('end to trigger play ...........................\n\n')
@@ -439,12 +456,16 @@ def learn():
     vocab_size = llm_config.vocab_size
         
     learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])
-     
+        
     #dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
     #dist.init_process_group(backend="nccl", rank)
     print('dist initialization ...', rank)
     dist.barrier(learndp)
     print('dist barrier success')
+
+    
+    if rank == 0:
+        mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
 
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank],  process_group=learndp)
     print('distributed model creation.')
@@ -655,6 +676,16 @@ def learn():
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()  # Update the learning rate
+
+                if update_step % 10 == 0:
+                    # notify the producer to boardcast the model weight to 
+                    if rank == 0:
+                        notify_model_update()
+                        allmodel_sync(model, mdg)
+
+                    #rpc.rpc_sync(f"worker-{buffer_rank}", notify_model_update, args=_info, timeout=0)
+                dist.barrier(learndp)
+
             step = step + 1
 def main():
     # system parameters:
