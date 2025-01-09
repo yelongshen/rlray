@@ -307,10 +307,13 @@ def play():
     instruction_postfix = '\n\nplease only reply with the source code in python. \n'
     print('start sampling data ...')
 
+    learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])
+    dist.barrier(learndp)
+
     ### model distributed group.
     print('player: rank', rank, 'create mdg...')
     mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-    dist.barrier(mdg, device_ids=[local_rank])
+    dist.barrier(mdg)
     print('dist mdg barrier success..', rank)
 
 
@@ -460,21 +463,22 @@ def learn():
     #gp = torch.distributed.new_group(mgroup)
 
     vocab_size = llm_config.vocab_size
-        
+    
+    print('dist learndp group initialization ...', rank)
     learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])
-        
+    dist.barrier(learndp)
     #dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
     #dist.init_process_group(backend="nccl", rank)
-    print('dist initialization ...', rank)
-    dist.barrier(learndp)
-    print('dist barrier success')
+    
+    #dist.barrier(learndp)
+    print('dist learndp barrier success')
 
     
-    if rank == 0:
-        print('learner: rank', rank, 'create mdg...')
-        mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-        dist.barrier(mdg, device_ids=[local_rank])
-        print('dist mdg barrier success')
+
+    print('learner: rank', rank, 'create mdg...')
+    mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
+    dist.barrier(mdg)
+    print('dist mdg barrier success')
 
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank],  process_group=learndp)
     print('distributed model creation.')
