@@ -156,7 +156,7 @@ def allmodel_sync(model:_Phi3ForCausalLM, device_ids, mdg):
     #gp = torch.distributed.new_group(mgroup)
     global msg
     for param in model.state_dict().values():
-        torch.distributed.broadcast(param, 0, group=mdg, device_ids = device_ids, async_op=False)
+        torch.distributed.broadcast(param, 0, group=mdg, async_op=False)
     msg.pull()
 ######################################################################## MODEL BUFFER
 
