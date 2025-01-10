@@ -155,8 +155,9 @@ def allmodel_sync(model:_Phi3ForCausalLM, device_ids, mdg):
     #mgroup = [x for x in range(8 * (player_node + learner_node))]
     #gp = torch.distributed.new_group(mgroup)
     global msg
-    for param in model.state_dict().values():
-        torch.distributed.broadcast(param, 0, group=mdg, async_op=False)
+    with torch.no_grad():
+        for param in model.state_dict().values():
+            torch.distributed.broadcast(param, 0, group=mdg, async_op=False)
     msg.pull()
 ######################################################################## MODEL BUFFER
 
@@ -214,9 +215,9 @@ def evaluate_program(program, test_input, test_output):
 def initmodel_sync(model:_Phi3ForCausalLM):
     mgroup = [x for x in range(8 * (player_node + learner_node))]
     gp = torch.distributed.new_group(mgroup)
-
-    torch.distributed.broadcast(model.critic_head.weight, 0, group=gp, async_op=False)
-    torch.distributed.broadcast(model.critic_head.bias, 0, group=gp, async_op=False)
+    with torch.no_grad():
+        torch.distributed.broadcast(model.critic_head.weight, 0, group=gp, async_op=False)
+        torch.distributed.broadcast(model.critic_head.bias, 0, group=gp, async_op=False)
     #return gp
     #mp_groups = [[0,1,2,3], [4,5,6,7]]
     #groups = torch.LongTensor(range(world_size)).reshape(data_parallel_size, pipeline_length, model_parallel_size)
