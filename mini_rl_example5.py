@@ -693,7 +693,7 @@ def learn():
                     if rank == 0:
                         notify_model_update()
                         allmodel_sync(model, device_ids=[local_rank], mdg=mdg)
-
+                        print('*************** model update ******************************')
                     #rpc.rpc_sync(f"worker-{buffer_rank}", notify_model_update, args=_info, timeout=0)
                 dist.barrier(learndp)
 
