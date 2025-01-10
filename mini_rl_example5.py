@@ -307,13 +307,16 @@ def play():
     instruction_postfix = '\n\nplease only reply with the source code in python. \n'
     print('start sampling data ...')
 
-    learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])
     dist.barrier()
-    
+    learndp = torch.distributed.new_group([0, 1, 2, 3, 4, 5, 6, 7])
+    dist.barrier()
+    print('dist learndp barrier success..', rank)
+
     ### model distributed group.
-    print('player: rank', rank, 'create mdg...')
+    #print('player: rank', rank, 'create mdg...')
+    dist.barrier()
     mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-    dist.barrier(mdg) #, device_ids=[local_rank])
+    dist.barrier() #, device_ids=[local_rank])
     print('dist mdg barrier success..', rank)
 
 
@@ -449,12 +452,10 @@ def learn():
     model = model.to(torch.bfloat16).to(device)
 
     model.model.gradient_checkpointing = True
-        
     print('before model sync, model parameters', 'rank', rank, model.critic_head.weight)
     initmodel_sync(model)
     print('after model sync, model parameters', 'rank', rank, model.critic_head.weight)
-     
-        
+    
     print('done with model creation.')
     ##  精诚所至，金石为开。
     ##  天地万物皆同力。
@@ -463,7 +464,8 @@ def learn():
     #gp = torch.distributed.new_group(mgroup)
 
     vocab_size = llm_config.vocab_size
-        
+
+    dist.barrier()
     learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])    
     #dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
     #dist.init_process_group(backend="nccl", rank)
@@ -473,10 +475,10 @@ def learn():
 
     
     #if rank == 0:
-    print('learner: rank', rank, 'create mdg...')
+    dist.barrier()
     mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-    dist.barrier(mdg)
-    print('dist mdg barrier success')
+    dist.barrier()
+    print('dist mdg barrier success', rank)
 
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank],  process_group=learndp)
     print('distributed model creation.')
@@ -594,7 +596,7 @@ def learn():
             #print('logprobs.shape', logprobs.shape)
             #print('old_logprobs.shape', old_logprobs.shape)
             #print('critics.shape', critics.shape) 
-            ratios = torch.exp(logprobs[:, _idx-1:] - old_logprobs.detach())
+            ratios = torch.exp(logprobs[:, _idx-1:] - old_logprobs.detach() + 1e-10)
             
             critics = critics[:, _idx-1:-1] 
             
@@ -695,7 +697,7 @@ def learn():
                         allmodel_sync(model, device_ids=[local_rank], mdg=mdg)
                         print('*************** model update ******************************')
                     #rpc.rpc_sync(f"worker-{buffer_rank}", notify_model_update, args=_info, timeout=0)
-                dist.barrier(learndp)
+                    dist.barrier(learndp)
 
             step = step + 1
 def main():
