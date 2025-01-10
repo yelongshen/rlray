@@ -156,7 +156,7 @@ def allmodel_sync(model:_Phi3ForCausalLM, device_ids, mdg):
     #gp = torch.distributed.new_group(mgroup)
     global msg
     for param in model.state_dict().values():
-        torch.distributed.broadcast(param, 0, group=mdg, device_ids = device_ids, async_op=False)
+        torch.distributed.broadcast(param, 0, group=mdg, async_op=False)
     msg.pull()
 ######################################################################## MODEL BUFFER
 
@@ -307,10 +307,13 @@ def play():
     instruction_postfix = '\n\nplease only reply with the source code in python. \n'
     print('start sampling data ...')
 
+    learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])
+    dist.barrier()
+    
     ### model distributed group.
     print('player: rank', rank, 'create mdg...')
     mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-    dist.barrier(mdg, device_ids=[local_rank])
+    dist.barrier(mdg) #, device_ids=[local_rank])
     print('dist mdg barrier success..', rank)
 
 
@@ -461,20 +464,19 @@ def learn():
 
     vocab_size = llm_config.vocab_size
         
-    learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])
-        
+    learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])    
     #dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
     #dist.init_process_group(backend="nccl", rank)
-    print('dist initialization ...', rank)
-    dist.barrier(learndp)
-    print('dist barrier success')
+    #print('dist initialization ...', rank)
+    dist.barrier() #learndp)
+    print('dist learndp barrier success')
 
     
-    if rank == 0:
-        print('learner: rank', rank, 'create mdg...')
-        mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-        dist.barrier(mdg, device_ids=[local_rank])
-        print('dist mdg barrier success')
+    #if rank == 0:
+    print('learner: rank', rank, 'create mdg...')
+    mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
+    dist.barrier(mdg)
+    print('dist mdg barrier success')
 
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank],  process_group=learndp)
     print('distributed model creation.')
