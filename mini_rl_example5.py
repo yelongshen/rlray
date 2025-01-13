@@ -105,8 +105,7 @@ player_node = 1
 learner_node = 1
 buffer_rank = 0
 
-def add_to_buffer(_tokens, _masks, _probs, _reward, _crits): # experience):
-    #print('[debug] consumer side add.....',  int(os.environ['RANK']) )
+def add_to_buffer(_tokens, _masks, _probs, _reward, _crits):
     global buffer
     experience = (_tokens, _masks, _probs, _reward, _crits)
         
@@ -137,7 +136,6 @@ class ModelUpdateMessage:
 
     def pull(self):
         with self.lock:
-            #host_model.data.copy_(self.buffer)
             self.is_new = False
 
 msg = ModelUpdateMessage()
@@ -152,8 +150,6 @@ def notify_model_update():
         rpc.rpc_sync(f"worker-{worker}", msg_push, timeout=0)
 
 def allmodel_sync(model:_Phi3ForCausalLM, device_ids, mdg):
-    #mgroup = [x for x in range(8 * (player_node + learner_node))]
-    #gp = torch.distributed.new_group(mgroup)
     global msg
     with torch.no_grad():
         for param in model.state_dict().values():
@@ -218,17 +214,6 @@ def initmodel_sync(model:_Phi3ForCausalLM):
     with torch.no_grad():
         torch.distributed.broadcast(model.critic_head.weight, 0, group=gp, async_op=False)
         torch.distributed.broadcast(model.critic_head.bias, 0, group=gp, async_op=False)
-    #return gp
-    #mp_groups = [[0,1,2,3], [4,5,6,7]]
-    #groups = torch.LongTensor(range(world_size)).reshape(data_parallel_size, pipeline_length, model_parallel_size)
-    #ranks = groups[i, :, k].tolist()
-    # initial parallel group.
-    #for g in mp_groups:
-    #    group = torch.distributed.new_group(g)
-    #    if args.rank in g:
-    #        mp_group = group #, backend='gloo') # model parallel group.
-    #        mp_master_rank = g[0]
-    #        MP_Group = mp_group
             
 ##########################################################################################
 def play(learndp, mdg):
@@ -238,8 +223,7 @@ def play(learndp, mdg):
     rank = int(os.environ['RANK'])
 
     local_rank = int(os.environ['LOCAL_RANK'])
-    torch.cuda.set_device(local_rank) # local_rank)
-    #device = torch.device(f"cuda:{local_rank}")
+    torch.cuda.set_device(local_rank)
     device = torch.device(f"cuda:{local_rank}")
 
     # give up huggingface model.
@@ -252,20 +236,6 @@ def play(learndp, mdg):
         trust_remote_code=True,  
     )#.to(device)
     llm_config = AutoConfig.from_pretrained(model_name)
-    #print(llm_config)
-    #print('attn_implemention', llm_config._attn_implementation)
-    #print('config.rope_scaling', llm_config.rope_scaling)
-    
-    #llm_state_dict = llm.state_dict()
-    #print('state key begin.......')
-    #for key in llm_state_dict:
-    #    print(key)
-    #print('state key end  .......')
-    # Load configuration from a pre-trained model
-    
-    #Phi3rCausalLM(Phi3ForCausalLM):
-    #def __init__(self, config, base_model, is_critic=False):
-    #llm_model = Phi3rCausalLM(llm_config, llm, is_critic=True)
     llm_model = _Phi3ForCausalLM(llm_config)
     
     missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False)
@@ -275,32 +245,19 @@ def play(learndp, mdg):
     initmodel_sync(llm_model)
     print('after model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
 
-    # critic_model = Phi3rCausalLM(llm_config, llm, is_critic=True) # Phi4LM(llm, r=8, lora_alpha=1.0)
-    #phi4rllm = Phi4rLM(llm_config)
-    # to avoid copy two times of model-weight.
-    #missing_keys, unexpected_keys = phi4rllm.load_state_dict(llm_state_dict, strict=False)
-    #print("Missing keys:", missing_keys)
-    #print("Unexpected keys:", unexpected_keys)
-   
-    #critic_model = critic_model.to(device)
-    #print(phi4rllm)
-    
-    llm = llm_model
-    #base_model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
 
+    llm = llm_model
+
+    
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     tokenizer.model_max_length = 2048
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
     tokenizer.padding_side = 'right'
-    # llm = LLM(model="microsoft/Phi-3-mini-4k-instruct", disable_custom_all_reduce=True, enforce_eager=True ) #, device_map=f"cuda:{rank}") # "facebook/opt-6.7b")  # You can specify any Hugging Face model here
-    # llm.llm_engine.model_executor.driver_workerinit_process_group(
-    #            master_address, master_port, rank_offset, world_size, group_name)
-    # Set sampling parameters
+
     print('initial llm model ....')
     
-    #sampling_params = SamplingParams(temperature=0.8, top_p=0.9, max_tokens=1024)
     dataset = load_dataset("deepmind/code_contests")
     train = dataset['train']
 
@@ -310,7 +267,6 @@ def play(learndp, mdg):
 
 
     # Generate response
-    #outputs = []
     for epoch in range(0, 100):
         total_reward = 0
         total_count = 0
@@ -327,32 +283,12 @@ def play(learndp, mdg):
 
             x = tokenizer([problem])
             input_ids = x['input_ids']
-            #inputs = tokenizer(problem, return_tensors="pt").to("cuda")
-            #print('input_ids.shape', inputs["input_ids"].shape)
-
+            
             if len(input_ids[0]) > 2000: # inputs["input_ids"].shape[1] > 2000:
                 continue
-            #print('input_ids', input_ids)
-            #prompt_tokens: List[List[int]],
-            #max_gen_len: int,
-            #llm.begin_generation()
-            #outputs = llm.generate(inputs["input_ids"], max_length=4096)
+            
             outputs, probs, crits = llm.generate(input_ids, max_gen_len = 2048)
-            #llm.end_generation()
-            #for _i in range(0, len(llm.critic_list)):
-            #    print('critic', _i, llm.critic_list[_i], llm.critic_list[_i].shape)
-            #print('outputs', outputs)
-
-            #critic_model(inputs["input_ids"])
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-            #print('*************', problem + response) 
-            #o = llm.generate([problem], sampling_params)
-            #completion = o[0].outputs[0].text
-
-            #print('code response start .........................................\n\n')
-            #print(response)
-            #print('code response end .........................................\n\n')
             program = code_extraction(response)
             
             tests = example['public_tests']
@@ -380,28 +316,15 @@ def play(learndp, mdg):
             _probs = probs[0]    
             _crits = crits[0]
             _reward = [0.0] * (len(_crits)-1) + [reward_score]
-
-            # discrete tokens, word probabilities, mask, critics. 
             # send data into replaybuffer.
-
             _info = (_tokens, _masks, _probs, _reward, _crits)
             rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
 
             if msg.check():
                 allmodel_sync(llm, device_ids=[local_rank], mdg=mdg)
-            #buffer_rank = 8
-            #rpc.rpc_sync(f"worker{rank}", add_to_buffer, args=(data,))
-            #time.sleep(1)
-            #print('push to buffer ... ') #, data)
             
-            #if check_model_update():
-            #    llm.model.load_state_dict()
-            
-        #print(ans)
-        #outputs.append(ans)
         print('end to trigger play ...........................\n\n')
         print('average reward: ', total_reward / (total_count + 0.00001), '\n\n') 
-        #break
         
 def learn(learndp, mdg):   
     print('start to learn ....') 
@@ -409,12 +332,10 @@ def learn(learndp, mdg):
     local_rank = int(os.environ['LOCAL_RANK'])
     torch.cuda.set_device(local_rank)
     
-    #rank = int(os.environ['RANK'])
     torch.random.manual_seed(0) 
     
     device = torch.device(f"cuda:{local_rank}")
-    # give up huggingface model.
-
+    
     model_name = "microsoft/Phi-3.5-mini-instruct"
     llm = AutoModelForCausalLM.from_pretrained( 
         model_name,  
@@ -425,17 +346,6 @@ def learn(learndp, mdg):
     )#.to(device)
     llm_config = AutoConfig.from_pretrained(model_name)
 
-    #model_name = "microsoft/Phi-3.5-mini-instruct"
-
-    #model = AutoModelForCausalLM.from_pretrained( 
-    #    model_name,  
-    #    device_map="cpu",  
-    #    torch_dtype=torch.bfloat16,  
-    #    trust_remote_code=True,  
-    #) #.to(device)
-    #tokenizer = AutoTokenizer.from_pretrained(model_name, add_eos_token=True)
-    #model.gradient_checkpointing_enable()
-
     model = _Phi3ForCausalLM(llm_config)
     missing_keys, unexpected_keys = model.load_state_dict(llm.state_dict(), strict=False)
     model = model.to(torch.bfloat16).to(device)
@@ -443,13 +353,9 @@ def learn(learndp, mdg):
     model.model.gradient_checkpointing = True
     print('before model sync, model parameters', 'rank', rank, model.critic_head.weight)
     initmodel_sync(model)
-    print('after model sync, model parameters', 'rank', rank, model.critic_head.weight)
-    
+    print('after model sync, model parameters', 'rank', rank, model.critic_head.weight)    
     print('done with model creation.')
     
-    #mgroup = [x for x in range(8 * (player_node + learner_node))]
-    #gp = torch.distributed.new_group(mgroup)
-
     vocab_size = llm_config.vocab_size
 
 
@@ -466,12 +372,6 @@ def learn(learndp, mdg):
     print('model optimization initialization...')
 
     model.train()
-
-    #tokenizer.model_max_length = 4096
-    #tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
-    #tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
-    #tokenizer.padding_side = 'right'
-
     i_num = 0
     batch_size = 1
     max_seq_len = 4096
@@ -509,22 +409,12 @@ def learn(learndp, mdg):
             
             data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
 
-            #(_tokens, _masks, _probs, _reward, _crits)
-                
             _tokens = [d[0] for d in data]
             _masks = [d[1] for d in data]
             _probs = [d[2] for d in data]
             _rewards = [d[3] for d in data]
             _crits = [d[4] for d in data] 
-                
-            #inputs = tokenizer(text, add_special_tokens=True, padding=True, truncation=True, return_tensors="pt").to(device)
-            #if inputs["input_ids"].shape[1] > 4096:
-            #    continue
-            #if inputs['input_ids'].shape[1] < 16:
-            #    continue
-                
-            #labels = batch["labels"].to(device)
-            #input_ids = inputs["input_ids"]
+
             if step == 0:
                 print('example:', _tokens, _masks, _probs, _rewards, _crits)
 
@@ -533,9 +423,6 @@ def learn(learndp, mdg):
             # re-evaluate the policy.     
             _, logits, critics, _ = model(_tokens)
 
-            # _tokens : batch_size, sequence_length
-            # logits : batch_size, sequence_length, vocab_size;
-            # critics : batch_size, sequence_length, 1 
             _b, _seq = _tokens.shape
             
             logprobs = -F.cross_entropy(
@@ -547,28 +434,8 @@ def learn(learndp, mdg):
             
             critics = critics.reshape(_b, _seq)
             
-            #print('logprobs.shape', logprobs.shape)
             old_logprobs = torch.tensor(_probs).to(model.device)
-            #print('old_logprobs.shape', old_logprobs.shape)   
-            #print('len(_masks)', len(_masks[0]))
-            #print('len(_rewards)', len(_rewards[0]))
-            #print('len(_crits)', len(_crits[0]))
-            
-            #print(_masks)
             _idx = _masks[0].index(1)
-            #print('_masks.index', _idx)
-            
-            #print('_probs.shape', 
-            #_idx 389
-            #logprobs.shape torch.Size([785])
-            #old_logprobs.shape torch.Size([1, 785])
-            #critics.shape torch.Size([1, 786])
-
-            ###### PPO algorithm here.     
-            #print('_idx', _idx)
-            #print('logprobs.shape', logprobs.shape)
-            #print('old_logprobs.shape', old_logprobs.shape)
-            #print('critics.shape', critics.shape) 
             ratios = torch.exp(logprobs[:, _idx-1:] - old_logprobs.detach() + 1e-10)
             
             critics = critics[:, _idx-1:-1] 
@@ -598,11 +465,6 @@ def learn(learndp, mdg):
 
             eps_clip = 0.2
             # Finding Surrogate Loss  
-            #print('ratios.shape', ratios.shape)
-            #print('advantages.shape', advantages.shape)
-            #print('state_values.shape', critics.shape)
-            #print('rewards.shape', rewards.shape)
-            
             surr1 = ratios * advantages # (optimize logprobs)
             
             surr2 = torch.clamp(ratios, 1-eps_clip, 1+eps_clip) * advantages
@@ -614,36 +476,11 @@ def learn(learndp, mdg):
             loss = _p_loss + 0.5 * _c_loss  #- 0.01 * dist_entropy
             
             # take gradient step
-            #self.optimizer.zero_grad()
-            #loss.mean().backward()
-            #self.optimizer.step()
-            #loss = loss.mean()
-            
-            #print('loss', loss)
             mini_c_loss = mini_c_loss + _c_loss.detach()
             mini_p_loss = mini_p_loss + _p_loss.detach()
-            # Shift input_ids to create labels for next-token prediction
-            #labels = input_ids.clone()
-            #labels[:, :-1] = input_ids[:, 1:]
-            #labels[:, -1] = -100  # Mask the last token
-            # Return the dictionary with input_ids, attention_mask, and labels
-            #inputs["labels"] = labels
-
-            #batch = {k: v.to(device) for k,v in inputs.items()}
-            #print('1. forward', rank, inputs['input_ids'].shape)
-
-            #time.sleep(10)
-            #outputs = model(**batch)
-
-            #loss = outputs.loss
-            #print('loss:', loss, 'rank', rank,'step', step, 'shape', inputs['input_ids'].shape)
-
-            #print('2. backward', rank, inputs['input_ids'].shape)
+            
             loss.backward()
             if (step + 1) % gradient_accumulation_steps == 0:
-                #print('3. optimization', rank)
-                #critic_loss = 0.0
-                #policy_loss = 0.0
                 update_step = update_step + 1
 
                 mini_c_loss = mini_c_loss / gradient_accumulation_steps
@@ -674,11 +511,6 @@ def learn(learndp, mdg):
 
             step = step + 1
 def main():
-    # system parameters:
-    # args.ngpu_per_node
-    # args.nnode_actor
-    # args.nnode_learner
-    #world_size = 8
     local_rank = int(os.environ['LOCAL_RANK'])
     print('local rank', local_rank)
 
@@ -701,7 +533,6 @@ def main():
     # rpc.init_rpc(f"worker-{rank}", backend=rpc.BackendType.TENSORPIPE, rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method="tcp://localhost:29500"))
     rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
 
-    #rpc.init_rpc(f"worker{rank}", rank=rank, world_size=world_size)
     gpus_per_node = 8
     node_idx = rank // gpus_per_node
 
@@ -710,23 +541,10 @@ def main():
 
     # one node inference; one node training; as an example; 
     # suppose we use 4 gpus for vllm and 4 gpus 
-    if rank in [0,1,2,3,4,5,6,7]: #, 8, 9, 10, 11, 12, 13, 14, 15]:
-        #print('rank', rank, 'play')
-        #play()
+    if rank in [0,1,2,3,4,5,6,7]:
         learn(learndp, mdg)
     else:
         play(learndp, mdg)
-        #learn()
-        #for i in range(0, 1000000):
-        #    print('rank', rank, 'sleep.....')
-        #    time.sleep(1)
-    #else:
-    #    learn()
-    #if rank in [1,2,3,4,5,6,7]:
-    #    
-    #       
-    #          time.sleep(1)
-    #    learn()
     
 if __name__ == "__main__":
     main()
