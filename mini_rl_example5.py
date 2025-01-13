@@ -500,6 +500,7 @@ def learn(learndp, mdg):
                 scheduler.step()  # Update the learning rate
 
                 if update_step % 32 == 0:
+                    dist.barrier(learndp)
                     # notify the producer to boardcast the model weight to 
                     if rank == 0:
                         notify_model_update()
