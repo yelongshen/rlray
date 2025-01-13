@@ -401,7 +401,7 @@ def learn(learndp, mdg):
     while step < num_training_steps:
         # receive data from buffer_rank
         l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
-        if l < 8:
+        if l < 32:
             time.sleep(1)    
         else:
             torch.cuda.empty_cache()
@@ -499,7 +499,7 @@ def learn(learndp, mdg):
                 optimizer.zero_grad()
                 scheduler.step()  # Update the learning rate
 
-                if update_step % 10 == 0:
+                if update_step % 32 == 0:
                     # notify the producer to boardcast the model weight to 
                     if rank == 0:
                         notify_model_update()
