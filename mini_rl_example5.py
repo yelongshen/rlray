@@ -231,7 +231,7 @@ def initmodel_sync(model:_Phi3ForCausalLM):
     #        MP_Group = mp_group
             
 ##########################################################################################
-def play():
+def play(learndp, mdg):
     # Load a model
     print('start llm data ...')
     
@@ -307,18 +307,6 @@ def play():
     instruction_prefix = ''
     instruction_postfix = '\n\nplease only reply with the source code in python. \n'
     print('start sampling data ...')
-
-    dist.barrier()
-    learndp = torch.distributed.new_group([0, 1, 2, 3, 4, 5, 6, 7])
-    dist.barrier()
-    print('dist learndp barrier success..', rank)
-
-    ### model distributed group.
-    #print('player: rank', rank, 'create mdg...')
-    dist.barrier()
-    mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-    dist.barrier() #, device_ids=[local_rank])
-    print('dist mdg barrier success..', rank)
 
 
     # Generate response
@@ -415,7 +403,7 @@ def play():
         print('average reward: ', total_reward / (total_count + 0.00001), '\n\n') 
         #break
         
-def learn():   
+def learn(learndp, mdg):   
     print('start to learn ....') 
     rank = int(os.environ['RANK'])
     local_rank = int(os.environ['LOCAL_RANK'])
@@ -466,20 +454,6 @@ def learn():
 
     vocab_size = llm_config.vocab_size
 
-    dist.barrier()
-    learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])    
-    #dist.init_process_group(backend="nccl", rank=local_rank, world_size=8)
-    #dist.init_process_group(backend="nccl", rank)
-    #print('dist initialization ...', rank)
-    dist.barrier() #learndp)
-    print('dist learndp barrier success')
-
-    
-    #if rank == 0:
-    dist.barrier()
-    mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-    dist.barrier()
-    print('dist mdg barrier success', rank)
 
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank],  process_group=learndp)
     print('distributed model creation.')
@@ -715,7 +689,17 @@ def main():
     
     # init distributed process group.
     dist.init_process_group(backend="nccl", rank=rank, world_size=16)
+    
+    dist.barrier()
+    learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])    
+    dist.barrier() #learndp)
+    print('dist learndp barrier success', rank)
 
+    dist.barrier()
+    mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
+    dist.barrier()
+    print('dist mdg barrier success', rank)
+    
     # rpc.init_rpc(f"worker-{rank}", backend=rpc.BackendType.TENSORPIPE, rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method="tcp://localhost:29500"))
     rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
 
@@ -731,9 +715,9 @@ def main():
     if rank in [0,1,2,3,4,5,6,7]: #, 8, 9, 10, 11, 12, 13, 14, 15]:
         #print('rank', rank, 'play')
         #play()
-        learn()
+        learn(learndp, mdg)
     else:
-        play()
+        play(learndp, mdg)
         #learn()
         #for i in range(0, 1000000):
         #    print('rank', rank, 'sleep.....')
