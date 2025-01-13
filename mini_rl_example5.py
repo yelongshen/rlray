@@ -446,8 +446,6 @@ def learn(learndp, mdg):
     print('after model sync, model parameters', 'rank', rank, model.critic_head.weight)
     
     print('done with model creation.')
-    ##  精诚所至，金石为开。
-    ##  天地万物皆同力。
     
     #mgroup = [x for x in range(8 * (player_node + learner_node))]
     #gp = torch.distributed.new_group(mgroup)
