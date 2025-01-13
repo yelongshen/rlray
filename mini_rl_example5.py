@@ -452,7 +452,7 @@ def learn():
     missing_keys, unexpected_keys = model.load_state_dict(llm.state_dict(), strict=False)
     model = model.to(torch.bfloat16).to(device)
 
-    model.model.gradient_checkpointing = True
+    model.model.gradient_checkpointing = False
     print('before model sync, model parameters', 'rank', rank, model.critic_head.weight)
     initmodel_sync(model)
     print('after model sync, model parameters', 'rank', rank, model.critic_head.weight)
