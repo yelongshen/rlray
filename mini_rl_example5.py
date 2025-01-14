@@ -321,8 +321,11 @@ def play(learndp, mdg):
             rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
 
             if msg.check():
+                dist.barrier(mdg)
                 allmodel_sync(llm, device_ids=[local_rank], mdg=mdg)
-            
+                dist.barrier(mdg)
+                print('player model update....', rank)
+                
         print('end to trigger play ...........................\n\n')
         print('average reward: ', total_reward / (total_count + 0.00001), '\n\n') 
         
@@ -504,8 +507,10 @@ def learn(learndp, mdg):
                     # notify the producer to boardcast the model weight to 
                     if rank == 0:
                         notify_model_update()
+                        dist.barrier(mdg)
                         allmodel_sync(model, device_ids=[local_rank], mdg=mdg)
-                        print('*************** model update ******************************')
+                        dist.barrier(mdg)
+                        print('*************** learner model update ******************************', rank)
                     #rpc.rpc_sync(f"worker-{buffer_rank}", notify_model_update, args=_info, timeout=0)
                     dist.barrier(learndp)
 
