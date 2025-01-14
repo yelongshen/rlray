@@ -321,8 +321,11 @@ def play(learndp, mdg):
             rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
 
             if msg.check():
+                print('waiting on player barrier 1', rank)
                 dist.barrier(mdg)
+                print('waiting on player barrier 2', rank)
                 allmodel_sync(llm, device_ids=[local_rank], mdg=mdg)
+                print('waiting on player barrier 3', rank)
                 dist.barrier(mdg)
                 print('player model update....', rank)
                 
@@ -503,17 +506,25 @@ def learn(learndp, mdg):
                 scheduler.step()  # Update the learning rate
 
                 if update_step % 4 == 0:
+                    print('enter update phase', rank)
                     dist.barrier(learndp)
+                    print('enter update phase, barrier 1', rank)
+                    
                     # notify the producer to boardcast the model weight to 
                     if rank == 0:
+                        print('enter model update message phase', rank)
                         notify_model_update()
+                        print('waiting for model update phase 1', rank)                    
                         dist.barrier(mdg)
+                        print('waiting for model update phase 2', rank)                    
                         allmodel_sync(model, device_ids=[local_rank], mdg=mdg)
+                        print('waiting for model update phase 3', rank)                    
                         dist.barrier(mdg)
                         print('*************** learner model update ******************************', rank)
                     #rpc.rpc_sync(f"worker-{buffer_rank}", notify_model_update, args=_info, timeout=0)
+                    print('wait on the learndp barrier 2', rank)
                     dist.barrier(learndp)
-
+                    print('leave update phase, barrier 1', rank)
             step = step + 1
 def main():
     local_rank = int(os.environ['LOCAL_RANK'])
