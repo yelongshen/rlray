@@ -68,7 +68,8 @@ def main():
     # 1. Initialize Ray (only needs to be done once per script)
     #    If you have a Ray cluster, you'd do ray.init(address="auto") or similar.
     #    For local usage:
-    ray.init()
+    # ray.init()
+    ray.init(address="auto", namespace="my_ns")
 
     # 2. Initialize Torch Distributed. We expect 4 processes total.
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -77,7 +78,6 @@ def main():
 
     dist.init_process_group(
         backend="nccl",
-        init_method="env://",
         world_size=world_size,
         rank=global_rank
     )
