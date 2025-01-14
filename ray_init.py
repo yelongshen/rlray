@@ -37,13 +37,14 @@ def ray_init(global_rank, world_size):
             num_gpus=world_size,  # or how many you want Ray to see
             #address=head_address,
             _node_ip_address=ip_address,
+            dashboard_port=1891,
             #ray_client_server_port=10001,
         )
         # The “address” that others should connect to
         #address_info = ray.get_runtime_context().address_info
         print(init_info)
         #head_address = address_info["address"]  # e.g. "ray://<ip>:<port>"
-        head_address = ip_address # 'ray://'+str(ip_address) +':10001'  # init_info["redis_address"] 
+        head_address =  'ray://'+str(ip_address) +':1891'  # init_info["redis_address"] 
         
         print(f"[Rank 0] Ray head address: {head_address}")
 
