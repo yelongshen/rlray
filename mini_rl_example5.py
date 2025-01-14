@@ -149,12 +149,13 @@ def notify_model_update():
     for worker in range(8, 16):
         rpc.rpc_sync(f"worker-{worker}", msg_push, timeout=0)
 
-def allmodel_sync(model:_Phi3ForCausalLM, device_ids, mdg):
+def allmodel_sync(model:_Phi3ForCausalLM): #, device_ids, mdg):
     global msg
     with torch.no_grad():
         for i, (name, param) in enumerate(model.state_dict().items()):
             print(f"Rank {device_ids} broadcasting param {i}/{len(model.state_dict())} name={name} shape={list(param.shape)}")
-            torch.distributed.broadcast(param, 0, group=mdg, async_op=False)
+            torch.distributed.broadcast(param, 0, async_op=False)
+            #group=mdg, 
         #for param in model.state_dict().values():
         #    torch.distributed.broadcast(param, 0, group=mdg, async_op=False)
     msg.pull()
@@ -219,7 +220,7 @@ def initmodel_sync(model:_Phi3ForCausalLM):
         torch.distributed.broadcast(model.critic_head.bias, 0, group=gp, async_op=False)
             
 ##########################################################################################
-def play(learndp, mdg):
+def play(learndp): #, mdg):
     # Load a model
     print('start llm data ...')
     
@@ -324,18 +325,18 @@ def play(learndp, mdg):
             rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
 
             if msg.check():
+                #print('waiting on player barrier 1', rank)
+                dist.barrier() #mdg)
                 print('waiting on player barrier 1', rank)
-                dist.barrier(mdg)
-                print('waiting on player barrier 2', rank)
-                allmodel_sync(llm, device_ids=[local_rank], mdg=mdg)
-                print('waiting on player barrier 3', rank)
-                dist.barrier(mdg)
+                allmodel_sync(llm) #, device_ids=[local_rank], mdg=mdg)
+                #print('waiting on player barrier 2', rank)
+                #dist.barrier(mdg)
                 print('player model update....', rank)
                 
         print('end to trigger play ...........................\n\n')
         print('average reward: ', total_reward / (total_count + 0.00001), '\n\n') 
         
-def learn(learndp, mdg):   
+def learn(learndp): #, mdg):   
     print('start to learn ....') 
     rank = int(os.environ['RANK'])
     local_rank = int(os.environ['LOCAL_RANK'])
@@ -509,25 +510,26 @@ def learn(learndp, mdg):
                 scheduler.step()  # Update the learning rate
 
                 if update_step % 4 == 0:
-                    print('enter update phase', rank)
-                    dist.barrier(learndp)
-                    print('enter update phase, barrier 1', rank)
+                    #print('enter update phase', rank)
+                    #dist.barrier(learndp)
+                    #print('enter update phase, barrier 1', rank)
                     
                     # notify the producer to boardcast the model weight to 
+                    #if rank == 0:
+                    #print('enter model update message phase', rank)
                     if rank == 0:
-                        print('enter model update message phase', rank)
                         notify_model_update()
-                        print('waiting for model update phase 1', rank)                    
-                        dist.barrier(mdg)
-                        print('waiting for model update phase 2', rank)                    
-                        allmodel_sync(model, device_ids=[local_rank], mdg=mdg)
-                        print('waiting for model update phase 3', rank)                    
-                        dist.barrier(mdg)
-                        print('*************** learner model update ******************************', rank)
+                    print('waiting for model update phase 1', rank)                    
+                    dist.barrier() #mdg)
+                    print('waiting for model update phase 2', rank)                    
+                    allmodel_sync(model) #, device_ids=[local_rank], mdg=mdg)
+                    print('waiting for model update phase 3', rank)                    
+                    dist.barrier()
+                    print('*************** learner model update ******************************', rank)
                     #rpc.rpc_sync(f"worker-{buffer_rank}", notify_model_update, args=_info, timeout=0)
-                    print('wait on the learndp barrier 2', rank)
-                    dist.barrier(learndp)
-                    print('leave update phase, barrier 1', rank)
+                    #print('wait on the learndp barrier 2', rank)
+                    #dist.barrier(learndp)
+                    #print('leave update phase, barrier 1', rank)
             step = step + 1
 def main():
     local_rank = int(os.environ['LOCAL_RANK'])
@@ -544,10 +546,10 @@ def main():
     dist.barrier() #learndp)
     print('dist learndp barrier success', rank)
 
-    dist.barrier()
-    mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
-    dist.barrier()
-    print('dist mdg barrier success', rank)
+    #dist.barrier()
+    #mdg = torch.distributed.new_group([0, 8, 9, 10, 11, 12, 13, 14, 15])
+    #dist.barrier()
+    #print('dist mdg barrier success', rank)
     
     # rpc.init_rpc(f"worker-{rank}", backend=rpc.BackendType.TENSORPIPE, rpc_backend_options=rpc.TensorPipeRpcBackendOptions(init_method="tcp://localhost:29500"))
     rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=16, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
@@ -561,9 +563,9 @@ def main():
     # one node inference; one node training; as an example; 
     # suppose we use 4 gpus for vllm and 4 gpus 
     if rank in [0,1,2,3,4,5,6,7]:
-        learn(learndp, mdg)
+        learn(learndp) #, mdg)
     else:
-        play(learndp, mdg)
+        play(learndp) #, mdg)
     
 if __name__ == "__main__":
     main()
