@@ -28,14 +28,17 @@ def ray_init(global_rank, world_size):
 
         # (C1) Start Ray HEAD
         # You could specify `node_ip_address`, `dashboard_port`, `resources`, etc.
-        ray.init(
+        init_info = ray.init(
             num_cpus=world_size,  # example, set to your liking
             num_gpus=world_size,  # or how many you want Ray to see
             _node_ip_address=socket.gethostbyname(socket.gethostname()),
         )
         # The “address” that others should connect to
-        address_info = ray.get_runtime_context().address_info
-        head_address = address_info["address"]  # e.g. "ray://<ip>:<port>"
+        #address_info = ray.get_runtime_context().address_info
+        print(init_info)
+        head_address = init_info["redis_address"] 
+        
+        #head_address = address_info["address"]  # e.g. "ray://<ip>:<port>"
         print(f"[Rank 0] Ray head address: {head_address}")
 
     # ------------------------------------------------------------------
