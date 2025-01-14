@@ -6,6 +6,8 @@ import ray
 import torch
 import torch.distributed as dist
 
+import ray_init from ray_init
+
 # ------------------------- REPLAY BUFFER ACTOR -------------------------
 @ray.remote
 class ReplayBufferActor:
@@ -69,7 +71,6 @@ def main():
     #    If you have a Ray cluster, you'd do ray.init(address="auto") or similar.
     #    For local usage:
     # ray.init()
-    ray.init() #address="auto", namespace="my_ns")
 
     # 2. Initialize Torch Distributed. We expect 4 processes total.
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -86,6 +87,8 @@ def main():
 
     # Set the GPU device for this rank
     torch.cuda.set_device(local_rank)
+
+    ray_init(global_rank, world_size) #    ray.init() #address="auto", namespace="my_ns")
 
     # 3. Create / Retrieve the replay buffer actor
     #    - Rank 0 creates it and gives it a name ("global_replay")
