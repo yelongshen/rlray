@@ -6,7 +6,7 @@ import ray
 import torch
 import torch.distributed as dist
 
-import ray_init from ray_init
+from ray_init import ray_init
 
 # ------------------------- REPLAY BUFFER ACTOR -------------------------
 @ray.remote
