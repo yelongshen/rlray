@@ -69,13 +69,15 @@ def main():
     #    If you have a Ray cluster, you'd do ray.init(address="auto") or similar.
     #    For local usage:
     # ray.init()
-    ray.init(address="auto", namespace="my_ns")
+    ray.init() #address="auto", namespace="my_ns")
 
     # 2. Initialize Torch Distributed. We expect 4 processes total.
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     global_rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
 
+    print('local_rank', local_rank, 'rank', global_rank, 'world_size', world_size)
+    
     dist.init_process_group(
         backend="nccl",
         world_size=world_size,
@@ -99,7 +101,8 @@ def main():
     if global_rank != 0:
         replay_actor = ray.get_actor("global_replay")
         print(f"[Rank {global_rank}] Retrieved ReplayBufferActor handle.")
-
+    dist.barrier()
+    print('all get the replay_actor handle....')
     # 4. Producer or Consumer?
     #    - Let's say ranks 0,1 => Producer; ranks 2,3 => Consumer
     if global_rank < 2:
