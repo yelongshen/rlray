@@ -44,6 +44,9 @@ def ray_init(global_rank, world_size):
         # The “address” that others should connect to
         #address_info = ray.get_runtime_context().address_info
         print(init_info)
+        print(ray.cluster_resources()) 
+        print(ray.runtime_context)
+        
         #head_address = address_info["address"]  # e.g. "ray://<ip>:<port>"
         head_address =  'ray://'+str(ip_address) +':1891'  # init_info["redis_address"] 
         
