@@ -416,9 +416,9 @@ def learn(learndp): #, mdg):
             time.sleep(1)    
         else:
             torch.cuda.empty_cache()
-            
             data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
-
+            print('done with fetching the data', rank)
+            
             _tokens = [d[0] for d in data]
             _masks = [d[1] for d in data]
             _probs = [d[2] for d in data]
