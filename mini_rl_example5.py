@@ -153,7 +153,7 @@ def allmodel_sync(model:_Phi3ForCausalLM): #, device_ids, mdg):
     global msg
     with torch.no_grad():
         for i, (name, param) in enumerate(model.state_dict().items()):
-            print(f"Rank {param.device} broadcasting param {i}/{len(model.state_dict())} name={name} shape={list(param.shape)}")
+            #print(f"Rank {param.device} broadcasting param {i}/{len(model.state_dict())} name={name} shape={list(param.shape)}")
             torch.distributed.broadcast(param, 0, async_op=False)
             #group=mdg, 
         #for param in model.state_dict().values():
@@ -327,9 +327,9 @@ def play(learndp): #, mdg):
             if msg.check():
                 #print('waiting on player barrier 1', rank)
                 dist.barrier() #mdg)
-                print('waiting on player barrier 1', rank)
+                #print('waiting on player barrier 1', rank)
                 allmodel_sync(llm) #, device_ids=[local_rank], mdg=mdg)
-                print('waiting on player barrier 2', rank)
+                #print('waiting on player barrier 2', rank)
                 dist.barrier()
                 #dist.barrier(mdg)
                 print('player model update....', rank)
@@ -510,7 +510,7 @@ def learn(learndp): #, mdg):
                 optimizer.zero_grad()
                 scheduler.step()  # Update the learning rate
 
-                if update_step % 4 == 0:
+                if update_step % 8 == 0:
                     #print('enter update phase', rank)
                     #dist.barrier(learndp)
                     #print('enter update phase, barrier 1', rank)
@@ -520,11 +520,11 @@ def learn(learndp): #, mdg):
                     #print('enter model update message phase', rank)
                     if rank == 0:
                         notify_model_update()
-                    print('waiting for model update phase 1', rank)                    
+                    #print('waiting for model update phase 1', rank)                    
                     dist.barrier() #mdg)
-                    print('waiting for model update phase 2', rank)                    
+                    #print('waiting for model update phase 2', rank)                    
                     allmodel_sync(model) #, device_ids=[local_rank], mdg=mdg)
-                    print('waiting for model update phase 3', rank)                    
+                    #print('waiting for model update phase 3', rank)                    
                     dist.barrier()
                     print('*************** learner model update ******************************', rank)
                     #rpc.rpc_sync(f"worker-{buffer_rank}", notify_model_update, args=_info, timeout=0)
