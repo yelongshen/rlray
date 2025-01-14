@@ -153,7 +153,7 @@ def allmodel_sync(model:_Phi3ForCausalLM): #, device_ids, mdg):
     global msg
     with torch.no_grad():
         for i, (name, param) in enumerate(model.state_dict().items()):
-            print(f"Rank {model.device} broadcasting param {i}/{len(model.state_dict())} name={name} shape={list(param.shape)}")
+            print(f"Rank {param.device} broadcasting param {i}/{len(model.state_dict())} name={name} shape={list(param.shape)}")
             torch.distributed.broadcast(param, 0, async_op=False)
             #group=mdg, 
         #for param in model.state_dict().values():
