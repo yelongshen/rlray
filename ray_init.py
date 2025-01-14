@@ -33,11 +33,12 @@ def ray_init(global_rank, world_size):
         # (C1) Start Ray HEAD
         # You could specify `node_ip_address`, `dashboard_port`, `resources`, etc.
         init_info = ray.init(
-            num_cpus=world_size,  # example, set to your liking
-            num_gpus=world_size,  # or how many you want Ray to see
+            #num_cpus=world_size,  # example, set to your liking
+            #num_gpus=world_size,  # or how many you want Ray to see
             #address=head_address,
             _node_ip_address=ip_address,
             dashboard_port=1891,
+            dashboard_host=ip_address,
             #ray_client_server_port=10001,
         )
         # The “address” that others should connect to
