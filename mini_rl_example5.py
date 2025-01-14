@@ -329,7 +329,8 @@ def play(learndp): #, mdg):
                 dist.barrier() #mdg)
                 print('waiting on player barrier 1', rank)
                 allmodel_sync(llm) #, device_ids=[local_rank], mdg=mdg)
-                #print('waiting on player barrier 2', rank)
+                print('waiting on player barrier 2', rank)
+                dist.barrier()
                 #dist.barrier(mdg)
                 print('player model update....', rank)
                 
