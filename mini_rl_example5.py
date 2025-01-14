@@ -152,8 +152,11 @@ def notify_model_update():
 def allmodel_sync(model:_Phi3ForCausalLM, device_ids, mdg):
     global msg
     with torch.no_grad():
-        for param in model.state_dict().values():
+        for i, (name, param) in enumerate(model.state_dict().items()):
+            print(f"Rank {device_ids} broadcasting param {i}/{len(model.state_dict())} name={name} shape={list(param.shape)}")
             torch.distributed.broadcast(param, 0, group=mdg, async_op=False)
+        #for param in model.state_dict().values():
+        #    torch.distributed.broadcast(param, 0, group=mdg, async_op=False)
     msg.pull()
 ######################################################################## MODEL BUFFER
 
