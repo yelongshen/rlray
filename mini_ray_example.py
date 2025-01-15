@@ -96,13 +96,14 @@ def main():
     if global_rank == 0:
         replay_actor = ReplayBufferActor.options(
             name="global_replay",
+            namespace="rl3m",
             lifetime="detached"  # so it remains after rank 0 finishes
         ).remote(capacity=100)
         print("[Rank 0] Created ReplayBufferActor.")
     dist.barrier()  # ensure actor is created before others search for it
 
     if global_rank != 0:
-        replay_actor = ray.get_actor("global_replay")
+        replay_actor = ray.get_actor("global_replay", namespace="rl3m")
         print(f"[Rank {global_rank}] Retrieved ReplayBufferActor handle.")
     dist.barrier()
     print('all get the replay_actor handle....')
