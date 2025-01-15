@@ -246,8 +246,8 @@ def play(learndp): #, mdg):
     missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False)
     llm_model = llm_model.to(torch.bfloat16).to(device)
 
-    print('before model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
     dist.barrier()
+    print('before model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
     initmodel_sync(llm_model)
     dist.barrier()
     print('after model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
@@ -364,13 +364,13 @@ def learn(learndp): #, mdg):
     model = model.to(torch.bfloat16).to(device)
 
     model.model.gradient_checkpointing = True
-    print('before model sync, model parameters', 'rank', rank, model.critic_head.weight)
     dist.barrier()
+    print('before model sync, model parameters', 'rank', rank, model.critic_head.weight)
+
     initmodel_sync(model)
     dist.barrier()
     print('after model sync, model parameters', 'rank', rank, model.critic_head.weight)    
-    print('done with model creation.')
-    
+    print('done with model creation..')    
     vocab_size = llm_config.vocab_size
 
 
