@@ -413,7 +413,7 @@ def learn(learndp): #, mdg):
         #l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
         try:
             l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=10)  # Add timeout
-        except:
+        except Exception as e:
             print(f"RPC Error while getting buffer length on rank {rank}: {e}")
             l = 0  # Default value or take alternative action
         
@@ -421,8 +421,13 @@ def learn(learndp): #, mdg):
             time.sleep(1)    
         else:
             torch.cuda.empty_cache()
+
             try:
                 data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=10) #rev_experience_data('worker2', 2)
+            except Exception as e:
+                print(f"RPC Error while getting buffer data... on rank {rank}: {e}")
+                continue
+                
             print('done with fetching the data', rank)
             dist.barrier(learndp)
             print('getting all data done...', rank)
