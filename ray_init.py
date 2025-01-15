@@ -66,7 +66,7 @@ def start_ray_worker(address):
     """
     # ray start --address='10.0.0.5:6380'
     # 1) Build the command
-    cmd = ["ray", "start", f"--address='{address}:6379'"]
+    cmd = ["ray", "start", f"--address={address}:6379"]
 
     # 2) Run the command
     #    - We use Popen if we want the process to stay alive,
