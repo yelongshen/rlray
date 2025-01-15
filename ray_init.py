@@ -147,7 +147,7 @@ def ray_init(global_rank, local_rank, world_size):
         else:
             start_ray_worker(head_address)
     dist.barrier()
-    init_info = ray.init(address="auto")
+    init_info = ray.init(namespace="rl3m", address="auto")
     print(init_info)
     print(ray.cluster_resources()) 
     print(ray.runtime_context)
