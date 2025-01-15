@@ -75,6 +75,8 @@ import torch.nn.functional as F
 
 import datetime
 
+
+
 ######################################################################## REPLAY BUFFER
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -408,12 +410,19 @@ def learn(learndp): #, mdg):
     # rl training steps;
     while step < num_training_steps:
         # receive data from buffer_rank
-        l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
+        #l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=0) #rev_experience_len('worker2')
+        try:
+            l = len(buffer) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", len_buffer, timeout=10)  # Add timeout
+        except:
+            print(f"RPC Error while getting buffer length on rank {rank}: {e}")
+            l = 0  # Default value or take alternative action
+        
         if l < 32:
             time.sleep(1)    
         else:
             torch.cuda.empty_cache()
-            data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=0) #rev_experience_data('worker2', 2)
+            try:
+                data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=10) #rev_experience_data('worker2', 2)
             print('done with fetching the data', rank)
             dist.barrier(learndp)
             print('getting all data done...', rank)
@@ -538,7 +547,7 @@ def main():
     print('rank', rank)
     
     # init distributed process group.
-    dist.init_process_group(backend="nccl", rank=rank, world_size=16, timeout=datetime.timedelta(minutes=30))
+    dist.init_process_group(backend="nccl", rank=rank, world_size=16, timeout=datetime.timedelta(minutes=5))
     
     dist.barrier()
     learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])    
