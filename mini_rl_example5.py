@@ -73,6 +73,7 @@ from phimodel import _Phi3ForCausalLM
 
 import torch.nn.functional as F
 
+import datetime
 
 ######################################################################## REPLAY BUFFER
 class ReplayBuffer:
@@ -537,7 +538,7 @@ def main():
     print('rank', rank)
     
     # init distributed process group.
-    dist.init_process_group(backend="nccl", rank=rank, world_size=16)
+    dist.init_process_group(backend="nccl", rank=rank, world_size=16, timeout=datetime.timedelta(minutes=30))
     
     dist.barrier()
     learndp = torch.distributed.new_group([0,1,2,3,4,5,6,7])    
