@@ -212,11 +212,13 @@ def evaluate_program(program, test_input, test_output):
 ######################################################################################### #create distributed process group for model syncize.
 
 def initmodel_sync(model:_Phi3ForCausalLM):
-    mgroup = [x for x in range(8 * (player_node + learner_node))]
-    gp = torch.distributed.new_group(mgroup)
+    #mgroup = [x for x in range(8 * (player_node + learner_node))]
+    #gp = torch.distributed.new_group(mgroup)
+    # group=gp, 
+    # group=gp, 
     with torch.no_grad():
-        torch.distributed.broadcast(model.critic_head.weight, 0, group=gp, async_op=False)
-        torch.distributed.broadcast(model.critic_head.bias, 0, group=gp, async_op=False)
+        torch.distributed.broadcast(model.critic_head.weight, 0, async_op=False)
+        torch.distributed.broadcast(model.critic_head.bias, 0, async_op=False)
             
 ##########################################################################################
 def play(learndp): #, mdg):
@@ -245,7 +247,9 @@ def play(learndp): #, mdg):
     llm_model = llm_model.to(torch.bfloat16).to(device)
 
     print('before model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
+    dist.barrier()
     initmodel_sync(llm_model)
+    dist.barrier()
     print('after model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
 
 
@@ -361,7 +365,9 @@ def learn(learndp): #, mdg):
 
     model.model.gradient_checkpointing = True
     print('before model sync, model parameters', 'rank', rank, model.critic_head.weight)
+    dist.barrier()
     initmodel_sync(model)
+    dist.barrier()
     print('after model sync, model parameters', 'rank', rank, model.critic_head.weight)    
     print('done with model creation.')
     
