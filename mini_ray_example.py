@@ -88,7 +88,7 @@ def main():
     # Set the GPU device for this rank
     torch.cuda.set_device(local_rank)
 
-    ray_init(global_rank, world_size) #    ray.init() #address="auto", namespace="my_ns")
+    ray_init(global_rank, local_rank, world_size) #    ray.init() #address="auto", namespace="my_ns")
 
     # 3. Create / Retrieve the replay buffer actor
     #    - Rank 0 creates it and gives it a name ("global_replay")
