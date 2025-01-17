@@ -338,7 +338,7 @@ def play(learndp): #, mdg):
             _info = (_tokens, _masks, _probs, _reward, _crits)
 
             if rank == buffer_rank:
-                add_to_buffer(_info)
+                add_to_buffer(_tokens, _masks, _probs, _reward, _crits)
             else:
                 rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
 
