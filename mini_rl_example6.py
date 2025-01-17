@@ -274,7 +274,7 @@ def play(learndp): #, mdg):
 
 
     # Generate response
-    for epoch in range(0, 100):
+    for epoch in range(0, 1000):
         total_reward = 0
         total_count = 0
         
@@ -384,7 +384,7 @@ def learn(learndp): #, mdg):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=2.0e-6)
     #num_epochs = 3
-    num_training_steps = 10000 # num_epochs * len(train_dataloader)
+    num_training_steps = 10000000 # num_epochs * len(train_dataloader)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=1000, num_training_steps=num_training_steps
     )
@@ -439,9 +439,9 @@ def learn(learndp): #, mdg):
                 print(f"RPC Error while getting buffer data... on rank {rank}: {e}")
                 continue
                 
-            print('done with fetching the data', rank)
+            #print('done with fetching the data', rank)
             dist.barrier(learndp)
-            print('getting all data done...', rank)
+            #print('getting all data done...', rank)
             _tokens = [d[0] for d in data]
             _masks = [d[1] for d in data]
             _probs = [d[2] for d in data]
