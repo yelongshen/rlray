@@ -992,8 +992,8 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         self,
         prompt_tokens: List[List[int]],
         max_gen_len: int,
-        temperature: float = 0.0,
-        top_p: float = 0.9,
+        temperature: float = 0.7,
+        top_p: float = 0.95,
     ) -> Tuple[ List[List[int]], List[List[float]] ]: # these are the actions[token index, critic score, prob] 
         """
         Generate text sequences based on provided prompts using the language generation model.
