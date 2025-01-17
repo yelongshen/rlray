@@ -340,8 +340,7 @@ def play(learndp): #, mdg):
             if rank == buffer_rank:
                 add_to_buffer(_tokens, _masks, _probs, _reward, _crits)
             else:
-                rpc.rpc_sync(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
-
+                rpc.rpc_async(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
       
         print('end to trigger play ...........................\n\n')
         print('average reward: ', total_reward / (total_count + 0.00001), '\n\n') 
