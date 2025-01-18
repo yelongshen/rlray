@@ -482,7 +482,7 @@ def learn(learndp): #, mdg):
             
             # Normalizing the rewards
             rewards = torch.tensor([rewards], dtype=torch.bfloat16).to(model.device)
-
+            old_state_values = torch.tensor(_crits, dtype=torch.bfloat16).to(model.device)
             # global reward sync. 
             #rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
         
@@ -492,7 +492,7 @@ def learn(learndp): #, mdg):
             #old_logprobs = torch.squeeze(torch.stack(self.buffer.logprobs, dim=0)).detach().to(device)
             #old_state_values = torch.squeeze(torch.stack(self.buffer.state_values, dim=0)).detach().to(device)
 
-            old_state_values = torch.tensor(critics).to(torch.bfloat16).to(model.device)
+            # old_state_values = torch.tensor(critics).to(torch.bfloat16).to(model.device)
             # calculate advantages
             advantages = rewards.detach() - old_state_values.detach()
 
