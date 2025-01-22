@@ -114,7 +114,7 @@ class ReplayBuffer:
                 avg_idx += 1
             return avg / avg_idx
     
-    def ema_reward(self):
+    def aema_reward(self):
         with self.lock:
             return self.ema_reward
                    
@@ -146,7 +146,7 @@ def len_buffer():
 
 def pop_from_buffer(batchsize):
     global buffer
-    return buffer.sample(batchsize), buffer.avg_reward(buffer_size), buffer.ema_reward()
+    return buffer.sample(batchsize), buffer.avg_reward(buffer_size), buffer.aema_reward()
 
 ################################################################################################
 class ModelUpdateMessage:
