@@ -101,7 +101,7 @@ class ReplayBuffer:
             self.num += 1
             
             _reward = experience[3][-1] #
-            alpha = 0.02
+            alpha = 0.002
             self.ema_reward = alpha * _reward + (1 - alpha) * self.ema_reward
             # 
             
