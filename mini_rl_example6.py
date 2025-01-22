@@ -557,7 +557,8 @@ def learn(learndp): #, mdg):
                 if rank == 0:
                     print('mini_c_loss: ', mini_c_loss, 'critic_loss', critic_loss)
                     print('mini_p_loss: ', mini_p_loss, 'policy_loss', policy_loss)
- 
+                    print('avg reward: ', avg_reward)
+                    
                 mini_c_loss = 0.0
                 mini_p_loss = 0.0
     
