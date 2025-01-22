@@ -83,6 +83,11 @@ class ReplayBuffer:
         self.capacity = capacity
         self.buffer = [] # every sample is very different. 
         self.position = 0
+
+        self.num = 0
+        self.ema_reward = 0.0
+        #self.avg_buffer = 1024 # the recent average reward. 
+        
         self.lock = threading.Lock()
         
     def add(self, experience):
@@ -92,6 +97,22 @@ class ReplayBuffer:
                 self.buffer.append(None)
             self.buffer[self.position] = experience
             self.position = (self.position + 1) % self.capacity
+
+            self.num += 1
+            
+            _reward = experience[3][-1] #
+            alpha = 0.05
+            self.ema_reward = alpha * _reward + (1 - alpha) * self.ema_reward
+            # 
+            
+    def avg_reward(self, buffer_size):
+        with self.lock:
+            avg = 0.0
+            avg_idx = 0
+            for b in self.buffer[::-1][:buffer_size]:
+                avg = avg + b[3][-1]
+                avg_idx += 1
+            return avg / avg_idx
     
     def sample(self, batch_size):
         """ Sample a batch of experiences from the buffer """
@@ -103,7 +124,8 @@ class ReplayBuffer:
         with self.lock:
             return len(self.buffer)
 
-buffer = ReplayBuffer(4096)
+buffer_size = 256
+buffer = ReplayBuffer(buffer_size)
 player_node = 1
 learner_node = 1
 buffer_rank = 8
@@ -120,7 +142,7 @@ def len_buffer():
 
 def pop_from_buffer(batchsize):
     global buffer
-    return buffer.sample(batchsize)
+    return buffer.sample(batchsize), buffer.avg_reward(buffer_size)
 
 ################################################################################################
 class ModelUpdateMessage:
@@ -434,7 +456,7 @@ def learn(learndp): #, mdg):
             torch.cuda.empty_cache()
 
             try:
-                data = buffer.sample(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=10) #rev_experience_data('worker2', 2)
+                data, avg_reward = pop_from_buffer(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=10) #rev_experience_data('worker2', 2)
             except Exception as e:
                 print(f"RPC Error while getting buffer data... on rank {rank}: {e}")
                 continue
@@ -476,13 +498,23 @@ def learn(learndp): #, mdg):
             gamma = 0.95
             rewards = []
             discounted_reward = 0
-            for reward in reversed(_rewards[0]): 
-                discounted_reward = reward + (gamma * discounted_reward)
-                rewards.insert(0, discounted_reward)
             
+            #baselines = []
+            discounted_baseline = avg_reward
+            
+            for reward in reversed(_rewards[0]): 
+                discounted_baseline = gamma * discounted_baseline
+                #baselines.insert(0, discounted_baseline) 
+
+                discounted_reward = reward + (gamma * discounted_reward)
+                rewards.insert(0, discounted_reward - discounted_baseline)
+                
             # Normalizing the rewards
             rewards = torch.tensor([rewards], dtype=torch.bfloat16).to(model.device)
-            old_state_values = torch.tensor(_crits, dtype=torch.bfloat16).to(model.device)
+
+            
+            #old_state_values = torch.tensor(_crits, dtype=torch.bfloat16).to(model.device)
+            
             # global reward sync. 
             #rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
         
@@ -494,7 +526,7 @@ def learn(learndp): #, mdg):
 
             # old_state_values = torch.tensor(critics).to(torch.bfloat16).to(model.device)
             # calculate advantages
-            advantages = rewards.detach() - old_state_values.detach()
+            advantages = rewards.detach() # - old_state_values.detach()
 
             eps_clip = 0.2
             # Finding Surrogate Loss  
@@ -506,7 +538,7 @@ def learn(learndp): #, mdg):
             _c_loss = mseLoss(critics, rewards).mean()
             
             # final loss of clipped objective PPO objective. 
-            loss = _p_loss + 0.5 * _c_loss  #- 0.01 * dist_entropy
+            loss = (_p_loss + 0.02 * _c_loss) / gradient_accumulation_steps  #- 0.01 * dist_entropy
             
             # take gradient step
             mini_c_loss = mini_c_loss + _c_loss.detach()
