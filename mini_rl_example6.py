@@ -101,7 +101,7 @@ class ReplayBuffer:
             self.num += 1
             
             _reward = experience[3][-1] #
-            alpha = 0.05
+            alpha = 0.02
             self.ema_reward = alpha * _reward + (1 - alpha) * self.ema_reward
             # 
             
@@ -114,6 +114,10 @@ class ReplayBuffer:
                 avg_idx += 1
             return avg / avg_idx
     
+    def ema_reward(self):
+        with self.lock:
+            return self.ema_reward
+                   
     def sample(self, batch_size):
         """ Sample a batch of experiences from the buffer """
         with self.lock:
@@ -142,7 +146,7 @@ def len_buffer():
 
 def pop_from_buffer(batchsize):
     global buffer
-    return buffer.sample(batchsize), buffer.avg_reward(buffer_size)
+    return buffer.sample(batchsize), buffer.avg_reward(buffer_size), buffer.ema_reward()
 
 ################################################################################################
 class ModelUpdateMessage:
@@ -456,7 +460,7 @@ def learn(learndp): #, mdg):
             torch.cuda.empty_cache()
 
             try:
-                data, avg_reward = pop_from_buffer(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=10) #rev_experience_data('worker2', 2)
+                data, avg_reward, ema_reward = pop_from_buffer(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=10) #rev_experience_data('worker2', 2)
             except Exception as e:
                 print(f"RPC Error while getting buffer data... on rank {rank}: {e}")
                 continue
@@ -500,7 +504,7 @@ def learn(learndp): #, mdg):
             discounted_reward = 0
             
             #baselines = []
-            discounted_baseline = avg_reward
+            discounted_baseline = ema_reward # avg_reward
             
             for reward in reversed(_rewards[0]): 
                 discounted_baseline = gamma * discounted_baseline
@@ -555,9 +559,9 @@ def learn(learndp): #, mdg):
                 policy_loss = policy_loss * (update_step - 1) / update_step + mini_p_loss / update_step
 
                 if rank == 0:
-                    print('mini_c_loss: ', mini_c_loss, 'critic_loss', critic_loss)
-                    print('mini_p_loss: ', mini_p_loss, 'policy_loss', policy_loss)
-                    print('avg reward: ', avg_reward)
+                    print('mini_c_loss: ', mini_c_loss, 'critic_loss: ', critic_loss)
+                    print('mini_p_loss: ', mini_p_loss, 'policy_loss: ', policy_loss)
+                    print('avg reward: ', avg_reward, 'ema reward: ', ema_reward)
                     
                 mini_c_loss = 0.0
                 mini_p_loss = 0.0
