@@ -361,6 +361,9 @@ def play(learndp): #, mdg):
                 #dist.barrier(mdg)
                 print('player model update....', rank)
 
+                if local_rank == 0:
+                    print('player read examples', epoch * len(train) + i)
+                    
             _info = (_tokens, _masks, _probs, _reward, _crits)
 
             if rank == buffer_rank:
@@ -579,6 +582,7 @@ def learn(learndp): #, mdg):
                     #if rank == 0:
                     #print('enter model update message phase', rank)
                     if rank == 0:
+                        print('learner samples: ', update_step * 8 * gradient_accumulation_steps)
                         notify_model_update()
                     #print('waiting for model update phase 1', rank)                    
                     dist.barrier() #mdg)
