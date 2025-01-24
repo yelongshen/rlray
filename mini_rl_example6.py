@@ -128,7 +128,7 @@ class ReplayBuffer:
         with self.lock:
             return len(self.buffer)
 
-buffer_size = 256
+buffer_size = 512
 buffer = ReplayBuffer(buffer_size)
 player_node = 1
 learner_node = 1
