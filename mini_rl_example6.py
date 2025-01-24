@@ -281,6 +281,8 @@ def play(learndp): #, mdg):
 
     llm = llm_model
 
+    # compile model. 
+    llm = torch.compile(llm, dynamic=True) 
     
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
