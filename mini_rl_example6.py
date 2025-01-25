@@ -203,6 +203,9 @@ def code_extraction(input_text):
 
     return "\n".join(code_lines)
 
+import signal
+import psutil  # To check process status before killing
+
 def evaluate_program(program, test_input, test_output):    
     def run_program(conn, program, test_input):        
         try:            
@@ -223,17 +226,33 @@ def evaluate_program(program, test_input, test_output):
     process = multiprocessing.Process(target=run_program, args=(child_conn, program, test_input))    
     process.start()    
     process.join(5)    
+    
+    #if process.is_alive():        
+    #    logging.error("Process timed out. Forcibly killing...")        
+    #    os.kill(process.pid, signal.SIGKILL)        
+    #    process.join()    
+    #if parent_conn.poll():  
+    #    # Check if there's data to read        
+    #    output = parent_conn.recv()  
+    #    # Non-blocking receive        
+    #    return test_output.strip() == output.strip()    
+    #else:        
+    #    return "Error: No output from program"
     if process.is_alive():        
-        logging.error("Process timed out. Forcibly killing...")        
-        os.kill(process.pid, signal.SIGKILL)        
-        process.join()    
+        print("Process taking too long, terminating...")
+        try:
+            if psutil.pid_exists(process.pid):  # Check if process is still running
+                os.kill(process.pid, signal.SIGKILL)        
+                process.join()
+        except Exception as e:
+            print(f"Error killing process: {e}")
+    
     if parent_conn.poll():  
-        # Check if there's data to read        
-        output = parent_conn.recv()  
-        # Non-blocking receive        
+        output = parent_conn.recv()
         return test_output.strip() == output.strip()    
     else:        
-        return "Error: No output from program"
+        return False  # No output from program
+        
 
 
 import concurrent.futures
