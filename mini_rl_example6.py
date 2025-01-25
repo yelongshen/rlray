@@ -235,6 +235,34 @@ def evaluate_program(program, test_input, test_output):
     else:        
         return "Error: No output from program"
 
+
+import concurrent.futures
+
+def evaluate_program_multithreaded(program, test_inputs, test_outputs, max_workers=16):
+    """
+    Evaluate the given program in parallel using multiple threads.
+
+    Args:
+    - program (str): The code to be evaluated.
+    - test_inputs (list): List of input test cases.
+    - test_outputs (list): Expected outputs corresponding to test_inputs.
+    - max_workers (int): Number of threads to use.
+
+    Returns:
+    - float: The success rate of the program.
+    """
+    correct = 0
+    total = len(test_inputs)
+
+    def evaluate_single(test_input, test_output):
+        return evaluate_program(program, test_input, test_output)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = executor.map(evaluate_single, test_inputs, test_outputs)
+
+    correct = sum(1 for result in results if result is True)
+    return correct * 1.0 / (total + 0.0001)
+    
 ######################################################################################### #create distributed process group for model syncize.
 
 def initmodel_sync(model:_Phi3ForCausalLM):
@@ -324,20 +352,21 @@ def play(learndp): #, mdg):
             
             outputs, probs, crits = llm.generate(input_ids, max_gen_len = 2048)
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            program = code_extraction(response)
             
+            program = code_extraction(response)
             tests = example['public_tests']
             correct = 0
             total = 0
+
+            reward_score = evaluate_program_multithreaded(program, tests['input'], tests['output'])
+
+            #for test_input, test_output in zip(tests['input'], tests['output']):
+            #    o = evaluate_program(program, test_input, test_output)
+            #    if o == True:
+            #        correct = correct + 1
+            #    total = total + 1
+            #reward_score = correct * 1.0 / (total+0.0001)
             
-            for test_input, test_output in zip(tests['input'], tests['output']):
-                o = evaluate_program(program, test_input, test_output)
-                if o == True:
-                    correct = correct + 1
-                total = total + 1
-                
-                
-            reward_score = correct * 1.0 / (total+0.0001)
             print('success rate...................', reward_score,'\n\n')
 
             total_reward = total_reward + reward_score
