@@ -367,7 +367,7 @@ def play(learndp): #, mdg):
             #    total = total + 1
             #reward_score = correct * 1.0 / (total+0.0001)
             
-            print('success rate...................', reward_score,'\n\n')
+            print('success rate...................', reward_score, ' *** rank: ', rank, '\n\n')
 
             total_reward = total_reward + reward_score
             total_count = total_count + 1
