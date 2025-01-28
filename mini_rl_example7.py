@@ -1,0 +1,126 @@
+#ppo algorithm
+
+import os
+import sys
+
+import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed.rpc as rpc
+from queue import Queue
+import threading
+import time
+import random
+
+from typing import List, Optional, Tuple, Union
+
+import torch.nn as nn
+
+#from vllm import LLM, SamplingParams
+
+from typing import Any, Dict, Optional
+from concurrent.futures import TimeoutError
+from functools import partial
+#from contextlib import redirect_stdout
+import sys
+
+
+#from datasets import load_dataset
+
+import torch 
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline 
+import logging
+
+#from peft import LoraConfig
+#from trl import SFTTrainer
+#from transformers import TrainingArguments, BitsAndBytesConfig
+from accelerate import Accelerator
+from torch.utils.data import DataLoader
+#from transformers import AdamW
+#import numpy as np 
+from transformers import get_linear_schedule_with_warmup
+from torch.optim import AdamW
+
+
+import os
+import io
+import pickle
+import traceback
+import copy
+import datetime
+from typing import Any, Dict, Optional
+from concurrent.futures import TimeoutError
+from functools import partial
+from contextlib import redirect_stdout
+import sys
+
+from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel, Phi3Model, Phi3DecoderLayer
+from transformers.models.phi3.configuration_phi3 import Phi3Config
+
+from transformers import AutoConfig
+
+import torch.nn as nn
+import multiprocessing
+
+import signal
+from transformers.activations import ACT2FN
+
+from transformers.modeling_outputs import CausalLMOutputWithPast
+from dataclasses import dataclass
+
+from transformers.cache_utils import Cache, DynamicCache
+
+from phimodel import _Phi3ForCausalLM
+
+import torch.nn.functional as F
+
+import datetime
+
+
+import signal
+import psutil  # To check process status before killing
+
+import concurrent.futures
+from torch.utils.data import DataLoader, Dataset
+import torch.distributed as dist
+
+from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
+
+def main():
+    # on-policy ppo experiments with phi3.5 model on math dataset. 
+    local_rank = int(os.environ['LOCAL_RANK'])
+    print('local rank', local_rank)
+    rank = int(os.environ['RANK'])
+    print('rank', rank)
+    world_size = int(os.environ['WORLD_SIZE'])
+    print('WORLD_SIZE', world_size)  
+    gpus_per_node = 8
+    node_idx = rank // gpus_per_node
+
+    # init distributed process group.
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(minutes=5))    
+    #rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
+
+    # load dataset....
+    dataset = ['math_level3to5_data_processed_with_qwen_prompt.json']
+    data = load_dataset('json', data_files=dataset)
+    print(f"loaded {dataset} with data_files={dataset}")
+
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
+    dataloader = DataLoader(dataset, batch_size=1, sampler=sampler)
+
+    for epoch in range(0, 1):
+        sampler.set_epoch(epoch)  # Set epoch for shuffling
+        for batch_idx, data in enumerate(dataloader):
+            print(data)
+            break
+            #data, target = data.to(device), target.to(device)
+    # one node inference; one node training; as an example; 
+    # suppose we use 4 gpus for vllm and 4 gpus 
+    #if rank in [0,1,2,3,4,5,6,7]:
+    #    learn(learndp) #, mdg)
+    #else:
+    #    play(learndp) #, mdg)
+    
+if __name__ == "__main__":
+    main()
