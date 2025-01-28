@@ -102,17 +102,17 @@ def main():
     #rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
 
     # load dataset....
-    dataset = ['math_level3to5_data_processed_with_qwen_prompt.json']
+    dataset = 'math_level3to5_data_processed_with_qwen_prompt.json'
     data = load_dataset('json', data_files=dataset)
-    print(f"loaded {dataset} with data_files={dataset}")
+    print(f"loaded {data} with data_files={dataset}")
 
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     dataloader = DataLoader(dataset, batch_size=1, sampler=sampler)
 
     for epoch in range(0, 1):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
-        for batch_idx, data in enumerate(dataloader):
-            print(data)
+        for batch_idx, d in enumerate(dataloader):
+            print(d)
             break
             #data, target = data.to(device), target.to(device)
     # one node inference; one node training; as an example; 
