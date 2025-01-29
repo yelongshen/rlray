@@ -101,6 +101,40 @@ def main():
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(minutes=5))    
     #rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
 
+    # load model. 
+    model_name = "microsoft/Phi-3.5-mini-instruct"
+    llm = AutoModelForCausalLM.from_pretrained( 
+        model_name,  
+        device_map='cpu',
+        torch_dtype=torch.bfloat16,  
+        trust_remote_code=True,  
+    )#.to(device)
+    llm_config = AutoConfig.from_pretrained(model_name)
+    llm_model = _Phi3ForCausalLM(llm_config)
+    
+    missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False)
+    llm_model = llm_model.to(torch.bfloat16).to(device)
+    
+    llm = llm_model
+    #dist.barrier()
+    #print('before model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
+    #initmodel_sync(llm_model)
+    #dist.barrier()
+    #print('after model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
+
+    # load tokenizer.
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    tokenizer.model_max_length = 2048
+    tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
+    tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
+    tokenizer.padding_side = 'right'
+
+    print('initial llm model ....')
+    ############################################################
+
+
+    
     # load dataset....
     datafile = 'math_level3to5_data_processed_with_qwen_prompt.json'
     dataset = load_dataset('json', data_files=datafile)
@@ -122,6 +156,5 @@ def main():
     #    learn(learndp) #, mdg)
     #else:
     #    play(learndp) #, mdg)
-    
 if __name__ == "__main__":
     main()
