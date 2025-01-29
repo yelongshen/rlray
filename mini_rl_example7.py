@@ -149,9 +149,18 @@ def main():
     for epoch in range(0, 1):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         for batch_idx, d in enumerate(dataloader):
-            prompt = d['input']
-            print(prompt)
-            
+            qwen_prompt = d['input']
+            vanilla_prompt = d['question']         
+            # features: ['input', 'answer', 'gt_answer', 'subject', 'level', 'question', 'ground_truth_answer', 'target'],
+            print('qwen_prompt:', qwen_prompt)
+            print('vanilla_prompt:', vanilla_prompt)
+
+            x1 = tokenizer([qwen_prompt], add_special_tokens=False, max_length=1024, truncation=True)
+            print('qwen_ids', x1['input_ids'])
+
+            y1 = tokenizer([vanilla_prompt], add_special_tokens=False, max_length=1024, truncation=True)
+            print('vanilla_ids', y1['input_ids'])
+
             break
             #data, target = data.to(device), target.to(device)
     # one node inference; one node training; as an example; 
