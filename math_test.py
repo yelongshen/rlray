@@ -45,9 +45,9 @@ answers = ['[3,7] \\cup [8,9)']
 
 for query, answer in zip(response, answers):
     n_query, p_answer, box_match = preprocess_orm800k_box_responsev1(query, answer)
-    print('raw response', query)
-    print('new response', n_query)
-    print('extract answer', p_answer)
-    print('gt answer', answer)
-    print('box match', box_match)
+    print('\n\n\nraw response:\n', query)
+    print('\n\n\nnew response:\n', n_query)
+    print('\n\n\nextract answer:\n', p_answer)
+    print('\n\n\ngt answer:\n', answer)
+    print('\n\n\nbox match:\n', box_match)
   
