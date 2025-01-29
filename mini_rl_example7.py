@@ -164,6 +164,13 @@ def main():
             y1 = tokenizer(vanilla_prompt, add_special_tokens=False, max_length=1024, truncation=True)
             print('vanilla_ids:', y1['input_ids'])
 
+            input_ids = y1['input_ids']
+            outputs, probs, crits = llm.generate(input_ids, max_gen_len = 3000)
+            
+            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+            print('response:', response)
+            
             break
             #data, target = data.to(device), target.to(device)
     # one node inference; one node training; as an example; 
