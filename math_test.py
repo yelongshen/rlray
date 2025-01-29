@@ -43,7 +43,11 @@ pattern = r"The answer is: \\boxed\{(.*?)\}"
 
 answers = ['[3,7] \\cup [8,9)']
 
+
 for query, answer in zip(response, answers):
+    x = re.search(pattern, query, re.DOTALL)
+    print(x)
+    
     n_query, p_answer, box_match = preprocess_orm800k_box_responsev1(query, answer)
     print('\n\n\nraw response:\n', query)
     print('\n\n\nnew response:\n', n_query)
