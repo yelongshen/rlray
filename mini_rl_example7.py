@@ -149,7 +149,9 @@ def main():
     for epoch in range(0, 1):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         for batch_idx, d in enumerate(dataloader):
-            print(d)
+            prompt = d['input']
+            print(prompt)
+            
             break
             #data, target = data.to(device), target.to(device)
     # one node inference; one node training; as an example; 
