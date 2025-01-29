@@ -238,7 +238,17 @@ def main():
 
             if batch_idx % 10 == 0:
                 print('generating: ', batch_idx, ', average_reward: ', acc_reward / acc_num, ', rank:', rank)
-            
+
+                if local_rank == 0:
+                    print('query: ************')
+                    print(qwen_prompt)
+                    print('response: *************')
+                    print(response)
+                    print('ground truth: *************')
+                    print(vanilla_answer)
+                    print('match: **********')
+                    print(box_match_list)
+                    print('\n\n')
         print('final average reward: ', acc_reward / acc_num)
     # one node inference; one node training; as an example; 
     # suppose we use 4 gpus for vllm and 4 gpus 
