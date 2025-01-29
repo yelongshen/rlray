@@ -94,8 +94,12 @@ def main():
     print('rank', rank)
     world_size = int(os.environ['WORLD_SIZE'])
     print('WORLD_SIZE', world_size)  
+    
     gpus_per_node = 8
     node_idx = rank // gpus_per_node
+    
+    torch.cuda.set_device(local_rank)
+    device = torch.device(f"cuda:{local_rank}")
 
     # init distributed process group.
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(minutes=5))    
@@ -133,8 +137,6 @@ def main():
     print('initial llm model ....')
     ############################################################
 
-
-    
     # load dataset....
     datafile = 'math_level3to5_data_processed_with_qwen_prompt.json'
     dataset = load_dataset('json', data_files=datafile)
