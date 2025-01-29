@@ -155,11 +155,14 @@ def main():
             print('qwen_prompt:', qwen_prompt)
             print('vanilla_prompt:', vanilla_prompt)
 
-            x1 = tokenizer([qwen_prompt], add_special_tokens=False, max_length=1024, truncation=True)
-            print('qwen_ids', x1['input_ids'])
+            x1 = tokenizer([qwen_prompt], add_special_tokens=False, max_length=8, truncation=True)
+            print('qwen_ids1:', x1['input_ids'])
+
+            x2 = tokenizer([qwen_prompt], add_special_tokens=False, max_length=16, truncation=True)
+            print('qwen_ids2:', x2['input_ids'])
 
             y1 = tokenizer([vanilla_prompt], add_special_tokens=False, max_length=1024, truncation=True)
-            print('vanilla_ids', y1['input_ids'])
+            print('vanilla_ids:', y1['input_ids'])
 
             break
             #data, target = data.to(device), target.to(device)
