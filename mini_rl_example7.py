@@ -129,7 +129,7 @@ def main():
     # load tokenizer.
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    tokenizer.model_max_length = 2048
+    tokenizer.model_max_length = 4096
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
     tokenizer.padding_side = 'right'
