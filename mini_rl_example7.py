@@ -86,6 +86,7 @@ import torch.distributed as dist
 
 from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
 
+import re
 
 def preprocess_orm800k_box_responsev1(sequence, answer):
     temp_query = ""
