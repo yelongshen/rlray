@@ -113,7 +113,7 @@ def preprocess_orm800k_box_responsev1(sequence, answer):
         temp_answer = "none"
 
     #temp_answer = temp_response.split("\n\n# Answer\n\n")[-1]
-    temp_response = sequence.split("<|reserved_special_token_0|>The final answer is:")[0]
+    temp_response = sequence.split("<|reserved_special_token_0|>The answer is:")[0]
 
     #response_list = temp_response.split("<|reserved_special_token_0|>")
 
