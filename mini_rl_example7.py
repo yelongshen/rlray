@@ -86,6 +86,50 @@ import torch.distributed as dist
 
 from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
 
+
+def preprocess_orm800k_box_responsev1(sequence, answer):
+    temp_query = ""
+    temp_response = ""
+
+    temp_query = sequence.split("ASSISTANT:\n")[0]
+    #temp_query = temp_query.split("# Question\n\n")[-1]
+
+    temp_response = sequence.split("ASSISTANT:\n")[-1]
+    
+    #print("temp_response", temp_response)
+    # 使用正则表达式匹配
+    # pattern = r"The final answer is: \\\\boxed\{(.*?)\}"
+    # # 正则表达式，处理换行与特殊字符
+    # pattern = r"The final answer is: \\\\boxed\{(.*?)\}"
+    #pattern = r"The final answer is: \\\\boxed\{(.*?)\}"
+    pattern = r"The final answer is: \\boxed\{(.*?)\}"
+    # 使用 re.DOTALL 确保能匹配跨行文本
+    match = re.search(pattern, temp_response, re.DOTALL)
+    #match = re.search(pattern, temp_response)
+    if match:
+        temp_answer = match.group(1)
+    else:
+        temp_answer = "none"
+
+    #temp_answer = temp_response.split("\n\n# Answer\n\n")[-1]
+    temp_response = sequence.split("<|reserved_special_token_0|>The final answer is:")[0]
+
+    #response_list = temp_response.split("<|reserved_special_token_0|>")
+
+    processed_solution = temp_response + "\n\n# Answer\n\n" + temp_answer + "<|reserved_special_token_0|>"
+
+    # for i in range(len(response_list)-1):
+    #     processed_solution = processed_solution + "Step " + str(i+1) + ": " + response_list[i] + " <|reserved_special_token_0|>\n"
+
+    # processed_solution = processed_solution + response_list[-1] + " The answer is: " + temp_answer + " <|reserved_special_token_0|>\n"
+    processed_solution = re.sub(r"<\|end_of_text\|>", "", processed_solution)
+    
+    if temp_answer == answer:
+        box_match = 1.0 # 0.5
+    else:
+        box_match = 0.0 # -0.5
+    return processed_solution, box_match
+    
 def main():
     # on-policy ppo experiments with phi3.5 model on math dataset. 
     local_rank = int(os.environ['LOCAL_RANK'])
@@ -148,31 +192,53 @@ def main():
 
     for epoch in range(0, 1):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
+        acc_reward = 0
+        acc_num = 0
         for batch_idx, d in enumerate(dataloader):
             qwen_prompt = d['input']
-            vanilla_prompt = d['question']         
+            vanilla_prompt = d['question']    
+            vanilla_answer = d['answer']
+
             # features: ['input', 'answer', 'gt_answer', 'subject', 'level', 'question', 'ground_truth_answer', 'target'],
-            print('qwen_prompt:', qwen_prompt)
-            print('vanilla_prompt:', vanilla_prompt)
+            #print('qwen_prompt:', qwen_prompt)
+            #print('vanilla_prompt:', vanilla_prompt)
 
-            x1 = tokenizer(qwen_prompt, add_special_tokens=False, max_length=8, truncation=True)
-            print('qwen_ids1:', x1['input_ids'])
+            x1 = tokenizer(qwen_prompt, add_special_tokens=False, max_length=1024, truncation=True)
+            #print('qwen_ids1:', x1['input_ids'])
 
-            x2 = tokenizer(qwen_prompt, add_special_tokens=False, max_length=16, truncation=True)
-            print('qwen_ids2:', x2['input_ids'])
+            #x2 = tokenizer(qwen_prompt, add_special_tokens=False, max_length=16, truncation=True)
+            #print('qwen_ids2:', x2['input_ids'])
 
-            y1 = tokenizer(vanilla_prompt, add_special_tokens=False, max_length=1024, truncation=True)
-            print('vanilla_ids:', y1['input_ids'])
+            #y1 = tokenizer(vanilla_prompt, add_special_tokens=False, max_length=1024, truncation=True)
+            #print('vanilla_ids:', y1['input_ids'])
 
-            input_ids = y1['input_ids']
+            input_ids = x1['input_ids']
             outputs, probs, crits = llm.generate(input_ids, max_gen_len = 3000)
             
-            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-            print('response:', response)
+            response = [tokenizer.decode(outputs[0], skip_special_tokens=True)]
             
-            break
-            #data, target = data.to(device), target.to(device)
+            pattern = r"The final answer is: \\boxed\{(.*?)\}"
+
+            missing_answer_indices = [
+                i for i, query in enumerate(response) if not re.search(pattern, query, re.DOTALL)
+            ]
+
+            processed_queries = []
+            box_match_list = []
+            for query, answer in zip(response, vanilla_answer):
+                query, box_match = preprocess_orm800k_box_responsev1(query, answer)
+                processed_queries.append(query)
+                box_match_list.append(box_match)
+
+                acc_reward = acc_reward + box_match
+                acc_num = acc_num + 1
+            #queries = processed_queries
+            #reward_sequences, reward_attention_mask = preprocess_prm_reward(queries, self.tokenizer, self.prompt_max_len, **generate_kwargs)
+
+            if batch_idx % 10 == 0:
+                print('generating: ', batch_idx, ', average_reward: ', acc_reward / acc_num, ', rank:', rank)
+            
+        print('final average reward: ', acc_reward / acc_num)
     # one node inference; one node training; as an example; 
     # suppose we use 4 gpus for vllm and 4 gpus 
     #if rank in [0,1,2,3,4,5,6,7]:
