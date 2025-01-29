@@ -47,7 +47,7 @@ for query, answer in zip(response, answers):
     n_query, p_answer, box_match = preprocess_orm800k_box_responsev1(query, answer)
     print('raw response', query)
     print('new response', n_query)
-    print('extract answer', p_anwer)
+    print('extract answer', p_answer)
     print('gt answer', answer)
     print('box match', box_match)
   
