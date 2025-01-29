@@ -102,7 +102,7 @@ def preprocess_orm800k_box_responsev1(sequence, answer):
     # # 正则表达式，处理换行与特殊字符
     # pattern = r"The final answer is: \\\\boxed\{(.*?)\}"
     #pattern = r"The final answer is: \\\\boxed\{(.*?)\}"
-    pattern = r"The final answer is: \\boxed\{(.*?)\}"
+    pattern = r"The answer is: \\boxed\{(.*?)\}"
     # 使用 re.DOTALL 确保能匹配跨行文本
     match = re.search(pattern, temp_response, re.DOTALL)
     #match = re.search(pattern, temp_response)
@@ -217,7 +217,7 @@ def main():
             
             response = [tokenizer.decode(outputs[0], skip_special_tokens=True)]
             
-            pattern = r"The final answer is: \\boxed\{(.*?)\}"
+            pattern = r"The answer is: \\boxed\{(.*?)\}"
 
             missing_answer_indices = [
                 i for i, query in enumerate(response) if not re.search(pattern, query, re.DOTALL)
