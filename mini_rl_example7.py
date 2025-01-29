@@ -129,7 +129,7 @@ def preprocess_orm800k_box_responsev1(sequence, answer):
         box_match = 1.0 # 0.5
     else:
         box_match = 0.0 # -0.5
-    return processed_solution, box_match
+    return processed_solution, temp_aswer, box_match
     
 def main():
     # on-policy ppo experiments with phi3.5 model on math dataset. 
@@ -227,7 +227,8 @@ def main():
             processed_queries = []
             box_match_list = []
             for query, answer in zip(response, vanilla_answer):
-                query, box_match = preprocess_orm800k_box_responsev1(query, answer)
+                query, p_answer, box_match = preprocess_orm800k_box_responsev1(query, answer)
+                
                 processed_queries.append(query)
                 box_match_list.append(box_match)
 
@@ -236,19 +237,24 @@ def main():
             #queries = processed_queries
             #reward_sequences, reward_attention_mask = preprocess_prm_reward(queries, self.tokenizer, self.prompt_max_len, **generate_kwargs)
 
-            if batch_idx % 10 == 0:
-                print('generating: ', batch_idx, ', average_reward: ', acc_reward / acc_num, ', rank:', rank)
-
                 if local_rank == 0:
+                    print('batch idx', batch_idx)
                     print('query: ************')
                     print(qwen_prompt)
-                    print('response: *************')
-                    print(response)
+                    print('raw response: *************')
+                    print(query)
+                    print('predict answer: ************')
+                    print(p_answer)
                     print('ground truth: *************')
                     print(vanilla_answer)
                     print('match: **********')
-                    print(box_match_list)
+                    print(box_match)
                     print('\n\n')
+                
+            if batch_idx % 10 == 0:
+                print('generating: ', batch_idx, ', average_reward: ', acc_reward / acc_num, ', rank:', rank)
+
+                
         print('final average reward: ', acc_reward / acc_num)
     # one node inference; one node training; as an example; 
     # suppose we use 4 gpus for vllm and 4 gpus 
