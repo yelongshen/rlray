@@ -88,6 +88,8 @@ from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
 
 import re
 
+from math_util import compare_math_answers
+
 def preprocess_orm800k_box_responsev1(sequence, answer):
     temp_query = ""
     temp_response = ""
@@ -268,8 +270,9 @@ def main():
                     extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
                     #print("Extracted Answer:", extracted_answer)
                     p_answer = extracted_answer
-                    if p_answer == answer:
-                        box_match = 1.0 # 0.5
+
+                    is_match = compare_math_answers(answer, p_answer):
+                    box_match = 1.0 if is_match else 0.0
                         
                     pos = match.end() 
                     p_query = query[:pos]
