@@ -150,6 +150,8 @@ def main():
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(minutes=5))    
     #rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
 
+    local_model_path = "/mnt/models/Phi-3.5-mini-instruct"
+
     # load model. 
     model_name = "microsoft/Phi-3.5-mini-instruct"
     llm = AutoModelForCausalLM.from_pretrained( 
