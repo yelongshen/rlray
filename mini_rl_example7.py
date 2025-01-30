@@ -258,7 +258,7 @@ def main():
             processed_queries = []
             box_match_list = []
             for query, answer in zip(response, vanilla_answer):
-                match = re.search(pattern, query, re.DOTALL)
+                match = re.search(pattern, query, re.MULTILINE)
                 p_answer = "none"
                 box_match = 0.0
                 p_query = query
