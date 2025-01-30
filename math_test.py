@@ -190,8 +190,9 @@ for r in response:
         extracted_answer = match.group(1) # or match.group(2) or match.group(3) or match.group(4) or match.group(5)
         print("Extracted Answer:", extracted_answer)
 
-        pos = match.end() 
-        print(r[:pos])
+        print(r)
+        #pos = match.end() 
+        #print(r[:pos])
     else:
         print("No match found.")
     
