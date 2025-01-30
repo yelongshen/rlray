@@ -44,11 +44,7 @@ response_1 = '''To add these fractions, we need a common denominator. The least 
     $$\dfrac{13}{12} + \dfrac{15}{12} = \dfrac{13 + 15}{12} = \dfrac{28}{12}.$$
     
     Finally, we simplify the fraction by dividing both the numerator and denominator by their greatest common divisor, which is 4:
-    $$\dfrac{28}{12} = \dfrac{28 \div 4}{12 \div 4} = \dfrac{7}{3}.$$  The answer is: \\frac{7}{3}.
-
-    Tha answer is \\frac{100}{101}.
-
-    The answer is \\frac{1}{10}.
+    $$\dfrac{28}{12} = \dfrac{28 \div 4}{12 \div 4} = \dfrac{7}{3}.$$  The answer is: \\frac{7}{3}. \n Tha answer is \\frac{100}{101}.\nThe answer is \\frac{1}{10}.
     '''
 
 response_2 = '''To solve this problem, we need to convert each number to base 10, perform the arithmetic operations, and then convert the result back to base 10 if necessary.
@@ -71,9 +67,7 @@ response_2 = '''To solve this problem, we need to convert each number to base 10
     
     $\frac{1024}{16} - 1328 + 4202 = 64 - 1328 + 4202 = -1264 + 4202 = 2938$
     
-    The answer in base 10 is $\boxed{2938}$.  The answer is: 2938.
-    
-    The answer is 1290.'''
+    The answer in base 10 is $\boxed{2938}$.  The answer is: 2938.\nThe answer is 1290.'''
 
 response_3 = '''To find the range of $p(x)$, we need to consider the two cases given in the definition of $p(x)$:
 
@@ -110,9 +104,7 @@ response_3 = '''To find the range of $p(x)$, we need to consider the two cases g
     
     Therefore, the range of $p(x)$ in interval notation is $[-3, 11]$.
     
-    The answer is: [-3, 11].
-    
-    The answer is: [-3, 110].'''
+    The answer is: [-3, 11].\nThe answer is: [-3, 110].'''
 
 response_4 = '''$P(x) = -\sqrt[3]{2}x^4 + (4\sqrt[3]{2} - 2)x^3 - 3x^2 + 3\sqrt[3]{4}x - 2\sqrt[3]{8}$
 
@@ -144,9 +136,7 @@ Finally, we can simplify the polynomial:
 
 $P(x) = -2x^4 + 8x^3 - 6x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$
 
-The answer is: $P(x) = -2x^4 + 8x^3 - 6x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$
-
-The answer is: kjaiadsgdf.'''
+The answer is: $P(x) = -2x^4 + 8x^3 - 6x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$\nThe answer is: kjaiadsgdf.'''
 
 response_6 = '''$P(x) = -\sqrt[3]{2}x^4 + (4\sqrt[3]{2} - 2)x^3 - 3x^2 + 3\sqrt[3]{4}x - 2\sqrt[3]{8}$
 
@@ -162,9 +152,7 @@ Finally, we can simplify the polynomial:
 
 $P(x) = -2x^4 + 8x^3 - 6x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$
 
-The answer is: 3.451
-
-The answer is: kjaiadsgdf.'''
+The answer is: 3.451\nThe answer is: kjaiadsgdf.'''
 
 
 
