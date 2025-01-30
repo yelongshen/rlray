@@ -204,7 +204,10 @@ def main():
             #print('qwen_prompt:', qwen_prompt)
             #print('vanilla_prompt:', vanilla_prompt)
 
-            prefix_instruct = 'Please reason step by step, and put your answer within \\boxed{}. i.e., The answer is: \\boxed{}.\n'
+            candidate_prompt = "Think step by step and provide the final answer at the end in this format: 'The final answer is: <your_answer>'.\n"
+
+            
+            prefix_instruct = candidate_prompt
             postfix_instruct = ''
             #instruction_prefix = ''
             #instruction_postfix = '\n\nplease only reply with the source code in python. \n'
@@ -228,7 +231,9 @@ def main():
             
             response = [tokenizer.decode(outputs[0], skip_special_tokens=True)]
 
-            pattern = r"The answer is: \[(.*?)\]"
+            pattern = r'The final answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?))'
+
+            #pattern = r"The final answer is: \[(.*?)\]"
             
             #pattern = r"The answer is: \\boxed\{(.*?)\}"
             #missing_answer_indices = [
@@ -241,11 +246,20 @@ def main():
                 match = re.search(pattern, query, re.DOTALL)
                 p_answer = "none"
                 box_match = 0.0
+
                 if match:
-                    extracted_answer = match.group(1)  # Extracts "3, 4, 5, 6, 7"
-                    p_answer = extracted_answer
-                    box_match = 1.0
+                    extracted_answer = match.group(1) or match.group(2) or match.group(3) or match.group(4)
                     #print("Extracted Answer:", extracted_answer)
+                    p_answer = extracted_answer
+                    if p_answer == answer:
+                        box_match = 1.0 # 0.5
+                #else:
+                #    print("No match found.")
+                    
+                #if match:
+                #    extracted_answer = match.group(1)  # Extracts "3, 4, 5, 6, 7"   
+                #    box_match = 1.0
+                #    #print("Extracted Answer:", extracted_answer)
                 #query, p_answer, box_match = preprocess_orm800k_box_responsev1(query, answer)
                 
                 processed_queries.append(query)
