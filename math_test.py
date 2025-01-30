@@ -107,7 +107,7 @@ response_3 = '''To find the range of $p(x)$, we need to consider the two cases g
     
     Therefore, the range of $p(x)$ in interval notation is $[-3, 11]$.
     
-    The final answer is: [-3, 11].'''
+    The answer is: [-3, 11].'''
 
 response = [response_1, response_2, response_3]
 
@@ -117,12 +117,13 @@ response = [response_1, response_2, response_3]
 #pattern = r'The answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|\\frac{(\d+)}{(\d+)})'
 
 #pattern = r'The answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?))'
-pattern = r'The answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?))'
+#pattern = r'The answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?))'
+pattern = r'The answer is:\s*(\[-?\d+,\s*-?\d+\])'
 
 for r in response:
     match = re.search(pattern, r, re.DOTALL)
     if match:
-        extracted_answer = match.group(1) or match.group(2) or match.group(3) or match.group(4)
+        extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
         print("Extracted Answer:", extracted_answer)
     else:
         print("No match found.")
