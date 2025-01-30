@@ -231,8 +231,9 @@ def main():
             
             response = [tokenizer.decode(outputs[0], skip_special_tokens=True)]
 
-            pattern = r'The final answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?))'
-
+            #pattern = r'The final answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?))'
+            pattern = r'The final answer is:\s*(.*?)\s*\.'
+            
             #pattern = r"The final answer is: \[(.*?)\]"
             
             #pattern = r"The answer is: \\boxed\{(.*?)\}"
@@ -248,7 +249,7 @@ def main():
                 box_match = 0.0
 
                 if match:
-                    extracted_answer = match.group(1) or match.group(2) or match.group(3) or match.group(4)
+                    extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
                     #print("Extracted Answer:", extracted_answer)
                     p_answer = extracted_answer
                     if p_answer == answer:
