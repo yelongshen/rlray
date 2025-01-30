@@ -211,9 +211,9 @@ def main():
 
             #['<|im_start|>system\n<|im_end|>\n<|im_start|>user\nLet $\\mathbf{A}$ and $\\mathbf{B}$ be $2 \\times 2$ matrices such that $\\det \\mathbf{A} = -1$ and $\\det \\mathbf{B} = 3.$  Find $\\det (3 \\mathbf{A} \\mathbf{B}).$<|im_end|>\n<|im_start|>assistant']
 
-            prompt = prefix_instruct + vanilla_prompt + postfix_instruct
+            prompt = prefix_instruct + vanilla_prompt[0] + postfix_instruct
             
-            x1 = tokenizer(prompt, add_special_tokens=False, max_length=1024, truncation=True)
+            x1 = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=True)
             #print('qwen_ids1:', x1['input_ids'])
 
             #x2 = tokenizer(qwen_prompt, add_special_tokens=False, max_length=16, truncation=True)
