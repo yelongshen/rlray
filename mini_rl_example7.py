@@ -239,17 +239,17 @@ def main():
 
                 if local_rank == 0:
                     print('batch idx', batch_idx)
-                    print('raw question: ************')
+                    print('\n\n\nraw question: ************\n')
                     print(vanilla_prompt)
-                    print('qwen question: ********************')
+                    print('\n\n\nqwen question: ********************\n')
                     print(qwen_prompt)
-                    print('raw response: *************')
+                    print('\n\n\nraw response: *************\n')
                     print(query)
-                    print('predict answer: ************')
+                    print('\n\n\npredict answer: ************\n')
                     print(p_answer)
-                    print('ground truth: *************')
+                    print('\n\n\nground truth: *************\n')
                     print(vanilla_answer)
-                    print('match: **********')
+                    print('\n\n\nmatch: **********\n')
                     print(box_match)
                     print('\n\n')
                 
