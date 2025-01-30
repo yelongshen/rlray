@@ -77,14 +77,14 @@ response = [response_1, response_2]
 #pattern = r"The answer is: \[(.*?)\]"
 #pattern = r'The answer is: (?:\[(.*?)\]|(\d+)|"(.*?)")'
 
-pattern = r'The answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|\\frac{(\d+)}{(\d+)})'
+#pattern = r'The answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|\\frac{(\d+)}{(\d+)})'
 
-    
+pattern = r'The answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?))'
+
 for r in response:
     match = re.search(pattern, r, re.DOTALL)
-    
     if match:
-        extracted_answer = match.group(1) or match.group(2) or match.group(3) or (f"{match.group(4)}/{match.group(5)}" if match.group(4) and match.group(5) else None)
+        extracted_answer = match.group(1) or match.group(2) or match.group(3) or match.group(4)
         print("Extracted Answer:", extracted_answer)
     else:
         print("No match found.")
