@@ -129,7 +129,7 @@ def preprocess_orm800k_box_responsev1(sequence, answer):
         box_match = 1.0 # 0.5
     else:
         box_match = 0.0 # -0.5
-    return processed_solution, temp_aswer, box_match
+    return processed_solution, temp_answer, box_match
     
 def main():
     # on-policy ppo experiments with phi3.5 model on math dataset. 
