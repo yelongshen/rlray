@@ -177,7 +177,7 @@ response = [response_1, response_2, response_3, response_4, response_5]
 
 #pattern = r'The answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?))'
 #pattern = r'The answer is:\s*(.*?)\s*\.?'
-pattern = r'The answer is:\s*(\S+)\.?'
+pattern = r'The answer is:\s*(\S+)\\\n'
 #pattern = r'The answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?)|\[-?\d+,\s*-?\d+\])'
 #pattern = r'The answer is:\s*()'
 #pattern = r'The answer is:\s*(\[-?\d+,\s*-?\d+\])'
