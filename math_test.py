@@ -74,14 +74,15 @@ response_2 = '''To solve this problem, we need to convert each number to base 10
 
 response = [response_1, response_2]
 
-pattern = r"The answer is: \[(.*?)\]"
+#pattern = r"The answer is: \[(.*?)\]"
+pattern = r'The answer is: (?:\[(.*?)\]|(\d+)|"(.*?)")'
 
 for r in response:
     # Search for the pattern
-    match = re.search(pattern, r, re.DOTALL)
+    x = re.search(pattern, r, re.DOTALL)
     # Extract and print the answer
-    if match:
-        extracted_answer = match.group(1)  # Extracts "3, 4, 5, 6, 7"
+    if x:
+        extracted_answer = x.group(1) or x.group(2) or x.group(3)  # Extract first non-empty match
         print("Extracted Answer:", extracted_answer)
     else:
         print("No match found.")
