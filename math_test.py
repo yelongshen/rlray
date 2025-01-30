@@ -188,8 +188,10 @@ for r in response:
     match = re.search(pattern, r, re.DOTALL)
     if match:
         extracted_answer = match.group(1) # or match.group(2) or match.group(3) or match.group(4) or match.group(5)
-        print("Extracted Answer:", extracted_answer)
+        print("\nExtracted Answer:.............\n")
+        print(extracted_answer)
 
+        print('\nraw response:...............\n')
         print(r)
         #pos = match.end() 
         #print(r[:pos])
