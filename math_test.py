@@ -128,7 +128,7 @@ Finally, we can simplify the polynomial:
 
 $P(x) = -2x^4 + 8x^3 - 6x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$
 
-The final answer is: $P(x) = -2x^4 + 8x^3 - 6x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$.'''
+The answer is: $P(x) = -2x^4 + 8x^3 - 6x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$.'''
 
 
 
