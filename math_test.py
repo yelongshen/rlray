@@ -180,9 +180,9 @@ for r in response:
         print(extracted_answer)
 
         print('\nraw response:...............\n')
-        print(r)
-        #pos = match.end() 
-        #print(r[:pos])
+        #print(r)
+        pos = match.end() 
+        print(r[:pos])
     else:
         print("No match found.")
     
