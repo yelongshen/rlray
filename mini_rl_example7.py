@@ -204,8 +204,8 @@ def main():
             #print('qwen_prompt:', qwen_prompt)
             #print('vanilla_prompt:', vanilla_prompt)
 
-            prefix_instruct = 'Please reason step by step, and put your answer within \\boxed{}. i.e., The answer is: \\boxed{}\n'
-            postfix_instruct = 
+            prefix_instruct = 'Please reason step by step, and put your answer within \\boxed{}. i.e., The answer is: \\boxed{}.\n'
+            postfix_instruct = ''
             #instruction_prefix = ''
             #instruction_postfix = '\n\nplease only reply with the source code in python. \n'
 
