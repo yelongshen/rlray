@@ -220,12 +220,14 @@ def main():
 
             candidate_prompt_6 = "First, think step by step to carefully analyze the problem. Then, conclude with the answer in this format: 'The answer is: <your_answer>'\n\n"
 
+            candidate_prompt_7 = "First, think step by step. Then, provide a concise, one-line answer in this format: 'The answer is: <your_answer>'. \n\n"
+
             #pattern = r'The answer is:\s*(.*?)\s*\.'
             pattern = r'The answer is:\s*(.+)'
 
             #pattern = r'The final answer is:\s*(.*?)\s*\.'
 
-            prefix_instruct = candidate_prompt_6
+            prefix_instruct = candidate_prompt_7
             postfix_instruct = ''
             #instruction_prefix = ''
             #instruction_postfix = '\n\nplease only reply with the source code in python. \n'
