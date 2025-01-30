@@ -233,7 +233,8 @@ def main():
 
             #pattern = r'The final answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?))'
             pattern = r'The final answer is:\s*(.*?)\s*\.'
-            
+            #pattern = r'The final answer is:\s*(.*?)\s*\.'
+
             #pattern = r"The final answer is: \[(.*?)\]"
             
             #pattern = r"The answer is: \\boxed\{(.*?)\}"
@@ -247,13 +248,18 @@ def main():
                 match = re.search(pattern, query, re.DOTALL)
                 p_answer = "none"
                 box_match = 0.0
-
+                p_query = query
                 if match:
                     extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
                     #print("Extracted Answer:", extracted_answer)
                     p_answer = extracted_answer
                     if p_answer == answer:
                         box_match = 1.0 # 0.5
+                        
+                    pos = match.end() 
+                    p_query = query[:pos]
+                    #print(r[:pos])
+                    
                 #else:
                 #    print("No match found.")
                     
@@ -263,7 +269,7 @@ def main():
                 #    #print("Extracted Answer:", extracted_answer)
                 #query, p_answer, box_match = preprocess_orm800k_box_responsev1(query, answer)
                 
-                processed_queries.append(query)
+                processed_queries.append(p_query)
                 box_match_list.append(box_match)
 
                 acc_reward = acc_reward + box_match
@@ -276,7 +282,7 @@ def main():
                     print('\n\n\nraw question: ************\n')
                     print(prompt)
                     print('\n\n\nraw response: *************\n')
-                    print(query)
+                    print(p_query)
                     print('\n\n\npredict answer: ************\n')
                     print(p_answer)
                     print('\n\n\nground truth: *************\n')
