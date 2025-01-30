@@ -239,7 +239,9 @@ def main():
 
                 if local_rank == 0:
                     print('batch idx', batch_idx)
-                    print('query: ************')
+                    print('raw question: ************')
+                    print(vanilla_prompt)
+                    print('qwen question: ********************')
                     print(qwen_prompt)
                     print('raw response: *************')
                     print(query)
