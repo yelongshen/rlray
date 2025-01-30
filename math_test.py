@@ -156,7 +156,7 @@ The answer is: 3.451\nThe answer is: kjaiadsgdf.'''
 
 
 
-response = [response_1, response_2, response_3, response_4, response_5]
+response = [response_1, response_2, response_3, response_4, response_5, response_6]
 
 #pattern = r"The answer is: \[(.*?)\]"
 #pattern = r'The answer is: (?:\[(.*?)\]|(\d+)|"(.*?)")'
