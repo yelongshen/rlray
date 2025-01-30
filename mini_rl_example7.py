@@ -273,7 +273,7 @@ def main():
                     #print("Extracted Answer:", extracted_answer)
                     p_answer = extracted_answer
 
-                    is_match = compare_math_answers(answer, p_answer):
+                    is_match = compare_math_answers(answer, p_answer)
                     box_match = 1.0 if is_match else 0.0
                         
                     pos = match.end() 
