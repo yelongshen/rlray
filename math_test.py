@@ -148,6 +148,25 @@ The answer is: $P(x) = -2x^4 + 8x^3 - 6x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$
 
 The answer is: kjaiadsgdf.'''
 
+response_6 = '''$P(x) = -\sqrt[3]{2}x^4 + (4\sqrt[3]{2} - 2)x^3 - 3x^2 + 3\sqrt[3]{4}x - 2\sqrt[3]{8}$
+
+Now, we can simplify the polynomial by multiplying each term by $\sqrt[3]{2}$:
+
+$P(x) = -2x^4 + 8x^3 - 6\sqrt[3]{2}x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$
+
+Since we want a monic polynomial with integer coefficients, we can multiply the entire polynomial by $\sqrt[3]{2}$:
+
+$P(x) = -2\sqrt[3]{2}x^4 + 8\sqrt[3]{2}x^3 - 6x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$
+
+Finally, we can simplify the polynomial:
+
+$P(x) = -2x^4 + 8x^3 - 6x^2 + 6\sqrt[3]{4}x - 4\sqrt[3]{8}$
+
+The answer is: 3.451
+
+The answer is: kjaiadsgdf.'''
+
+
 
 response = [response_1, response_2, response_3, response_4, response_5]
 
