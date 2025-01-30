@@ -204,10 +204,13 @@ def main():
             #print('qwen_prompt:', qwen_prompt)
             #print('vanilla_prompt:', vanilla_prompt)
 
-            candidate_prompt = "Think step by step and provide the final answer at the end in this format: 'The final answer is: <your_answer>'.\n"
+            candidate_prompt = "Think step by step and provide the final answer at the end in this format: 'The final answer is: <your_answer>'.\n And please keep the simplest answer in <your_answer>"
 
-            
-            prefix_instruct = candidate_prompt
+            candidate_prompt_2 = "Think step by step and conclude with the final answer in this format: 'The final answer is: <your_answer>'. Ensure <your_answer> is the simplest form. \n\n"
+
+            pattern = r'The final answer is:\s*(.*?)\s*\.'
+
+            prefix_instruct = candidate_prompt_2
             postfix_instruct = ''
             #instruction_prefix = ''
             #instruction_postfix = '\n\nplease only reply with the source code in python. \n'
@@ -232,7 +235,6 @@ def main():
             response = [tokenizer.decode(outputs[0], skip_special_tokens=True)]
 
             #pattern = r'The final answer is:\s*(?:\[(.*?)\]|(\d+)|"(.*?)"|(\$?\\frac{\d+}{\d+}\$?))'
-            pattern = r'The final answer is:\s*(.*?)\s*\.'
             #pattern = r'The final answer is:\s*(.*?)\s*\.'
 
             #pattern = r"The final answer is: \[(.*?)\]"
