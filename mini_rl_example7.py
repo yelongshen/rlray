@@ -214,7 +214,7 @@ def main():
 
             candidate_prompt_5 = "First, think step by step to carefully analyze the problem. Then, conclude with the final answer in this format: 'The answer is: <your_answer>'\n"
 
-            candidate_prompt_6 = "First, think step by step to carefully analyze the problem. Then, conclude with the answer in this format: 'The answer is: <your_answer>'\n"
+            candidate_prompt_6 = "First, think step by step to carefully analyze the problem. Then, conclude with the answer in this format: 'The answer is: <your_answer>'\n\n"
 
             #pattern = r'The answer is:\s*(.*?)\s*\.'
             pattern = r'The answer is:\s*(.+)'
