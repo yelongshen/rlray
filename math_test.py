@@ -46,7 +46,12 @@ response_1 = '''To add these fractions, we need a common denominator. The least 
     Finally, we simplify the fraction by dividing both the numerator and denominator by their greatest common divisor, which is 4:
     $$\dfrac{28}{12} = \dfrac{28 \div 4}{12 \div 4} = \dfrac{7}{3}.$$ 
     
-    The answer is: \\frac{7}{3}.'''
+    The answer is: \\frac{7}{3}.
+
+    Tha answer is \\frac{100}{101}.
+
+    The answer is \\frac{1}{10}.
+    '''
 
 response_2 = '''To solve this problem, we need to convert each number to base 10, perform the arithmetic operations, and then convert the result back to base 10 if necessary.
     
