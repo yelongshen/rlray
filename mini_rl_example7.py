@@ -211,7 +211,7 @@ def main():
             pattern = r'The final answer is:\s*(.*?)\s*\.'
             #pattern = r'The final answer is:\s*(.*?)\s*\.'
 
-            prefix_instruct = candidate_prompt_2
+            prefix_instruct = candidate_prompt
             postfix_instruct = ''
             #instruction_prefix = ''
             #instruction_postfix = '\n\nplease only reply with the source code in python. \n'
