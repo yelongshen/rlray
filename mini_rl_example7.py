@@ -152,17 +152,31 @@ def main():
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(minutes=5))    
     #rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
 
-    local_model_path = "/mnt/models/Phi-3.5-mini-instruct"
+    local_model_path = "/mnt/mnt/blob-aimsllmeus2-data/phimodels2"
+    #model_name = "microsoft/Phi-3.5-mini-instruct"
 
+    
+    llm_config = AutoConfig.from_pretrained(local_model_path)
+    #llm_config = AutoConfig.from_pretrained(model_name)
+    
+    # /mnt/blob-aimsllmeus2-data-out/phimodels/
     # load model. 
-    model_name = "microsoft/Phi-3.5-mini-instruct"
-    llm = AutoModelForCausalLM.from_pretrained( 
-        model_name,  
-        device_map='cpu',
-        torch_dtype=torch.bfloat16,  
-        trust_remote_code=True,  
-    )#.to(device)
-    llm_config = AutoConfig.from_pretrained(model_name)
+    #llm = AutoModelForCausalLM.from_pretrained( 
+    #    model_name,  
+    #    device_map='cpu',
+    #    torch_dtype=torch.bfloat16,  
+    #    trust_remote_code=True,  
+    #)
+    # Load model from local path using the configuration
+    llm = AutoModelForCausalLM.from_pretrained(
+        local_model_path,
+        config=llm_config,  # Load local config
+        device_map="cpu",
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True
+    )
+    
+    #.to(device)
     llm_model = _Phi3ForCausalLM(llm_config)
     
     missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False)
@@ -176,8 +190,10 @@ def main():
     #print('after model sync, model parameters', 'rank', rank, llm_model.critic_head.weight)
 
     # load tokenizer.
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
+    #tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # Load tokenizer from local path
+    tokenizer = AutoTokenizer.from_pretrained(local_model_path)
+    
     tokenizer.model_max_length = 4096
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
