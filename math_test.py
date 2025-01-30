@@ -44,23 +44,47 @@ response_1 = '''To add these fractions, we need a common denominator. The least 
     $$\dfrac{13}{12} + \dfrac{15}{12} = \dfrac{13 + 15}{12} = \dfrac{28}{12}.$$
     
     Finally, we simplify the fraction by dividing both the numerator and denominator by their greatest common divisor, which is 4:
-    $$\dfrac{28}{12} = \dfrac{28 \div 4}{12 \div 4} = \dfrac{7}{3}.$$
+    $$\dfrac{28}{12} = \dfrac{28 \div 4}{12 \div 4} = \dfrac{7}{3}.$$ 
     
     The answer is: \frac{7}{3}.'''
+
+response_2 = '''To solve this problem, we need to convert each number to base 10, perform the arithmetic operations, and then convert the result back to base 10 if necessary.
     
-response = [response_1]
+    First, let's convert each number to base 10:
+    
+    $1357_{9}$ in base 10:
+    $1 \times 9^3 + 3 \times 9^2 + 5 \times 9^1 + 7 \times 9^0 = 729 + 243 + 45 + 7 = 1024$
+    
+    $100_{4}$ in base 10:
+    $1 \times 4^2 + 0 \times 4^1 + 0 \times 4^0 = 16 + 0 + 0 = 16$
+    
+    $2460_{8}$ in base 10:
+    $2 \times 8^3 + 4 \times 8^2 + 6 \times 8^1 + 0 \times 8^0 = 1024 + 256 + 48 + 0 = 1328$
+    
+    $5678_{9}$ in base 10:
+    $5 \times 9^3 + 6 \times 9^2 + 7 \times 9^1 + 8 \times 9^0 = 3645 + 486 + 63 + 8 = 4202$
+    
+    Now, let's perform the arithmetic operations:
+    
+    $\frac{1024}{16} - 1328 + 4202 = 64 - 1328 + 4202 = -1264 + 4202 = 2938$
+    
+    The answer in base 10 is $\boxed{2938}$.
+    
+    The answer is: 2938.'''
+
+response = [response_1, response_2]
 
 pattern = r"The answer is: \[(.*?)\]"
 
-# Search for the pattern
-match = re.search(pattern, response[0], re.DOTALL)
-
-# Extract and print the answer
-if match:
-    extracted_answer = match.group(1)  # Extracts "3, 4, 5, 6, 7"
-    print("Extracted Answer:", extracted_answer)
-else:
-    print("No match found.")
+for r in response:
+    # Search for the pattern
+    match = re.search(pattern, r, re.DOTALL)
+    # Extract and print the answer
+    if match:
+        extracted_answer = match.group(1)  # Extracts "3, 4, 5, 6, 7"
+        print("Extracted Answer:", extracted_answer)
+    else:
+        print("No match found.")
     
 #print('\n\n\nraw response:\n', query)
 #print('\n\n\nnew response:\n', n_query)
