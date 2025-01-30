@@ -44,9 +44,7 @@ response_1 = '''To add these fractions, we need a common denominator. The least 
     $$\dfrac{13}{12} + \dfrac{15}{12} = \dfrac{13 + 15}{12} = \dfrac{28}{12}.$$
     
     Finally, we simplify the fraction by dividing both the numerator and denominator by their greatest common divisor, which is 4:
-    $$\dfrac{28}{12} = \dfrac{28 \div 4}{12 \div 4} = \dfrac{7}{3}.$$ 
-    
-    The answer is: \\frac{7}{3}.
+    $$\dfrac{28}{12} = \dfrac{28 \div 4}{12 \div 4} = \dfrac{7}{3}.$$  The answer is: \\frac{7}{3}.
 
     Tha answer is \\frac{100}{101}.
 
@@ -73,9 +71,9 @@ response_2 = '''To solve this problem, we need to convert each number to base 10
     
     $\frac{1024}{16} - 1328 + 4202 = 64 - 1328 + 4202 = -1264 + 4202 = 2938$
     
-    The answer in base 10 is $\boxed{2938}$.
+    The answer in base 10 is $\boxed{2938}$.  The answer is: 2938.
     
-    The answer is: 2938.'''
+    The answer is 1290.'''
 
 response_3 = '''To find the range of $p(x)$, we need to consider the two cases given in the definition of $p(x)$:
 
@@ -112,7 +110,9 @@ response_3 = '''To find the range of $p(x)$, we need to consider the two cases g
     
     Therefore, the range of $p(x)$ in interval notation is $[-3, 11]$.
     
-    The answer is: [-3, 11].'''
+    The answer is: [-3, 11].
+    
+    The answer is: [-3, 110].'''
 
 response = [response_1, response_2, response_3]
 
