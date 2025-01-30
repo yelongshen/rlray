@@ -204,19 +204,21 @@ def main():
             #print('qwen_prompt:', qwen_prompt)
             #print('vanilla_prompt:', vanilla_prompt)
 
-            candidate_prompt_1 = "Think step by step and provide the final answer at the end in this format: 'The final answer is: <your_answer>.'\n"
+            candidate_prompt_1 = "Think step by step and provide the final answer at the end in this format: 'The final answer is: <your_answer>'\n"
 
-            candidate_prompt_2 = "Think step by step and conclude with the final answer in this format: 'The final answer is: <your_answer>.' Ensure <your_answer> is the simplest form. \n\n"
+            candidate_prompt_2 = "Think step by step and conclude with the final answer in this format: 'The final answer is: <your_answer>' Ensure <your_answer> is the simplest form. \n\n"
 
-            candidate_prompt_3 = "Think step by step and provide the answer at the end in this format: 'The answer is: <your_answer>.'\n"
+            candidate_prompt_3 = "Think step by step and provide the answer at the end in this format: 'The answer is: <your_answer>'\n"
 
-            candidate_prompt_4 = "Please think step by step first and then conclude the answer at the end in this format: 'The answer is: <your_answer>.'\n"
+            candidate_prompt_4 = "Please think step by step first and then conclude the answer at the end in this format: 'The answer is: <your_answer>'\n"
 
-            candidate_prompt_5 = "First, think step by step to carefully analyze the problem. Then, conclude with the final answer in this format: 'The answer is: <your_answer>.'"
+            candidate_prompt_5 = "First, think step by step to carefully analyze the problem. Then, conclude with the final answer in this format: 'The answer is: <your_answer>'\n"
 
-            candidate_prompt_6 = "First, think step by step to carefully analyze the problem. Then, conclude with the answer in this format: 'The answer is: <your_answer>.'"
+            candidate_prompt_6 = "First, think step by step to carefully analyze the problem. Then, conclude with the answer in this format: 'The answer is: <your_answer>'\n"
 
-            pattern = r'The answer is:\s*(.*?)\s*\.'
+            #pattern = r'The answer is:\s*(.*?)\s*\.'
+            pattern = r'The answer is:\s*(.+)'
+
             #pattern = r'The final answer is:\s*(.*?)\s*\.'
 
             prefix_instruct = candidate_prompt_6
