@@ -204,7 +204,16 @@ def main():
             #print('qwen_prompt:', qwen_prompt)
             #print('vanilla_prompt:', vanilla_prompt)
 
-            x1 = tokenizer(qwen_prompt, add_special_tokens=False, max_length=1024, truncation=True)
+            prefix_instruct = 'Please reason step by step, and put your answer within \\boxed{}. i.e., The answer is: \\boxed{}\n'
+            postfix_instruct = 
+            #instruction_prefix = ''
+            #instruction_postfix = '\n\nplease only reply with the source code in python. \n'
+
+            #['<|im_start|>system\n<|im_end|>\n<|im_start|>user\nLet $\\mathbf{A}$ and $\\mathbf{B}$ be $2 \\times 2$ matrices such that $\\det \\mathbf{A} = -1$ and $\\det \\mathbf{B} = 3.$  Find $\\det (3 \\mathbf{A} \\mathbf{B}).$<|im_end|>\n<|im_start|>assistant']
+
+            prompt = prefix_instruct + vanilla_prompt + postfix_instruct
+            
+            x1 = tokenizer(prompt, add_special_tokens=False, max_length=1024, truncation=True)
             #print('qwen_ids1:', x1['input_ids'])
 
             #x2 = tokenizer(qwen_prompt, add_special_tokens=False, max_length=16, truncation=True)
@@ -214,20 +223,30 @@ def main():
             #print('vanilla_ids:', y1['input_ids'])
 
             input_ids = x1['input_ids']
+            
             outputs, probs, crits = llm.generate(input_ids, max_gen_len = 3000)
             
             response = [tokenizer.decode(outputs[0], skip_special_tokens=True)]
-            
-            pattern = r"The answer is: \\boxed\{(.*?)\}"
 
-            missing_answer_indices = [
-                i for i, query in enumerate(response) if not re.search(pattern, query, re.DOTALL)
-            ]
+            pattern = r"The answer is: \[(.*?)\]"
+            
+            #pattern = r"The answer is: \\boxed\{(.*?)\}"
+            #missing_answer_indices = [
+            #    i for i, query in enumerate(response) if not re.search(pattern, query, re.DOTALL)
+            #]
 
             processed_queries = []
             box_match_list = []
             for query, answer in zip(response, vanilla_answer):
-                query, p_answer, box_match = preprocess_orm800k_box_responsev1(query, answer)
+                match = re.search(pattern, query, re.DOTALL)
+                p_answer = "none"
+                box_match = 0.0
+                if match:
+                    extracted_answer = match.group(1)  # Extracts "3, 4, 5, 6, 7"
+                    p_answer = extracted_answer
+                    box_match = 1.0
+                    #print("Extracted Answer:", extracted_answer)
+                #query, p_answer, box_match = preprocess_orm800k_box_responsev1(query, answer)
                 
                 processed_queries.append(query)
                 box_match_list.append(box_match)
@@ -240,9 +259,7 @@ def main():
                 if local_rank == 0:
                     print('batch idx', batch_idx)
                     print('\n\n\nraw question: ************\n')
-                    print(vanilla_prompt)
-                    print('\n\n\nqwen question: ********************\n')
-                    print(qwen_prompt)
+                    print(prompt)
                     print('\n\n\nraw response: *************\n')
                     print(query)
                     print('\n\n\npredict answer: ************\n')
