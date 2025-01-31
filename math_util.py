@@ -57,27 +57,24 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     return prompt
 
-def process_math_answer(responses, answers, prompt_type = "v8"):
+def process_math_answer(response, answers, prompt_type = "v8"):
     pattern = r'The answer is:\s*(.+)'
 
-    processed_queries = []
-    box_match_list = []
-    extract_answers = []
-    
-    for response, answer in zip(responses, answers):
-        match = re.search(pattern, response, re.MULTILINE)
-        box_match = 0
-        extracted_answer = 'none'
-        if match:
-            extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
-            #p_answer = extracted_answer
-            is_match = compare_math_answers(answer, extracted_answer)
-            box_match = 1.0 if is_match else 0.0
-            pos = match.end() 
-            response = response[:pos]
+    box_match = 0.0
+    extracted_answer = 'none'
+        
+    match = re.search(pattern, response, re.MULTILINE)
+        
+    if match:
+        extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
+        for ans in answers:
+            is_match = compare_math_answers(ans, extracted_answer)
+            if is_match:
+                box_match = 1.0
+                break
+                
+        pos = match.end() 
+        response = response[:pos]
 
-        extract_answers.append(extracted_answer)
-        processed_queries.append(response)
-        box_match_list.append(box_match)
-    return processed_queries, extract_answers, box_match_list
+    return response, extracted_answer, box_match
 
