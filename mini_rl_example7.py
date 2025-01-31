@@ -155,8 +155,12 @@ def main():
     local_model_path = "/mnt/blob-aimsllmeus2-data/phimodels2"
     #model_name = "microsoft/Phi-3.5-mini-instruct"
 
+    # Define local model path
     
-    llm_config = AutoConfig.from_pretrained(local_model_path)
+    # Load model configuration from local path
+    llm_config = AutoConfig.from_pretrained(local_model_path, local_files_only=True)
+
+    #llm_config = AutoConfig.from_pretrained(local_model_path)
     #llm_config = AutoConfig.from_pretrained(model_name)
     
     # /mnt/blob-aimsllmeus2-data-out/phimodels/
@@ -173,7 +177,8 @@ def main():
         config=llm_config,  # Load local config
         device_map="cpu",
         torch_dtype=torch.bfloat16,
-        trust_remote_code=True
+        trust_remote_code=True,
+        local_files_only=True 
     )
     
     #.to(device)
@@ -192,7 +197,7 @@ def main():
     # load tokenizer.
     #tokenizer = AutoTokenizer.from_pretrained(model_name)
     # Load tokenizer from local path
-    tokenizer = AutoTokenizer.from_pretrained(local_model_path)
+    tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True)
     
     tokenizer.model_max_length = 4096
     tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
