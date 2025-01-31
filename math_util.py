@@ -15,13 +15,13 @@ def compare_math_answers(gt, pred):
     """Compare two numeric strings and print the result."""
     if not is_numeric(gt) or not is_numeric(pred):
         #print("Both inputs must be numeric strings!")
-        if gt.strip() == s2.strip():
+        if gt.strip() == pred.strip():
             return True
         else:
             return False
 
     # Convert both to floats for comparison
-    num1, num2 = float(s1), float(s2)
+    num1, num2 = float(gt), float(pred)
 
     if num1 == num2:
         return True
