@@ -172,7 +172,7 @@ def main(args):
     sampler = torch.utils.data.distributed.DistributedSampler(dataset['train'], num_replicas=world_size, rank=rank)
     dataloader = DataLoader(dataset['train'], batch_size=1, sampler=sampler)
 
-    for epoch in range(0, 100):
+    for epoch in range(0, 1):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         acc_reward = 0
         acc_num = 0
@@ -180,7 +180,13 @@ def main(args):
         for batch_idx, d in enumerate(dataloader):
             qwen_prompt = d['input']
             vanilla_prompts = d['question']    
-            answers = d['answer']
+            answers_1 = d['answer']
+            answers_2 = d['gt_answer']
+            answers_3 = d['ground_truth_answer']
+            answers_4 = d['target']
+            answers = answers_1 + answers_2 + answers_3 + answers_4
+            
+            # features: ['input', 'answer', 'gt_answer', 'subject', 'level', 'question', 'ground_truth_answer', 'target'],
 
             prompt = process_math_prompt(vanilla_prompts[0])
       
@@ -190,27 +196,27 @@ def main(args):
             
             outputs, probs, crits = llm.generate(input_ids, max_gen_len = 3000)
             
-            responses = [tokenizer.decode(outputs[0], skip_special_tokens=True)]
+            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            #processed_response, extract_answer, reward
+            response, extracted_answer, reward = process_math_answer(response, answers)
 
-            processed_responses, extract_answers, returns = process_math_answer(responses, answers)
-
-            for pr, panswer, r, ans in zip(processed_responses, extract_answers, returns, answers):
-                acc_reward = acc_reward + r
-                acc_num = acc_num + 1
-              
-                if local_rank == 0:
-                    print('batch idx', batch_idx)
-                    print('\n\n\nquestion: ************\n')
-                    print(prompt)
-                    print('\n\n\nresponse: *************\n')
-                    print(pr)
-                    print('\n\n\npredict answer: ************\n')
-                    print(panswer)
-                    print('\n\n\nground truth: *************\n')
-                    print(ans)
-                    print('\n\n\nmatch: **********\n')
-                    print(r)
-                    print('\n\n')
+            acc_reward = acc_reward + reward
+            acc_num = acc_num + 1
+            
+            if local_rank == 0:
+                print('batch idx', batch_idx)
+                print('\n\n\nquestion: ************\n')
+                print(prompt)
+                print('\n\n\nresponse: *************\n')
+                print(response)
+                print('\n\n\nextracted answer: ************\n')
+                print(extracted_answer)
+                print('\n\n\nground truth: *************\n')
+                print(answers)
+                print('\n\n\nreward: **********\n')
+                print(reward)
+                print('\n\n')
                 
             if batch_idx % 10 == 0:
                 print('generating: ', batch_idx, ', average_reward: ', acc_reward / acc_num, ', rank:', rank)
