@@ -839,15 +839,11 @@ def sample_top_p(probs, top_p=0.9):
     # Keep at least one token
     #sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
     sorted_indices_to_remove[..., 0] = False
+    
     # Set logits of removed tokens to -inf
-    #print('shape1111', sorted_indices.shape, sorted_indices_to_remove.shape, sorted_indices[sorted_indices_to_remove].shape)
-
-    #probs[sorted_indices[sorted_indices_to_remove]] = 0.0
-
     for i in range(probs.size(0)):
         probs[i, sorted_indices[i, sorted_indices_to_remove[i]]] = 0.0
 
-    #print('shape2222', probs.shape)
     normalized_probs = probs / probs.sum(dim=-1, keepdim=True)
     # Sample from the filtered distribution
     sampled_token = torch.multinomial(normalized_probs, num_samples=1)
@@ -992,7 +988,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         self,
         prompt_tokens: List[List[int]],
         max_gen_len: int,
-        temperature: float = 0,
+        temperature: float = 0.7,
         top_p: float = 0.95,
     ) -> Tuple[ List[List[int]], List[List[float]] ]: # these are the actions[token index, critic score, prob] 
         """
