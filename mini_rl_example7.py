@@ -177,7 +177,6 @@ def main(args):
     # Load model from local path using the configuration
     llm = AutoModelForCausalLM.from_pretrained(
         local_model_path,
-        config=llm_config,  # Load local config
         device_map="cpu",
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
