@@ -11,6 +11,7 @@ from queue import Queue
 import threading
 import time
 import random
+import argparse
 
 from typing import List, Optional, Tuple, Union
 
@@ -133,7 +134,7 @@ def preprocess_orm800k_box_responsev1(sequence, answer):
         box_match = 0.0 # -0.5
     return processed_solution, temp_answer, box_match
     
-def main():
+def main(args):
     # on-policy ppo experiments with phi3.5 model on math dataset. 
     local_rank = int(os.environ['LOCAL_RANK'])
     print('local rank', local_rank)
@@ -152,7 +153,9 @@ def main():
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(minutes=5))    
     #rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
 
-    local_model_path = "/mnt/blob-aimsllmeus2-data/phimodels2"
+    local_model_path = args.pretrained_model # "/mnt/blob-aimsllmeus2-data/phimodels2/"
+    
+    print('model_path', local_model_path)
     #model_name = "microsoft/Phi-3.5-mini-instruct"
 
     # Define local model path
@@ -344,4 +347,8 @@ def main():
     #else:
     #    play(learndp) #, mdg)
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pretrained_model", type=str, default="none", help="path to pretrained ckpt.")
+    args = parser.parse_args()
+    
+    main(args)
