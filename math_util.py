@@ -1,6 +1,7 @@
 import os
 import math
 import io
+import re
 
 def is_numeric(s):
     """Check if a string is a valid numeric value (integer or float)."""
@@ -29,6 +30,7 @@ def compare_math_answers(gt, pred):
         return False
       
 def process_math_prompt(original_question, prompt_type = "v8"):
+    
     candidate_prompt_1 = "Think step by step and provide the final answer at the end in this format: 'The final answer is: <your_answer>'\n"
 
     candidate_prompt_2 = "Think step by step and conclude with the final answer in this format: 'The final answer is: <your_answer>' Ensure <your_answer> is the simplest form. \n\n"
@@ -54,3 +56,24 @@ def process_math_prompt(original_question, prompt_type = "v8"):
     prompt = prefix_instruct + original_question + postfix_instruct
 
     return prompt
+
+def process_math_answer(responses, answers, prompt_type = "v8"):
+    pattern = r'The answer is:\s*(.+)'
+
+    processed_queries = []
+    box_match_list = []
+    for response, answer in zip(responses, answers):
+        match = re.search(pattern, response, re.MULTILINE)
+        box_match = 0
+        if match:
+            extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
+            #p_answer = extracted_answer
+            is_match = compare_math_answers(answer, extracted_answer)
+            box_match = 1.0 if is_match else 0.0
+            pos = match.end() 
+            response = response[:pos]
+        
+        processed_queries.append(response)
+        box_match_list.append(box_match)
+    return processed_queries, box_match_list
+
