@@ -309,8 +309,9 @@ def main(args):
             outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 3000)
 
             if batch_idx == 0 and local_rank == 0:
-                print('probs.shape', probs.shape)
-                print('crits.shape', crits.shape)
+                print('probs.shape', len(probs[0]))
+                print('crits.shape', len(crits[0]))
+                print('outputs.shape', len(outputs[0]))
                 
                 
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
