@@ -433,7 +433,7 @@ def main(args):
 
             y1 = tokenizer([response], add_special_tokens=False, max_length=3000, truncation=True)
             
-            outputs = y1['input_ids]
+            outputs = y1['input_ids']
                 
             acc_reward = acc_reward + reward
             acc_num = acc_num + 1
@@ -477,8 +477,6 @@ def main(args):
                 print('progress: ', batch_idx, ', average_reward: ', avg_reward, ', avg_responselen: ', avg_len , ', rank: ', rank)
 
                 ## start the model training; 
-                
-                
                 
                 buffer.clear()
                 
