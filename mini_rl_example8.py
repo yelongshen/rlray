@@ -312,16 +312,34 @@ def main(args):
                 print('probs.shape', len(probs[0]))
                 print('crits.shape', len(crits[0]))
                 print('outputs.shape', len(outputs[0]))
-                
-                
-            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                #probs.shape 538
+                #crits.shape 538
+                #outputs.shape 538
+                #batch idx 0
+            response = tokenizer.decode(outputs[0]) #,skip_special_tokens=False)
+            response_mapping = tokenizer(response, return_offsets_mapping=True)
             
             #processed_response, extract_answer, reward
-            response, extracted_answer, reward = process_math_answer(response, answers)
+            mid_response, extracted_answer, reward = process_math_answer(response, answers)
+            def getindex(char_pos, offset_mapping):
+                for token_idx, (start, end) in enumerate(offset_mapping):
+                    if start <= char_pos < end:
+                         return token_idx
+                return None
+            response_idx = getindex(len(mid_response))
 
-            y1 = tokenizer([response], add_special_tokens=False, max_length=3000, truncation=True)
-            
-            outputs = y1['input_ids']
+            if response_idx is not None and len(outputs[0]) > response_idx:
+                
+                if outputs[0][response_idx] = eos_token_id:
+                    outputs[0] = outputs[0][ : response_idx + 1]
+                    probs[0] = probs[0][ : response_idx + 1]
+                    crits[0] = crits[0][ : response_idx + 1]
+                else:
+                    outputs[0] = outputs[0][ : response_idx]
+                    probs[0] = probs[0][ : response_idx]
+                    crits[0] = crits[0][ : response_idx]
+
+            response = tokenizer.decode(outputs[0])
                 
             acc_reward = acc_reward + reward
             acc_num = acc_num + 1
