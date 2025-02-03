@@ -211,7 +211,7 @@ def main(args):
     # Step 3: Load and merge multiple safetensor state_dicts
     model_state_dict = {}
     for file in safetensor_files:
-        part_state_dict = load_file(file)  # Load each part
+        part_state_dict = load_file(file, device="cpu")  # Load each part
         model_state_dict.update(part_state_dict)  # Merge into one dictionary
         
     #llm = AutoModelForCausalLM.from_pretrained( 
@@ -231,6 +231,8 @@ def main(args):
 
     llm_model = llm_model.to(torch.bfloat16).to(device) 
     llm_model.model.gradient_checkpointing = True 
+
+    dist.barrier()
     initmodel_sync(llm_model)
     
     llm = llm_model 
