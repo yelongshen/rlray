@@ -97,6 +97,9 @@ from math_util import compare_math_answers, process_math_prompt, process_math_an
 
 import numpy as np
 
+from safetensors.torch import load_file
+
+
 # ReplayBuffer 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -199,18 +202,33 @@ def main(args):
     #    trust_remote_code=True,  
     #) 
     # Load model from local path using the configuration. 
-    llm = AutoModelForCausalLM.from_pretrained( 
-        local_model_path, 
-        device_map="cpu", 
-        torch_dtype=torch.bfloat16, 
-        trust_remote_code=True, 
-        local_files_only=True 
-    ) 
-    
+
+    safetensor_files = [
+        f"{local_model_path}/model-00001-of-00002.safetensors",
+        f"{local_model_path}/model-00002-of-00002.safetensors"
+    ]
+
+    # Step 3: Load and merge multiple safetensor state_dicts
+    model_state_dict = {}
+    for file in safetensor_files:
+        part_state_dict = load_file(file)  # Load each part
+        model_state_dict.update(part_state_dict)  # Merge into one dictionary
+        
+    #llm = AutoModelForCausalLM.from_pretrained( 
+    #    local_model_path, 
+    #    device_map="cpu", 
+    #    torch_dtype=torch.bfloat16, 
+    #    trust_remote_code=True, 
+    #    local_files_only=True 
+    #) 
+
     #.to(device) 
     llm_model = _Phi3ForCausalLM(llm_config) 
     
-    missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False) 
+    # Step 4: Apply the merged state_dict to the model
+    #missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False) 
+    missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
+
     llm_model = llm_model.to(torch.bfloat16).to(device) 
     llm_model.model.gradient_checkpointing = True 
     initmodel_sync(llm_model)
