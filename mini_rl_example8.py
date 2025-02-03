@@ -109,7 +109,7 @@ class ReplayBuffer:
         self.alpha = 0.01       
         self.lock = threading.Lock()
 
-    # experience : <prompt, response, reward, tokens, masks, seq_rewards> 
+    # experience : #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>
     def push(self, experience):
         """ Add new experience to the buffer """
         with self.lock:
@@ -139,7 +139,7 @@ class ReplayBuffer:
         with self.lock:
             rewards = []
             for d in self.buffer:
-                prompt, response, reward, tokens, masks, seq_rewards = d
+                prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
                 rewards.append(reward)
             return rewards
             
@@ -151,8 +151,8 @@ class ReplayBuffer:
         with self.lock:
             response_len = []
             for d in self.buffer:
-                prompt, response, reward, tokens, masks, seq_rewards = d
-                response_len.append(len(response))
+                prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
+                response_len.append(len(probs))
             return np.mean(response_len)
         
     def z_score_normalization(self):
@@ -371,7 +371,7 @@ def main(args):
                 all_masks.append(_masks)
                 all_rewards.append(_rewards)
 
-            #<prompt, response, reward, tokens, masks, seq_rewards>
+            #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>
             experience = (prompt, response, reward, probs[0], crits[0], all_tokens[0], all_masks[0], all_rewards[0])
             buffer.push(experience)
             
