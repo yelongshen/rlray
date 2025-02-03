@@ -330,7 +330,7 @@ def main(args):
 
             if response_idx is not None and len(outputs[0]) > response_idx:
                 
-                if outputs[0][response_idx] = eos_token_id:
+                if outputs[0][response_idx] == eos_token_id:
                     outputs[0] = outputs[0][ : response_idx + 1]
                     probs[0] = probs[0][ : response_idx + 1]
                     crits[0] = crits[0][ : response_idx + 1]
