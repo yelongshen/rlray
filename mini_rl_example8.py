@@ -306,7 +306,7 @@ def main(args):
 
             input_ids = x1['input_ids']
             
-            outputs, probs, crits = llm.generate(input_ids, max_gen_len = 3000)
+            outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 3000)
 
             if batch_idx == 0 and local_rank == 0:
                 print('probs.shape', probs.shape)
