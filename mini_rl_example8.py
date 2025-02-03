@@ -184,7 +184,9 @@ def main(args):
     torch.cuda.set_device(local_rank) 
     device = torch.device(f"cuda:{local_rank}") 
     # init distributed process group.
-    dist.init_process_group(backend="nccl", rank=local_rank, world_size=world_size, timeout=datetime.timedelta(minutes=5))    
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(minutes=5))    
+    
+    dist.barrier()
     #rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
     local_model_path = args.pretrained_model # "/mnt/blob-aimsllmeus2-data/phimodels2/" 
     print('model_path', local_model_path) 
