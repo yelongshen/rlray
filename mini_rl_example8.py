@@ -161,152 +161,6 @@ class ReplayBuffer:
         return (rewards - mean) / std
 
 
-def train(args, llm, llm_config, optimizer, scheduler, buffer, buffer_size, device):
-    llm.train()
-    
-    #critic_loss = 0.0
-    #policy_loss = 0.0
-
-    #mini_c_loss = 0.0
-    #mini_p_loss = 0.0
-    # update_step = 0
-
-    # accumulate gradient for the whole batchsize.     
-    step = 0
-    batch_size = 1
-    max_seq_len = 4096
-    micro_training_steps = buffer_size / batch_size
-
-    # 
-    pad_id = llm_config.pad_token_id
-    vocab_size = llm_config.vocab_size
-    
-    optimizer.zero_grad()
-    mseLoss = torch.nn.MSELoss(size_average=None, reduce=None, reduction='none')
-
-    # rl training steps;
-    while step < micro_training_steps:
-        mini_data = buffer.pop(batch_size)
-
-        input_tokens = []
-        # data clean up. 
-        for d in mini_data:
-            # d : <prompt, response, reward, tokens, masks, seq_rewards> 
-            prompt, response, reward, tokens, masks, seq_rewards = d
-            input_tokens.append(tokens)
-        
-        #_tokens = [d[0] for d in data]
-        #_masks = [d[1] for d in data]
-        #_probs = [d[2] for d in data]
-        #_rewards = [d[3] for d in data]
-        #_crits = [d[4] for d in data] 
-        # do tokens padding & alignment with batchsize  > 1
-         
-        input_tokens = torch.tensor(input_tokens).to(torch.long).to(device)    
-        _batch_size, _seq_len = input_tokens.shape
-        
-        # re-evaluate the policy.     
-        # return: next_token_loss, logits, critics, next_decoder_cache 
-        _, logits, critics, _ = model(input_tokens)
-    
-        logprobs = -F.cross_entropy(
-            input = logits.reshape(-1, vocab_size)[:-1,:], #.transpose(1, 2),
-            target = input_tokens.reshape(-1)[1:], 
-            reduction = "none",
-            ignore_index = pad_id,
-        ).reshape(1, -1)
-
-        # critics align with the ground truth. 
-        critics = critics.reshape(_batch_size, _seq_len)
-        critics = critics[:, _idx-1:-1] 
-        
-        old_logprobs = torch.tensor(_probs).to(model.device)
-        _idx = _masks[0].index(1)
-        ratios = torch.exp(logprobs[:, _idx-1:] - old_logprobs.detach() + 1e-10)
-            
-            
-            gamma = 0.95
-            rewards = []
-            discounted_reward = 0
-            
-            #baselines = []
-            discounted_baseline = ema_reward # avg_reward
-            
-            for reward in reversed(_rewards[0]): 
-                discounted_baseline = gamma * discounted_baseline
-                #baselines.insert(0, discounted_baseline) 
-
-                discounted_reward = reward + (gamma * discounted_reward)
-                rewards.insert(0, discounted_reward - discounted_baseline)
-                
-            # Normalizing the rewards
-            rewards = torch.tensor([rewards], dtype=torch.bfloat16).to(model.device)
-        
-            # calculate advantages
-            advantages = rewards.detach() # - old_state_values.detach()
-
-            eps_clip = 0.2
-            # Finding Surrogate Loss  
-            surr1 = ratios * advantages # (optimize logprobs)
-            
-            surr2 = torch.clamp(ratios, 1-eps_clip, 1+eps_clip) * advantages
-
-            _p_loss = -torch.min(surr1, surr2).mean()
-            _c_loss = mseLoss(critics, rewards).mean()
-            
-            # final loss of clipped objective PPO objective. 
-            loss = (_p_loss + 0.02 * _c_loss) / gradient_accumulation_steps  #- 0.01 * dist_entropy
-            
-            # take gradient step
-            mini_c_loss = mini_c_loss + _c_loss.detach()
-            mini_p_loss = mini_p_loss + _p_loss.detach()
-            
-            loss.backward()
-            if (step + 1) % gradient_accumulation_steps == 0:
-                update_step = update_step + 1
-
-                mini_c_loss = mini_c_loss / gradient_accumulation_steps
-                mini_p_loss = mini_p_loss / gradient_accumulation_steps
-
-                critic_loss = critic_loss * (update_step - 1) / update_step + mini_c_loss / update_step
-                policy_loss = policy_loss * (update_step - 1) / update_step + mini_p_loss / update_step
-
-                if rank == 0:
-                    print('mini_c_loss: ', mini_c_loss, 'critic_loss: ', critic_loss)
-                    print('mini_p_loss: ', mini_p_loss, 'policy_loss: ', policy_loss)
-                    print('avg reward: ', avg_reward, 'ema reward: ', ema_reward)
-                    
-                mini_c_loss = 0.0
-                mini_p_loss = 0.0
-    
-                optimizer.step()
-                optimizer.zero_grad()
-                scheduler.step()  # Update the learning rate
-
-                if update_step % 8 == 0:
-                    #print('enter update phase', rank)
-                    #dist.barrier(learndp)
-                    #print('enter update phase, barrier 1', rank)
-                    
-                    # notify the producer to boardcast the model weight to 
-                    #if rank == 0:
-                    #print('enter model update message phase', rank)
-                    if rank == 0:
-                        print('learner samples: ', update_step * 8 * gradient_accumulation_steps)
-                        notify_model_update()
-                    #print('waiting for model update phase 1', rank)                    
-                    dist.barrier() #mdg)
-                    #print('waiting for model update phase 2', rank)                    
-                    allmodel_sync(model) #, device_ids=[local_rank], mdg=mdg)
-                    #print('waiting for model update phase 3', rank)                    
-                    dist.barrier()
-                    print('*************** learner model update ******************************', rank)
-                    #rpc.rpc_sync(f"worker-{buffer_rank}", notify_model_update, args=_info, timeout=0)
-                    #print('wait on the learndp barrier 2', rank)
-                    #dist.barrier(learndp)
-                    #print('leave update phase, barrier 1', rank)
-            step = step + 1
-
 
 def main(args):
     # on-policy ppo experiments with phi3.5 model on math dataset. 
@@ -402,7 +256,7 @@ def main(args):
     buffer = ReplayBuffer(buffer_size)
     ### 
     
-    for epoch in range(0, 100):
+    for epoch in range(0, 1):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         acc_reward = 0
         acc_num = 0
@@ -425,7 +279,12 @@ def main(args):
             input_ids = x1['input_ids']
             
             outputs, probs, crits = llm.generate(input_ids, max_gen_len = 3000)
-            
+
+            if batch_idx == 0 and rank == 0:
+                print('probs.shape', probs.shape)
+                print('crits.shape', crits.shape)
+                
+                
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
             
             #processed_response, extract_answer, reward
@@ -477,7 +336,6 @@ def main(args):
                 print('progress: ', batch_idx, ', average_reward: ', avg_reward, ', avg_responselen: ', avg_len , ', rank: ', rank)
 
                 ## start the model training; 
-                
                 buffer.clear()
                 
             
