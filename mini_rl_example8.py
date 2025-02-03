@@ -161,6 +161,10 @@ class ReplayBuffer:
         return (rewards - mean) / std
 
 
+def initmodel_sync(model:_Phi3ForCausalLM):
+    with torch.no_grad():
+        torch.distributed.broadcast(model.critic_head.weight, 0, async_op=False)
+        torch.distributed.broadcast(model.critic_head.bias, 0, async_op=False)
 
 def main(args):
     # on-policy ppo experiments with phi3.5 model on math dataset. 
@@ -209,6 +213,7 @@ def main(args):
     missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False) 
     llm_model = llm_model.to(torch.bfloat16).to(device) 
     llm_model.model.gradient_checkpointing = True 
+    initmodel_sync(llm_model)
     
     llm = llm_model 
 
@@ -280,7 +285,7 @@ def main(args):
             
             outputs, probs, crits = llm.generate(input_ids, max_gen_len = 3000)
 
-            if batch_idx == 0 and rank == 0:
+            if batch_idx == 0 and local_rank == 0:
                 print('probs.shape', probs.shape)
                 print('crits.shape', crits.shape)
                 
