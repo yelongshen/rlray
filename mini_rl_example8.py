@@ -213,7 +213,8 @@ def main(args):
     for file in safetensor_files:
         part_state_dict = load_file(file, device="cpu")  # Load each part
         model_state_dict.update(part_state_dict)  # Merge into one dictionary
-        
+
+    print('load model weight ... ')
     #llm = AutoModelForCausalLM.from_pretrained( 
     #    local_model_path, 
     #    device_map="cpu", 
