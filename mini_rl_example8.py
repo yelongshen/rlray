@@ -326,7 +326,7 @@ def main(args):
                     if start <= char_pos < end:
                          return token_idx
                 return None
-            response_idx = getindex(len(mid_response))
+            response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
 
             if response_idx is not None and len(outputs[0]) > response_idx:
                 
