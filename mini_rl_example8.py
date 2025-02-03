@@ -328,16 +328,11 @@ def main(args):
                 return None
             response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
 
-            if response_idx is not None and len(outputs[0]) > response_idx:
-                
-                if outputs[0][response_idx] == eos_token_id:
-                    outputs[0] = outputs[0][ : response_idx + 1]
-                    probs[0] = probs[0][ : response_idx + 1]
-                    crits[0] = crits[0][ : response_idx + 1]
-                else:
-                    outputs[0] = outputs[0][ : response_idx]
-                    probs[0] = probs[0][ : response_idx]
-                    crits[0] = crits[0][ : response_idx]
+            # 5 token space. 
+            if response_idx is not None and len(outputs[0]) > response_idx + 5:
+                outputs[0] = outputs[0][ : response_idx]
+                probs[0] = probs[0][ : response_idx]
+                crits[0] = crits[0][ : response_idx]
 
             response = tokenizer.decode(outputs[0])
                 
