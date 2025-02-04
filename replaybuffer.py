@@ -132,17 +132,18 @@ class ReplayBuffer:
     def distributed_advantage_norm(self, device):
         world_size = dist.get_world_size()
         full_advantages = [adv for dat in self.buffer for adv in dat.advantages]
-        _sum = torch.tensor([np.sum(full_advantages)], device = device)
+        _sum = torch.tensor([np.sum(full_advantages)], dtype=torch.float, device = device)
         _count = torch.tensor([len(full_advantages)], dtype=torch.float, device = device)
         dist.all_reduce(_sum, op=dist.ReduceOp.SUM)
         dist.all_reduce(_count, op=dist.ReduceOp.SUM)
         _global_mean = _sum / _count
 
+        print('total count of tokens:', _count)
         _global_mean_value = _global_mean[0].item()
         
         l2_advantages = [(adv - _global_mean_value) ** 2 for adv in full_advantages]
         
-        _sq = torch.tensor([np.sum(l2_advantages)], device = device)        
+        _sq = torch.tensor([np.sum(l2_advantages)], dtype=torch.float, device = device)        
         dist.all_reduce(_sq, op=dist.ReduceOp.SUM)
         _global_variance = _sq / _count
         _global_std = torch.sqrt(_global_variance)
@@ -151,7 +152,7 @@ class ReplayBuffer:
         for d in self.buffer:
             d.normalized_advantages = []
             for adv in d.advantages:
-                d.normalized_advantages.append( (adv - _global_mean_value) / _global_std_value)
+                d.normalized_advantages.append( (adv - _global_mean_value) / (_global_std_value + 1e-2))
     
     def mean_reward(self):
         rewards = self.get_rewards()
