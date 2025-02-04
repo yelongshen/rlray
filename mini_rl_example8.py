@@ -73,7 +73,7 @@ from transformers.cache_utils import Cache, DynamicCache
 
 from phimodel import _Phi3ForCausalLM
 
-from replaybuffer import ReplayBuffer
+from replaybuffer import ReplayBuffer, Sample
 
 import torch.nn.functional as F
 
@@ -313,8 +313,8 @@ def main(args):
                 all_masks.append(_masks)
                 output_rewards.append(_rewards)
 
-            #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>
-            experience = (prompt, response, reward, probs[0], crits[0], all_tokens[0], all_masks[0], output_rewards[0])
+            #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>    
+            experience = Sample(prompt = prompt, response = response, reward = reward, probs = probs[0], crits = crits[0], tokens = all_tokens[0], masks = all_masks[0], seq_rewards = output_rewards[0])
             buffer.push(experience)
             
             
