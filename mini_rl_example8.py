@@ -332,6 +332,8 @@ def main(args):
                 ## start the model training; 
                 buffer.clear()
                 
+                llm.eval()
+                
         print('final average reward: ', acc_reward / acc_num, '\nacc_num: ',acc_num)
     # one node inference; one node training; as an example; 
     # suppose we use 4 gpus for vllm and 4 gpus 
