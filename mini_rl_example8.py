@@ -73,6 +73,8 @@ from transformers.cache_utils import Cache, DynamicCache
 
 from phimodel import _Phi3ForCausalLM
 
+from replaybuffer import ReplayBuffer
+
 import torch.nn.functional as F
 
 import datetime
@@ -99,69 +101,6 @@ import numpy as np
 
 from safetensors.torch import load_file
 
-
-# ReplayBuffer 
-class ReplayBuffer:
-    def __init__(self, capacity):
-        self.capacity = capacity
-        self.buffer = deque(maxlen=capacity) # every sample is very different. 
-        self.epsilon = 1e-8
-        self.alpha = 0.01       
-        self.lock = threading.Lock()
-
-    # experience : #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>
-    def push(self, experience):
-        """ Add new experience to the buffer """
-        with self.lock:
-            self.buffer.append(experience) 
-            
-    def clear(self):
-        self.buffer.clear()
-
-    def pop(self, batch_size):
-        """
-        Pop the oldest batch of experiences from the buffer (FIFO order).
-        Args:
-            batch_size (int): Number of experiences to pop.
-        Returns:
-            List of popped experiences.
-        """
-        with self.lock:
-            batch_size = min(batch_size, len(self.buffer))  # Ensure we don't pop more than available
-            data = [self.buffer.popleft() for _ in range(batch_size)]  # Pop oldest elements
-            return data
-        
-    def __len__(self):
-        with self.lock:
-            return len(self.buffer)
-
-    def get_rewards(self):
-        with self.lock:
-            rewards = []
-            for d in self.buffer:
-                prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
-                rewards.append(reward)
-            return rewards
-            
-    def mean_reward(self):
-        rewards = self.get_rewards()
-        return np.mean(rewards)
-
-    def avg_responselen(self):
-        with self.lock:
-            response_len = []
-            for d in self.buffer:
-                prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
-                response_len.append(len(probs))
-            return np.mean(response_len)
-        
-    def z_score_normalization(self):
-        """Standardize rewards using mean and standard deviation."""
-        rewards = self.get_rewards()
-        
-        mean = np.mean(rewards)
-        std = np.std(rewards) + self.epsilon
-        return (rewards - mean) / std
 
 
 def initmodel_sync(model:_Phi3ForCausalLM):
