@@ -319,11 +319,11 @@ def main(args):
                 #crits.shape 538
                 #outputs.shape 538
                 #batch idx 0
-            response = tokenizer.decode(outputs[0]) #,skip_special_tokens=False)
+            response = tokenizer.decode(outputs[0])
             response_mapping = tokenizer(response, return_offsets_mapping=True)
             
             #processed_response, extract_answer, reward
-            mid_response, extracted_answer, reward = process_math_answer(response, answers)
+            mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer)
             def getindex(char_pos, offset_mapping):
                 for token_idx, (start, end) in enumerate(offset_mapping):
                     if start <= char_pos < end:
