@@ -138,10 +138,10 @@ def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device
       
         # do tokens padding & alignment with batchsize  > 1   
         input_tokens = torch.tensor(input_tokens).to(torch.long).to(device)    
-        old_logprobs = torch.tensor(old_logprobs).to(device)
-        advantages = torch.tensor(advantages).to(device).detach()
-        returns = torch.tensor(returns).to(device).detach()
-      
+        old_logprobs = torch.tensor(old_logprobs).to(torch.bfloat16).to(device)
+        advantages = torch.tensor(advantages).to(torch.bfloat16).to(device).detach()
+        returns = torch.tensor(returns).to(torch.bfloat16).to(device).detach()
+        
         _batch_size, _seq_len = input_tokens.shape
         # generation token index. 
         _response_idx = mini_data[0].masks.index(1)
