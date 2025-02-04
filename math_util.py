@@ -57,7 +57,7 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     return prompt
 
-def process_math_answer(response, answers, prompt_type = "v8"):
+def process_math_answer(response, answers, tokenizer, prompt_type = "v8"):
     pattern = r'The answer is:\s*(.+)'
 
     box_match = 0.0
@@ -67,7 +67,10 @@ def process_math_answer(response, answers, prompt_type = "v8"):
         
     if match:
         extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
-        
+        # clean up special tokens.
+        answer_tokens = tokenizer([extracted_answer], add_special_tokens=False, max_length=1024, truncation=True)
+        extracted_answer = tokenizer.decode(answer_tokens['input_ids'][0], skip_special_tokens=True)
+
         for ans in answers:
             is_match = compare_math_answers(ans, extracted_answer)
             if is_match:
