@@ -862,7 +862,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         # model archiecture: connect from intermedia layer possibily.
         self.critic_head = nn.Linear(config.hidden_size, 1, bias=True)
         nn.init.xavier_normal_(self.critic_head.weight)
-        nn.init.constant_(self.archiecture.bias, -8.0)
+        nn.init.constant_(self.critic_head.bias, -8.0)
         
         
         self._tied_weights_keys = ["lm_head.weight"]
