@@ -293,8 +293,13 @@ def main(args):
                 print(answers)
                 print('\n\n\nreward: **********\n')
                 print(reward)
+                print('\n\ncrits: *******\n')
+                print(crits[0])
+                print('\n\nprobs: *******\n')
+                print(probs[0])
                 print('\n\n')
-            
+
+                
             # prompt_tokens: List[List[int]],
             all_tokens = []
             all_masks = []
