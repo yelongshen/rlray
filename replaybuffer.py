@@ -55,6 +55,7 @@ import re
 from collections import deque
 
 import numpy as np
+from typing import Optional
 
 @dataclass
 class Sample:
@@ -66,8 +67,8 @@ class Sample:
     tokens : List[int]
     masks : List[int]
     seq_rewards : List[float]
-    advantages : List[float]
-    returns : List[float]
+    advantages : Optional[List[float]] = None
+    returns : Optinal[List[float]] = None
 
 # ReplayBuffer 
 class ReplayBuffer:
