@@ -224,7 +224,7 @@ def main(args):
     ### initialize replaybuffer.
     llm.eval()
     
-    buffer_size = 64
+    buffer_size = args.replay_size
     buffer = ReplayBuffer(buffer_size)
     ### 
     
@@ -346,6 +346,8 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretrained_model", type=str, default="none", help="path to pretrained ckpt.")
+    parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
+    
     args = parser.parse_args()
     
     main(args)
