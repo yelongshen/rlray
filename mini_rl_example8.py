@@ -232,6 +232,9 @@ def main(args):
     #missing_keys, unexpected_keys = llm_model.load_state_dict(llm.state_dict(), strict=False) 
     missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
 
+    print('missing_keys: ', missing_keys)
+    print('unexpected_keys: ', unexpected_keys)
+    
     llm_model = llm_model.to(torch.bfloat16).to(device) 
     llm_model.model.gradient_checkpointing = True 
 
