@@ -191,15 +191,7 @@ def main(args):
     llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
     print('distributed language model creation.') 
 
-    optimizer = torch.optim.AdamW(llm.parameters(), lr=1.0e-6) 
-    #num_epochs = 3 
-    num_training_steps = 100000 # num_epochs * len(train_dataloader)
     
-    scheduler = get_linear_schedule_with_warmup( 
-        optimizer, num_warmup_steps=1500, num_training_steps=num_training_steps 
-    ) 
-    print('model optimization initialization...') 
-
     # load tokenizer. 
     #tokenizer = AutoTokenizer.from_pretrained(model_name) 
     # Load tokenizer from local path 
@@ -217,6 +209,18 @@ def main(args):
     dataset = load_dataset('json', data_files=datafile) 
     print(f"loaded {dataset} with data_files={datafile}") 
 
+    # setup optimization.
+    optimizer = torch.optim.AdamW(llm.parameters(), lr=args.lr) # 1.0e-6) 
+    num_training_steps = dataset['train'].num_rows * args.epoch * 1.0 / (args.replay_size * world_size) # num_epochs * len(train_dataloader)    
+    warmup_steps = args.warmup_step * num_training_steps
+    scheduler = get_linear_schedule_with_warmup( 
+        optimizer, num_warmup_steps = int(warmup_steps), num_training_steps = int(num_training_steps) 
+    ) 
+    
+    if local_rank == 0:
+        print('num_training_steps', int(num_training_steps), ' warmup_steps', int(warmup_steps), ' learning rate', args.lr)
+        print('model optimization initialization...') 
+
     # 
     sampler = torch.utils.data.distributed.DistributedSampler(dataset['train'], num_replicas=world_size, rank=rank, shuffle=True) 
     dataloader = DataLoader(dataset['train'], batch_size=1, sampler=sampler) 
@@ -228,7 +232,7 @@ def main(args):
     buffer = ReplayBuffer(buffer_size)
     ### 
     
-    for epoch in range(0, 10):
+    for epoch in range(0, args.epoch):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         acc_reward = 0
         acc_num = 0
@@ -344,6 +348,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretrained_model", type=str, default="none", help="path to pretrained ckpt.")
     parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
+    parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
+    parser.add_argument("--lr", type=float, default=1e-6, help="peak learning rate.")
+    parser.add_argument("--epoch", type=int, default=30, help="number of epoches.")
     
     args = parser.parse_args()
     
