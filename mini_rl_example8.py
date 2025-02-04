@@ -125,7 +125,7 @@ def main(args):
     torch.cuda.set_device(local_rank) 
     device = torch.device(f"cuda:{local_rank}") 
     # init distributed process group.
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(minutes=5))    
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(minutes=10))    
     
     dist.barrier()
     #rpc.init_rpc(f"worker-{rank}", rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) # consider 2 nodes, 16 gpus in this example.
@@ -320,6 +320,8 @@ def main(args):
             buffer.push(experience)
             
             if len(buffer) >= buffer_size:
+                dist.barrier()
+                
                 avg_reward = buffer.mean_reward()
                 avg_response_len = buffer.avg_responselen()
 
