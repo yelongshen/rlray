@@ -296,9 +296,9 @@ def main(args):
                 print('\n\n\nreward: **********\n')
                 print(reward)
                 print('\n\ncrits: *******\n')
-                print(crits[0])
+                print(np.mean(crits[0]), crits[0][-1])
                 print('\n\nprobs: *******\n')
-                print(probs[0])
+                print(np.mean(probs[0]))
                 print('\n\n')
 
                 
