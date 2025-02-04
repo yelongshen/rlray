@@ -298,18 +298,18 @@ def main(args):
             # prompt_tokens: List[List[int]],
             all_tokens = []
             all_masks = []
-            all_rewards = []
+            output_rewards = []
             for input_id, output_id in zip(input_ids, outputs):
                 _ids = input_id + output_id 
                 _masks = [0] * len(input_id) + [1] * len(output_id) 
-                _rewards = [0] * (len(_ids)-1) + [reward] 
+                _rewards = [0] * (len(output_id)-1) + [reward] 
                 
                 all_tokens.append(_ids)
                 all_masks.append(_masks)
-                all_rewards.append(_rewards)
+                output_rewards.append(_rewards)
 
             #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>
-            experience = (prompt, response, reward, probs[0], crits[0], all_tokens[0], all_masks[0], all_rewards[0])
+            experience = (prompt, response, reward, probs[0], crits[0], all_tokens[0], all_masks[0], output_rewards[0])
             buffer.push(experience)
             
             
