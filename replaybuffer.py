@@ -138,7 +138,7 @@ class ReplayBuffer:
         dist.all_reduce(_count, op=dist.ReduceOp.SUM)
         _global_mean = _sum / _count
 
-        print('total count of tokens:', _count)
+        print('total count of tokens:', _count, _global_mean)
         _global_mean_value = _global_mean[0].item()
         
         l2_advantages = [(adv - _global_mean_value) ** 2 for adv in full_advantages]
