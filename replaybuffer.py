@@ -137,15 +137,21 @@ class ReplayBuffer:
         dist.all_reduce(_sum, op=dist.ReduceOp.SUM)
         dist.all_reduce(_count, op=dist.ReduceOp.SUM)
         _global_mean = _sum / _count
-        _sq = torch.tensor([np.sum([(adv - _global_mean[0])**2 for adv in full_advantages])], device = device)        
+
+        _global_mean_value = _global_mean[0].item()
+        
+        l2_advantages = [(adv - _global_mean_value) ** 2 for adv in full_advantages]
+        
+        _sq = torch.tensor([np.sum(l2_advantages)], device = device)        
         dist.all_reduce(_sq, op=dist.ReduceOp.SUM)
         _global_variance = _sq / _count
         _global_std = torch.sqrt(_global_variance)
 
+        _global_std_value = _global_std[0].item()
         for d in self.buffer:
             d.normalized_advantages = []
             for adv in d.advantages:
-                d.normalized_advantages.append(adv - _global_mean[0] / _global_std[0])
+                d.normalized_advantages.append( (adv - _global_mean_value) / _global_std_value)
     
     def mean_reward(self):
         rewards = self.get_rewards()
