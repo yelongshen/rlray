@@ -180,6 +180,8 @@ def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device
         mini_policy_loss = mini_policy_loss + _policy_loss.detach() / micro_training_steps
             
         _total_loss.backward()
+        print(' _policy_loss:', _policy_loss, ' , _critic_loss:', _critic_loss, ' , device:', device)
+        
         step = step + 1
         if step % micro_training_steps == 0:
             optimizer.step()
