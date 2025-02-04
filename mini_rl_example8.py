@@ -188,7 +188,7 @@ def main(args):
     vocab_size = llm_config.vocab_size 
     eos_token_id = llm_config.eos_token_id #": 32000,
     
-    llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[rank]) 
+    llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
     print('distributed language model creation.') 
 
     optimizer = torch.optim.AdamW(llm.parameters(), lr=1.0e-6) 
