@@ -123,7 +123,7 @@ class ReplayBuffer:
                 acc_reward = 0
                 d.advantages = []
                 d.returns = []
-                for r, c in zip(reversed(d.seq_rewards), reversed(d.ctits)):
+                for r, c in zip(reversed(d.seq_rewards), reversed(d.crits)):
                     acc_reward = gamma * acc_reward + r 
                     advantage = acc_reward - c
                     d.advantages.insert(0, advantage)
