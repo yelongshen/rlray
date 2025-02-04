@@ -67,6 +67,7 @@ def process_math_answer(response, answers, prompt_type = "v8"):
         
     if match:
         extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
+        
         for ans in answers:
             is_match = compare_math_answers(ans, extracted_answer)
             if is_match:
