@@ -75,6 +75,8 @@ from phimodel import _Phi3ForCausalLM
 
 from replaybuffer import ReplayBuffer, Sample
 
+from ppo import ppo_train 
+
 import torch.nn.functional as F
 
 import datetime
@@ -226,7 +228,7 @@ def main(args):
     buffer = ReplayBuffer(buffer_size)
     ### 
     
-    for epoch in range(0, 1):
+    for epoch in range(0, 10):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         acc_reward = 0
         acc_num = 0
@@ -317,17 +319,19 @@ def main(args):
             experience = Sample(prompt = prompt, response = response, reward = reward, probs = probs[0], crits = crits[0], tokens = all_tokens[0], masks = all_masks[0], seq_rewards = output_rewards[0])
             buffer.push(experience)
             
-            
             if len(buffer) >= buffer_size:
                 avg_reward = buffer.mean_reward()
-                avg_len = buffer.avg_responselen()
-                
-                print('progress: ', batch_idx, ', average_reward: ', avg_reward, ', avg_responselen: ', avg_len , ', rank: ', rank)
+                avg_response_len = buffer.avg_responselen()
 
+                policy_loss_log, critic_loss_log = ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device)
+
+                print('progress: ', batch_idx, ', avg_reward: ', avg_reward, ', avg_response_len: ', avg_response_len , ', rank: ', rank)
+
+                print('policy_loss_log: ', policy_loss_log)
+                print('critic_loss_log: ', critic_loss_log)
                 ## start the model training; 
                 buffer.clear()
                 
-            
         print('final average reward: ', acc_reward / acc_num, '\nacc_num: ',acc_num)
     # one node inference; one node training; as an example; 
     # suppose we use 4 gpus for vllm and 4 gpus 
