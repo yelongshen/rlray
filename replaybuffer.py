@@ -68,7 +68,7 @@ class Sample:
     masks : List[int]
     seq_rewards : List[float]
     advantages : Optional[List[float]] = None
-    returns : Optinal[List[float]] = None
+    returns : Optional[List[float]] = None
 
 # ReplayBuffer 
 class ReplayBuffer:
