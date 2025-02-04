@@ -69,7 +69,7 @@ class Sample:
     seq_rewards : List[float]
     advantages : Optional[List[float]] = None
     returns : Optional[List[float]] = None
-
+    normalized_advantages : Optional[List[float]] = None
 # ReplayBuffer 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -128,7 +128,25 @@ class ReplayBuffer:
                     advantage = acc_reward - c
                     d.advantages.insert(0, advantage)
                     d.returns.insert(0, acc_reward)
-                 
+            
+    def distributed_advantage_norm(self, device):
+        world_size = dist.get_world_size()
+        full_advantages = [adv for dat in self.buffer for adv in dat.advantages]
+        _sum = torch.tensor([np.sum(full_advantages)], device = device)
+        _count = torch.tensor([len(full_advantages)], dtype=torch.float, device = device)
+        dist.all_reduce(_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(_count, op=dist.ReduceOp.SUM)
+        _global_mean = _sum / _count
+        _sq = torch.tensor([np.sum([(adv - _global_mean[0])**2 for adv in full_advantages])], device = device)        
+        dist.all_reduce(_sq, op=dist.ReduceOp.SUM)
+        _global_variance = _sq / _count
+        _global_std = torch.sqrt(_global_variance)
+
+        for d in self.buffer:
+            d.normalized_advantages = []
+            for adv in d.advantages:
+                d.normalized_advantages.append(adv - _global_mean[0] / _global_std[0])
+    
     def mean_reward(self):
         rewards = self.get_rewards()
         return np.mean(rewards)
