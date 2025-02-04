@@ -56,6 +56,19 @@ from collections import deque
 
 import numpy as np
 
+@dataclass
+class Sample:
+    prompt : str
+    response : str
+    reward : float
+    probs : List[float]
+    crits : List[float]
+    tokens : List[int]
+    masks : List[int]
+    seq_rewards : List[float]
+    advantages : List[float]
+    returns : List[float]
+
 # ReplayBuffer 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -95,33 +108,26 @@ class ReplayBuffer:
         with self.lock:
             rewards = []
             for d in self.buffer:
-                prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
-                rewards.append(reward)
+                rewards.append(d.reward)
             return rewards
 
     def calculate_advantage(self, gamma=0.9995):
         with self.lock:
-            full_advantages = []
-            full_returns = []
+            #d.advantages = []
+            #d.returns = [] 
+            #full_advantages = []
+            #full_returns = []
             for d in self.buffer:
-                prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
-
+                #prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
                 acc_reward = 0
-                _advantages = []
-                _returns = []
-                for r, c in zip(reversed(seq_rewards), reversed(ctits)):
+                d.advantages = []
+                d.returns = []
+                for r, c in zip(reversed(d.seq_rewards), reversed(d.ctits)):
                     acc_reward = gamma * acc_reward + r 
                     advantage = acc_reward - c
-                    _advantages.insert(0, advantage)
-                    _returns.insert(0, acc_reward)
-                    
-                full_advantages.append(_advantages)
-                full_returns.append(_returns)
-                
-            return full_advantages, full_returns
-
-    
-            
+                    d.advantages.insert(0, advantage)
+                    d.returns.insert(0, acc_reward)
+                 
     def mean_reward(self):
         rewards = self.get_rewards()
         return np.mean(rewards)
@@ -130,8 +136,8 @@ class ReplayBuffer:
         with self.lock:
             response_len = []
             for d in self.buffer:
-                prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
-                response_len.append(len(probs))
+                #prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
+                response_len.append(len(d.probs))
             return np.mean(response_len)
         
     def z_score_normalization(self):
