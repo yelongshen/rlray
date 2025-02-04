@@ -99,23 +99,6 @@ class ReplayBuffer:
                 rewards.append(reward)
             return rewards
 
-    def compute_gae(self, rewards, values, dones, gamma=0.99, lambda_=0.95):
-        """
-        Compute Generalized Advantage Estimation (GAE).
-        """
-        
-        advantages = torch.zeros_like(rewards)
-        last_advantage = 0
-        for t in reversed(range(len(rewards))):
-            delta = rewards[t] + gamma * values[t + 1] * (1 - dones[t]) - values[t]
-            
-            delta = rewards[t] + gamma * values[t + 1] * (1 - dones[t]) - values[t]
-            advantages[t] = last_advantage =  (rewards[t]- values[t]) + 
-                                              gamma * lambda_ * (1 - dones[t]) * last_advantage +  
-                                              gamma * values[t + 1] * (1 - dones[t]) 
-        returns = advantages + values[:-1]  # Compute targets for value function
-        return advantages, returns
-        
     def calculate_advantage(self, gamma=0.9995):
         with self.lock:
             full_advantages = []
