@@ -100,7 +100,7 @@ from safetensors.torch import load_file
 
 # first process all the wards. 
 
-def train(args, llm, llm_config, optimizer, scheduler, buffer, buffer_size, device):
+def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device):
     llm.train()    
     #critic_loss = 0.0
     #policy_loss = 0.0
