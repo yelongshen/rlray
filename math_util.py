@@ -3,6 +3,9 @@ import math
 import io
 import re
 
+from latex2sympy.latex2sympy2 import latex2sympy
+from math_evaluation import is_equiv
+
 def is_numeric(s):
     """Check if a string is a valid numeric value (integer or float)."""
     try:
@@ -72,7 +75,7 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8"):
         extracted_answer = tokenizer.decode(answer_tokens['input_ids'][0], skip_special_tokens=True)
 
         for ans in answers:
-            is_match = compare_math_answers(ans, extracted_answer)
+            is_match = compare_math_answers(ans, extracted_answer) or is_equiv(ans, extracted_answer)
             if is_match:
                 box_match = 1.0
                 break
