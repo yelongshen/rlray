@@ -1,104 +1,17 @@
-
 import os
 import sys
-
-import torch
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-import torch.distributed.rpc as rpc
-from queue import Queue
-import threading
-import time
-import random
-import argparse
-
-from typing import List, Optional, Tuple, Union
-
-import torch.nn as nn
-
-#from vllm import LLM, SamplingParams
-
-from typing import Any, Dict, Optional
-from concurrent.futures import TimeoutError
-from functools import partial
-#from contextlib import redirect_stdout
-import sys
-
-
-#from datasets import load_dataset
-
-import torch 
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline 
+import io
 import logging
 
-#from peft import LoraConfig
-#from trl import SFTTrainer
-#from transformers import TrainingArguments, BitsAndBytesConfig
-from accelerate import Accelerator
-from torch.utils.data import DataLoader
-#from transformers import AdamW
-#import numpy as np 
-from transformers import get_linear_schedule_with_warmup
-from torch.optim import AdamW
-
-
-import os
-import io
-import pickle
-import traceback
-import copy
-import datetime
-from typing import Any, Dict, Optional
-from concurrent.futures import TimeoutError
-from functools import partial
-from contextlib import redirect_stdout
-import sys
-
-from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel, Phi3Model, Phi3DecoderLayer
-from transformers.models.phi3.configuration_phi3 import Phi3Config
-
-from transformers import AutoConfig
-
+import torch 
 import torch.nn as nn
-import multiprocessing
-
-import signal
-from transformers.activations import ACT2FN
-
-from transformers.modeling_outputs import CausalLMOutputWithPast
-from dataclasses import dataclass
-
-from transformers.cache_utils import Cache, DynamicCache
+import torch.nn.functional as F
+import torch.distributed as dist
+from torch.optim import AdamW
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from phimodel import _Phi3ForCausalLM
-
-import torch.nn.functional as F
-
-import datetime
-
-
-import signal
-import psutil  # To check process status before killing
-
-import concurrent.futures
-from torch.utils.data import DataLoader, Dataset
-import torch.distributed as dist
-
-from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
-
-import re
-
-import random
-
-from collections import deque
-
-from math_util import compare_math_answers, process_math_prompt, process_math_answer
-
-import numpy as np
-
-from safetensors.torch import load_file
-
-# first process all the wards. 
+from replaybuffer import ReplayBuffer, Sample
 
 def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device):
     llm.train()    
