@@ -17,9 +17,7 @@ from functools import partial
 
 from accelerate import Accelerator
 from dataclasses import dataclass
-
 import torch
-import torch.distributed as dist
 
 import numpy as np
 
@@ -43,13 +41,13 @@ class ReplayBuffer:
         self.buffer = deque(maxlen=capacity) # every sample is very different. 
         self.epsilon = 1e-8
         self.alpha = 0.01       
-        self.lock = threading.Lock()
+        #self.lock = threading.Lock()
 
     # experience : #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>
     def push(self, experience):
         """ Add new experience to the buffer """
-        with self.lock:
-            self.buffer.append(experience) 
+        #with self.lock:
+        self.buffer.append(experience) 
             
     def clear(self):
         self.buffer.clear()
@@ -62,40 +60,28 @@ class ReplayBuffer:
         Returns:
             List of popped experiences.
         """
-        with self.lock:
-            batch_size = min(batch_size, len(self.buffer))  # Ensure we don't pop more than available
-            data = [self.buffer.popleft() for _ in range(batch_size)]  # Pop oldest elements
-            return data
+        #with self.lock:
+        batch_size = min(batch_size, len(self.buffer))  # Ensure we don't pop more than available
+        data = [self.buffer.popleft() for _ in range(batch_size)]  # Pop oldest elements
+        return data
         
     def __len__(self):
-        with self.lock:
-            return len(self.buffer)
+        return len(self.buffer)
 
-    def get_rewards(self):
-        with self.lock:
-            rewards = []
-            for d in self.buffer:
-                rewards.append(d.reward)
-            return rewards
-
+        
     def calculate_advantage(self, gamma=0.9995):
-        with self.lock:
-            #d.advantages = []
-            #d.returns = [] 
-            #full_advantages = []
-            #full_returns = []
-            for d in self.buffer:
-                #prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
-                acc_reward = 0
-                d.advantages = []
-                d.returns = []
-                for r, c in zip(reversed(d.seq_rewards), reversed(d.crits)):
-                    acc_reward = gamma * acc_reward + r 
-                    advantage = acc_reward - c
-                    d.advantages.insert(0, advantage)
-                    d.returns.insert(0, acc_reward)
+        for d in self.buffer:
+            #prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
+            acc_reward = 0
+            d.advantages = []
+            d.returns = []
+            for r, c in zip(reversed(d.seq_rewards), reversed(d.crits)):
+                acc_reward = gamma * acc_reward + r 
+                advantage = acc_reward - c
+                d.advantages.insert(0, advantage)
+                d.returns.insert(0, acc_reward)
             
-    def distributed_advantage_norm(self, device):
+    def distributed_advantage_norm(self, device, dist):
         world_size = dist.get_world_size()
         full_advantages = [adv for dat in self.buffer for adv in dat.advantages]
         _sum = torch.tensor([np.sum(full_advantages)], dtype=torch.float, device = device)
@@ -121,21 +107,16 @@ class ReplayBuffer:
                 d.normalized_advantages.append( (adv - _global_mean_value) / (_global_std_value + 1e-2))
     
     def mean_reward(self):
-        rewards = self.get_rewards()
+        rewards = [d.reward for d in self.buffer]
         return np.mean(rewards)
 
     def avg_responselen(self):
-        with self.lock:
-            response_len = []
-            for d in self.buffer:
-                #prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
-                response_len.append(len(d.probs))
-            return np.mean(response_len)
-        
+        response_len = [len(d.probs) for d in self.buffer]
+        return np.mean(response_len)
+            
     def z_score_normalization(self):
         """Standardize rewards using mean and standard deviation."""
-        rewards = self.get_rewards()
-        
+        rewards = [d.reward for d in self.buffer]
         mean = np.mean(rewards)
         std = np.std(rewards) + self.epsilon
         return (rewards - mean) / std
