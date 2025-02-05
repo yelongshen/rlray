@@ -22,9 +22,6 @@ def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device
     # update_step = 0
 
     # processing reward.
-    buffer.calculate_advantage()
-    buffer.distributed_advantage_norm(device)
-  
     # accumulate gradient for the whole batchsize.     
     step = 0
     batch_size = 1
@@ -51,7 +48,7 @@ def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device
       
         # do tokens padding & alignment with batchsize  > 1   
         input_tokens = torch.tensor(input_tokens).to(torch.long).to(device)    
-        old_logprobs = torch.tensor(old_logprobs).to(torch.bfloat16).to(device)
+        old_logprobs = torch.tensor(old_logprobs).to(torch.bfloat16).to(device).detach()
         advantages = torch.tensor(advantages).to(torch.bfloat16).to(device).detach()
         returns = torch.tensor(returns).to(torch.bfloat16).to(device).detach()
         
