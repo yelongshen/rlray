@@ -251,7 +251,7 @@ def main(args):
                 "epoch": epoch,
                 "model_state_dict": llm.module.state_dict(),  # Remove DDP wrapper
             }
-            save_path = f"{args.save_ckpt}/ckpt_{epoch}.pth")
+            save_path = f"{args.save_ckpt}/ckpt_{epoch}.pth"
             torch.save(checkpoint, save_path)
             print(f"Checkpoint saved at: {save_path}")
         # Synchronize all processes to ensure rank 0 saves first
