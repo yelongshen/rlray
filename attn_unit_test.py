@@ -56,6 +56,9 @@ def flash_attention():
 
 o1 = vanilla_attention()
 o2 = flash_attention()
+
+print(o1)
+print(o2)
 assert torch.allclose(o1, o2, atol=1e-4)
 
 #def flash_attn
