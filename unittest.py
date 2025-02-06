@@ -1,7 +1,7 @@
-import torch
 import io
 import os
 
+import torch
 import torch.nn as nn
 from flash_attn import flash_attn_func, flash_attn_varlen_func
 
