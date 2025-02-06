@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from flash_attn import flash_attn_func, flash_attn_varlen_func
 
+import math
 # two usage:
 #    1. query_state.length == key_states.length == value_states.length (attention with sliding_window_size 4) 
 #    2. query_state.length == 1 (or n), while key_states.length == value_states.length = m ( m > n), 
