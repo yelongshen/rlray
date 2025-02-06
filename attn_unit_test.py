@@ -19,9 +19,9 @@ window = 4
 
 device = 'cuda:0'
 
-query = torch.randn(bs, n_head, seq_len, head_dim, device = device)
-key = torch.randn(bs, n_head, seq_len, head_dim, device = device)
-value = torch.randn(bs, n_head, seq_len, head_dim, device = device)
+query = torch.randn(bs, n_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
+key = torch.randn(bs, n_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
+value = torch.randn(bs, n_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
 
 def vanilla_attention():
     attn_weights = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(head_dim)
