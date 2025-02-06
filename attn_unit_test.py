@@ -46,8 +46,13 @@ def flash_attention():
             0,
             softmax_scale=None,
             causal=True)
+    
+    attn_output = attn_output.transpose(1, 2).contiguous()
     print(attn_output.shape)
     return attn_output
+
+#torch.Size([2, 6, 16, 8])
+#torch.Size([2, 16, 6, 8])
 
 o1 = vanilla_attention()
 o2 = flash_attention()
