@@ -35,9 +35,9 @@ def vanilla_attention():
     return attn_output
 
 def flash_attention():
-    f_query = query.transpose(1, 2)
-    f_key = key.transpose(1, 2)
-    f_value = value.transpose(1, 2)
+    f_query = query.transpose(1, 2).contiguous()
+    f_key = key.transpose(1, 2).contiguous()
+    f_value = value.transpose(1, 2).contiguous()
 
     attn_output = flash_attn_func(
             f_query,
@@ -46,6 +46,7 @@ def flash_attention():
             0,
             softmax_scale=None,
             causal=True)
+    print(attn_output.shape)
     return attn_output
 
 o1 = vanilla_attention()
