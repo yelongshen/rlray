@@ -80,8 +80,8 @@ def flash_sliding_attention():
             softmax_scale=None,
             causal=True, 
             window_size=(
-                window,
-                window,
+                window-1,
+                0,
             )
     )
     
