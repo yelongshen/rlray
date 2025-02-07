@@ -51,9 +51,9 @@ def vanilla_sliding_attention():
 
 
 def flash_attention():
-    f_query = query.transpose(1, 2).contiguous()
-    f_key = key.transpose(1, 2).contiguous()
-    f_value = value.transpose(1, 2).contiguous()
+    f_query = query.transpose(1, 2) #.contiguous()
+    f_key = key.transpose(1, 2) #.contiguous()
+    f_value = value.transpose(1, 2) #.contiguous()
 
     attn_output = flash_attn_func(
             f_query,
@@ -68,9 +68,9 @@ def flash_attention():
     return attn_output
     
 def flash_sliding_attention():
-    f_query = query.transpose(1, 2).contiguous()
-    f_key = key.transpose(1, 2).contiguous()
-    f_value = value.transpose(1, 2).contiguous()
+    f_query = query.transpose(1, 2) #.contiguous()
+    f_key = key.transpose(1, 2) #.contiguous()
+    f_value = value.transpose(1, 2) #.contiguous()
 
     attn_output = flash_attn_func(
             f_query,
@@ -85,7 +85,7 @@ def flash_sliding_attention():
             )
     )
     
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.transpose(1, 2) #.contiguous()
     print(attn_output.shape)
     return attn_output
     
