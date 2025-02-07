@@ -94,7 +94,7 @@ def flash_sliding_attention():
             causal=True, 
             window_size=(
                 window-1,
-                0,
+                window-1,
             )
     )
     
@@ -116,7 +116,7 @@ def flash_step_attention():
             causal=True, 
             window_size=(
                 window-1,
-                0,
+                window-1,
             )
     )
     
