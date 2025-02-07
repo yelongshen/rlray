@@ -23,6 +23,10 @@ query = torch.randn(bs, n_head, seq_len, head_dim, dtype = torch.bfloat16, devic
 key = torch.randn(bs, n_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
 value = torch.randn(bs, n_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
 
+a_query = torch.randn(bs, n_head, 1, head_dim, dtype = torch.bfloat16, device = device)
+a_key = torch.randn(bs, n_head, window, head_dim, dtype = torch.bfloat16, device = device)
+a_value = torch.randn(bs, n_head, window, head_dim, dtype = torch.bfloat16, device = device)
+
 def vanilla_attention():
     attn_weights = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(head_dim)
     attention_mask = torch.tril(torch.ones((seq_len, seq_len), device=device))
@@ -45,6 +49,15 @@ def vanilla_sliding_attention():
     
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value.dtype)
     attn_output = torch.matmul(attn_weights, value)
+    
+    print(attn_output.shape)
+    return attn_output
+
+def vanilla_step_attention():
+    attn_weights = torch.matmul(a_query, a_key.transpose(2, 3)) / math.sqrt(head_dim)
+    
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value.dtype)
+    attn_output = torch.matmul(attn_weights, a_value)
     
     print(attn_output.shape)
     return attn_output
@@ -89,6 +102,27 @@ def flash_sliding_attention():
     print(attn_output.shape)
     return attn_output
     
+def flash_step_attention():
+    f_query = a_query.transpose(1, 2) #.contiguous()
+    f_key = a_key.transpose(1, 2) #.contiguous()
+    f_value = a_value.transpose(1, 2) #.contiguous()
+
+    attn_output = flash_attn_func(
+            f_query,
+            f_key,
+            f_value,
+            0,
+            softmax_scale=None,
+            causal=True, 
+            window_size=(
+                window-1,
+                0,
+            )
+    )
+    
+    attn_output = attn_output.transpose(1, 2) #.contiguous()
+    print(attn_output.shape)
+    return attn_output
     
     
 
@@ -99,8 +133,11 @@ def flash_sliding_attention():
 #o1 = vanilla_attention()
 #o2 = flash_attention()
 
-o1 = vanilla_sliding_attention()
-o2 = flash_sliding_attention()
+#o1 = vanilla_sliding_attention()
+#o2 = flash_sliding_attention()
+
+o1 = vanilla_step_attention()
+o2 = flash_step_attention()
 
 print(o1)
 print(o2)
