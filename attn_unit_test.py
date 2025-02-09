@@ -105,11 +105,11 @@ def flash_sliding_attention():
 def flash_step_attention():
     f_query = a_query.transpose(1, 2) #.contiguous()
 
-    m_key = torch.cat([a_key, torch.randn(bs, n_head, 1, head_dim, dtype = torch.bfloat16, device = device)], dim = 2)
-    m_value = torch.cat([a_value, torch.randn(bs, n_head, 1, head_dim, dtype = torch.bfloat16, device = device)], dim = 2)
+    #m_key = torch.cat([a_key, torch.randn(bs, n_head, 1, head_dim, dtype = torch.bfloat16, device = device)], dim = 2)
+    #m_value = torch.cat([a_value, torch.randn(bs, n_head, 1, head_dim, dtype = torch.bfloat16, device = device)], dim = 2)
                        
-    f_key = m_key.transpose(1, 2) #.contiguous()
-    f_value = m_value.transpose(1, 2) #.contiguous()
+    f_key = a_key.transpose(1, 2) #.contiguous()
+    f_value = a_value.transpose(1, 2) #.contiguous()
 
     attn_output = flash_attn_func(
             f_query,
