@@ -10,17 +10,31 @@ import math
 from einops import rearrange, repeat
 import torch.nn.functional as F
 
+from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_conv = d_conv
+        self.expand = expand
+        self.d_inner = int(self.expand * self.d_model)
+        self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
+
+
 
 bs = 2
 seqlen = 16
 
-
+# meta-hyper
 d_model = 6
-d_inner = 12
+d_state = 16
+d_conv = 4
+expand = 2
+
+##### calculate
+d_inner = int(expand * d_model)
+dt_rank = math.ceil(d_model / 2) 
 
 device = 'cuda:0'
-d_conv = 4
-
 
 hidden_states = torch.randn(bs, seqlen, d_model, device = device)
 in_proj = nn.Linear(d_model, d_inner * 2, bias=True, device = device)
@@ -31,8 +45,11 @@ activation = "silu"
 act = nn.SiLU()
 
 
-x_proj = nn.Linear(d_inner, self.dt_rank + self.d_state * 2, bias=False, device=device)
 
+x_proj = nn.Linear(d_inner, dt_rank + d_state * 2, bias=False, device=device)
+
+# bs, d_model * expand, d_conv = 4 
+conv_state = torch.zeros(bs, d_model * expand, d_conv, device = device)
 
 def case1():
     xz = rearrange(
@@ -50,40 +67,60 @@ def case1():
 
     x, z = xz.chunk(2, dim=1)
 
+    # x : bs, d_inner (12), seqlen, 
     # copy the last d_conv x.
     conv_state.copy_(F.pad(x, (d_conv - x.shape[-1], 0)))  # Update state (B D W)
 
+    print('o1 before x.shape',x.shape)
     x = causal_conv1d_fn(
                     x = x, # b, dim, l 
-                    weight = rearrange(self.conv1d.weight, "d 1 w -> d w"),
-                    bias = self.conv1d.bias,
-                    activation = self.activation,
+                    weight = rearrange(conv1d.weight, "d 1 w -> d w"),
+                    bias = conv1d.bias,
+                    activation = activation,
                 )
+    print('o1 after x.shape', x.shape)
+    
     # x = self.act(self.conv1d(x)[..., :seqlen])
     # x : b, dim, l
-    x_dbl = x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
-            
-            dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
-            dt = self.dt_proj.weight @ dt.t()
-            dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
-            B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
-            C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
-
+    #print('x.shape:', x.shape)
     
+    #x_dbl = x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
+
+    #print('x_dbl.shape:', x_dbl.shape)
+
+    return x #x_dbl
+    
+    #        dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+    #        dt = self.dt_proj.weight @ dt.t()
+    #        dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
+    #        B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+    #        C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+
     # if not self.training:
     #     xz = xz.to(torch.float32)
     #A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
-    return x, z
+    #return x, z
 
 def case2():
     xz = in_proj(hidden_states.to(dtype = in_proj.weight.dtype).squeeze(1))  # (B 2D)
-
     #xz = self.in_proj(hidden_states.to(dtype = self.in_proj.weight.dtype).squeeze(1))  # (B 2D)
     x, z = xz.chunk(2, dim=-1)  # (B D)
-
     # x : torch.Size([2, 16, 12])
     # z : torch.Size([2, 16, 12])
-    return x, z 
+    # x: bs, seqlen, dim 
+    print('o2 before x.shape',x.shape)
+    x = causal_conv1d_update(
+                x,
+                conv_state,
+                rearrange(conv1d.weight, "d 1 w -> d w"),
+                conv1d.bias,
+                activation)
+
+    print('o2 after x.shape', x.shape)
+    #x_db = self.x_proj(x)  # (B dt_rank+2*d_state)
+
+    return x
+    #return x, z 
     #x, z = xz.chunk(2, dim=-1)  # (B D)
     #if have conv_state
     #x = causal_conv1d_update(
@@ -95,8 +132,8 @@ def case2():
     #        )
     
 
-x1, z1 = case1()
-x2, z2 = case2()
+x1 = case1()
+x2 = case2()
 
 print(x1.shape)
 print(x1)
@@ -104,12 +141,6 @@ print(x1)
 print(x2.shape)
 print(x2)
 
-print(z1.shape)
-print(z1)
-
-print(z2.shape)
-print(z2)
 
 assert torch.allclose(x1, x2, atol=1e-2)
-assert torch.allclose(z1, z2, atol=1e-2)
 
