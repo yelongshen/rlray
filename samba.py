@@ -685,41 +685,10 @@ class _Phi3Model(_Phi3PreTrainedModel):
         #output_attentions: Optional[bool] = None,
         #output_hidden_states: Optional[bool] = None,
         #return_dict: Optional[bool] = None,
-    ):  # -> Union[Tuple, BaseModelOutputWithPast]:
-        #output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        #output_hidden_states = (
-        #    output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        #)
-        #use_cache = use_cache if use_cache is not None else self.config.use_cache
-        #return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        # retrieve input_ids and inputs_embeds
-        #if input_ids is not None and inputs_embeds is not None:
-        #    raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-        #elif input_ids is not None:
-        #    batch_size, seq_length = input_ids.shape[:2]
-        #elif inputs_embeds is not None:
-        #    batch_size, seq_length = inputs_embeds.shape[:2]
-        #else:
-        #    raise ValueError("You have to specify either input_ids or inputs_embeds")
+    ):  
         batch_size, seq_length = input_ids.shape[:2]
         past_key_values_length = 0 if past_key_values is None else past_key_values[0][0].shape[-2]
 
-        #if past_key_values is None:
-        #else:    
-        #    past_key_values_length = past_key_values[0][0].shape[-2] #.get_usable_length(seq_length)
-        
-        #if self.gradient_checkpointing and self.training:
-        #    if use_cache:
-        #        logger.warning_once(
-        #            "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
-        #        )
-        #        use_cache = False
-        #if use_cache:
-        #    use_legacy_cache = not isinstance(past_key_values, Cache)
-        #    if use_legacy_cache:
-        #        past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-        #    past_key_values_length = past_key_values.get_usable_length(seq_length)
         device = input_ids.device
         
         if position_ids is None:
@@ -848,110 +817,57 @@ def sample_top_p(probs, top_p=0.9):
     # Sample from the filtered distribution
     sampled_token = torch.multinomial(normalized_probs, num_samples=1)
     return sampled_token
-    
-# PP, TP, DP
-# Causal Large Language Model 
-class _Phi3ForCausalLM(_Phi3PreTrainedModel):
+
+
+
+class _SambaForCausalLM(_SambaPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-        self.model = _Phi3Model(config)
+        self.model = _SambaModel(config)
         self.vocab_size = config.vocab_size
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=True)
 
-        # model archiecture: connect from intermedia layer possibily.
         self.critic_head = nn.Linear(config.hidden_size, 1, bias=True)
         nn.init.xavier_normal_(self.critic_head.weight)
         nn.init.constant_(self.critic_head.bias, -8.0)
-        
-        
-        self._tied_weights_keys = ["lm_head.weight"]
-        # Initialize weights and apply final processing
-        #self.post_init()
-        self.criterion = nn.CrossEntropyLoss(ignore_index=-1)
 
-    # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.get_input_embeddings
+        self._tied_weights_keys = ["lm_head.weight"]
+        self.criterion = nn.CrossEntropyLoss(ignore_index=-1)
+        
     def get_input_embeddings(self):
         return self.model.embed_tokens
 
-    # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.set_input_embeddings
     def set_input_embeddings(self, value):
         self.model.embed_tokens = value
 
-    # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.get_output_embeddings
     def get_output_embeddings(self):
         return self.lm_head
 
-    # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.set_output_embeddings
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
-    # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.set_decoder
     def set_decoder(self, decoder):
         self.model = decoder
 
-    # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.get_decoder
     def get_decoder(self):
         return self.model
 
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        ##  attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[Tuple[torch.FloatTensor, torch.FloatTensor]]] = None,
-        ## inputs_embeds: Optional[torch.FloatTensor] = None,
+        past_caches : = None, # Optional[List[Tuple[torch.FloatTensor, torch.FloatTensor]]] = None,
         labels: Optional[torch.LongTensor] = None,
-        ## use_cache: Optional[bool] = None,
-        ## output_attentions: Optional[bool] = None,
-        ## output_hidden_states: Optional[bool] = None,
-        ## return_dict: Optional[bool] = None,
-        ## cache_position: Optional[torch.LongTensor] = None,
         num_logits_to_keep: int = 0,
-        ## **loss_kwargs,
+        inference_mode = False
     ):
-        r"""
-        Args:
-            labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-                Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
-                config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
-                (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
-
-            num_logits_to_keep (`int`, *optional*):
-                Calculate logits for the last `num_logits_to_keep` tokens. If `0`, calculate logits for all
-                `input_ids` (special case). Only last token logits are needed for generation, and calculating them only for that
-                token can save memory, which becomes pretty significant for long sequences or large vocabulary size.
-
-        Returns:
-
-        Example:
-
-        ```python
-        >>> from transformers import AutoTokenizer, Phi3ForCausalLM
-
-        >>> model = Phi3ForCausalLM.from_pretrained("microsoft/phi-3-mini-4k-instruct")
-        >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/phi-3-mini-4k-instruct")
-
-        >>> prompt = "This is an example script ."
-        >>> inputs = tokenizer(prompt, return_tensors="pt")
-
-        >>> # Generate
-        >>> generate_ids = model.generate(inputs.input_ids, max_length=30)
-        >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-        'This is an example script .\n Certainly! Below is a sample script that demonstrates a simple task, such as calculating the sum'
-        ```"""
-
-        #output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        #output_hidden_states = (
-        #    output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        #)
-        #return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        hidden_states, next_decoder_cache = self.model(
+        # position_ids = None for the prefilling / training phase;
+        # position_ids = 
+        hidden_states, next_caches = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
-            past_key_values=past_key_values
+            past_caches=past_caches
         )
 
         #hidden_states = outputs[0]
@@ -984,6 +900,7 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         #    hidden_states=outputs.hidden_states,
         #    attentions=outputs.attentions,
         #)
+
     
     @torch.inference_mode()
     def generate(
