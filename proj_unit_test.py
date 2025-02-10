@@ -27,12 +27,12 @@ in_proj = nn.Linear(d_model, d_inner * 2, bias=True, device = device)
 
 def case1():
     xz = rearrange(
-            in_proj.weight @ rearrange(hidden_states.to(dtype = self.in_proj.weight.dtype), "b l d -> d (b l)"),
+            in_proj.weight @ rearrange(hidden_states.to(dtype = in_proj.weight.dtype), "b l d -> d (b l)"),
             "d (b l) -> b d l",
             l=seqlen,
         )
     if in_proj.bias is not None:
-        xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+        xz = xz + rearrange(in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
 
     # if not self.training:
     #     xz = xz.to(torch.float32)
@@ -40,7 +40,7 @@ def case1():
     return xz
 
 def case2():
-    xz = in_proj(hidden_states.to(dtype = self.in_proj.weight.dtype).squeeze(1))  # (B 2D)
+    xz = in_proj(hidden_states.to(dtype = in_proj.weight.dtype).squeeze(1))  # (B 2D)
     return xz
 
 
