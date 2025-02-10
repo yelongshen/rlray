@@ -32,7 +32,7 @@ hidden_states = torch.randn(bs, seqlen, d_model, device = device)
 in_proj = nn.Linear(d_model, d_inner * 2, bias=True, device = device)
 
 #x = 
-conv1d = nn.Conv1d(in_channels=d_inner, out_channels=d_inner, bias=True, kernel_size=d_conv, groups=self.d_inner, padding=d_conv - 1, device=device)
+conv1d = nn.Conv1d(in_channels=d_inner, out_channels=d_inner, bias=True, kernel_size=d_conv, groups=d_inner, padding=d_conv - 1, device=device)
 activation = "silu"
 act = nn.SiLU()
 
