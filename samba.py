@@ -10,32 +10,17 @@ import torch.nn.functional as F
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-from transformers.utils import (
-    add_code_sample_docstrings,
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    is_flash_attn_2_available,
-    is_flash_attn_greater_or_equal_2_10,
-    logging,
-    replace_return_docstrings,
-)
 
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.models.phi3.configuration_phi3 import Phi3Config
-
-from transformers.utils import (
-    is_flash_attn_2_available,
-    is_flash_attn_greater_or_equal_2_10,
-    logging,
-)
 
 import checkpoint as user_checkpoint
 from torch.utils.checkpoint import checkpoint
 
 logger = logging.get_logger(__name__)
 
-
+import selective_scan_cuda
 
 try:
     from flash_attn import flash_attn_func, flash_attn_varlen_func
@@ -127,44 +112,6 @@ class _Phi3RotaryEmbedding(nn.Module):
             emb = torch.cat((freqs, freqs), dim=-1)
             cos = emb.cos()
             sin = emb.sin()
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
-
-class _Phi3LongRoPEScaledRotaryEmbedding(_Phi3RotaryEmbedding):
-    def __init__(self, dim, config, device=None):
-        super().__init__(dim, config.max_position_embeddings, config.rope_theta, device)
-
-        self.short_factor = config.rope_scaling["short_factor"]
-        self.long_factor = config.rope_scaling["long_factor"]
-        self.original_max_position_embeddings = config.original_max_position_embeddings
-
-    @torch.no_grad()
-    def forward(self, x, position_ids):
-        seq_len = torch.max(position_ids) + 1
-        if seq_len > self.original_max_position_embeddings:
-            ext_factors = torch.tensor(self.long_factor, dtype=torch.float32, device=x.device)
-        else:
-            ext_factors = torch.tensor(self.short_factor, dtype=torch.float32, device=x.device)
-
-        inv_freq_shape = torch.arange(0, self.dim, 2, dtype=torch.int64, device=x.device).float() / self.dim
-        self.inv_freq = 1.0 / (ext_factors * self.base**inv_freq_shape)
-
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
-        position_ids_expanded = position_ids[:, None, :].float()
-
-        # Force float32 since bfloat16 loses precision on long contexts
-        # See https://github.com/huggingface/transformers/pull/29285
-        device_type = x.device.type
-        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            scale = self.max_position_embeddings / self.original_max_position_embeddings
-            if scale <= 1.0:
-                scaling_factor = 1.0
-            else:
-                scaling_factor = math.sqrt(1 + math.log(scale) / math.log(self.original_max_position_embeddings))
-            cos = emb.cos() * scaling_factor
-            sin = emb.sin() * scaling_factor
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 # Copied from transformers.models.llama.modeling_llama.rotate_half
@@ -568,65 +515,545 @@ _PHI3_ATTENTION_CLASSES = {
 }
 
 
-class _Phi3DecoderLayer(nn.Module):
-    def __init__(self, config: Phi3Config, layer_idx: int):
+
+
+class MambaInnerFn(torch.autograd.Function):
+    @staticmethod
+    @custom_fwd
+    def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+                out_proj_weight, out_proj_bias,
+                A, B=None, C=None, D=None, delta_bias=None, B_proj_bias=None,
+                C_proj_bias=None, mask=None, delta_softplus=True, checkpoint_lvl=1,):
+        """
+             xz: (batch, dim, seqlen)
+        """
+        assert causal_conv1d_cuda is not None, "causal_conv1d_cuda is not available. Please install causal-conv1d."
+        assert checkpoint_lvl in [0, 1]
+        L = xz.shape[-1]
+        delta_rank = delta_proj_weight.shape[1]
+        d_state = A.shape[-1] * (1 if not A.is_complex() else 2)
+        if torch.is_autocast_enabled():
+            x_proj_weight = x_proj_weight.to(dtype=torch.get_autocast_gpu_dtype())
+            delta_proj_weight = delta_proj_weight.to(dtype=torch.get_autocast_gpu_dtype())
+            out_proj_weight = out_proj_weight.to(dtype=torch.get_autocast_gpu_dtype())
+            out_proj_bias = (out_proj_bias.to(dtype=torch.get_autocast_gpu_dtype())
+                             if out_proj_bias is not None else None)
+        if xz.stride(-1) != 1:
+            xz = xz.contiguous()
+        conv1d_weight = rearrange(conv1d_weight, "d 1 w -> d w")
+        x, z = xz.chunk(2, dim=1)
+        if mask is not None:
+            x = x * mask.unsqueeze(1)
+        conv1d_bias = conv1d_bias.contiguous() if conv1d_bias is not None else None
+        conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(
+            x, conv1d_weight, conv1d_bias, None, None, None, True
+        )
+        if mask is not None:
+            conv1d_out = conv1d_out * mask.unsqueeze(1)
+        # print(mask[0,:])
+        # We're being very careful here about the layout, to avoid extra transposes.
+        # We want delta to have d as the slowest moving dimension
+        # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
+        x_dbl = F.linear(rearrange(conv1d_out, 'b d l -> (b l) d'), x_proj_weight)  # (bl d)
+        delta = rearrange(delta_proj_weight @ x_dbl[:, :delta_rank].t(), "d (b l) -> b d l", l = L)
+        ctx.is_variable_B = B is None
+        ctx.is_variable_C = C is None
+        ctx.B_proj_bias_is_None = B_proj_bias is None
+        ctx.C_proj_bias_is_None = C_proj_bias is None
+        if B is None:  # variable B
+            B = x_dbl[:, delta_rank:delta_rank + d_state]  # (bl dstate)
+            if B_proj_bias is not None:
+                B = B + B_proj_bias.to(dtype=B.dtype)
+            if not A.is_complex():
+                # B = rearrange(B, "(b l) dstate -> b dstate l", l=L).contiguous()
+                B = rearrange(B, "(b l) dstate -> b 1 dstate l", l=L).contiguous()
+            else:
+                B = rearrange(B, "(b l) (dstate two) -> b 1 dstate (l two)", l=L, two=2).contiguous()
+        else:
+            if B.stride(-1) != 1:
+                B = B.contiguous()
+        if C is None:  # variable C
+            C = x_dbl[:, -d_state:]  # (bl dstate)
+            if C_proj_bias is not None:
+                C = C + C_proj_bias.to(dtype=C.dtype)
+            if not A.is_complex():
+                # C = rearrange(C, "(b l) dstate -> b dstate l", l=L).contiguous()
+                C = rearrange(C, "(b l) dstate -> b 1 dstate l", l=L).contiguous()
+            else:
+                C = rearrange(C, "(b l) (dstate two) -> b 1 dstate (l two)", l=L, two=2).contiguous()
+        else:
+            if C.stride(-1) != 1:
+                C = C.contiguous()
+        if D is not None:
+            D = D.contiguous()
+        out, scan_intermediates, out_z = selective_scan_cuda.fwd(
+            conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus
+        )
+        ctx.delta_softplus = delta_softplus
+        ctx.out_proj_bias_is_None = out_proj_bias is None
+        ctx.checkpoint_lvl = checkpoint_lvl
+        if checkpoint_lvl >= 1:  # Will recompute conv1d_out and delta in the backward pass
+            conv1d_out, delta = None, None
+        ctx.save_for_backward(xz, conv1d_weight, conv1d_bias, x_dbl, x_proj_weight,
+                              delta_proj_weight, out_proj_weight, conv1d_out, delta,
+                              A, B, C, D, delta_bias, scan_intermediates, out)
+        return F.linear(rearrange(out_z, "b d l -> b l d"), out_proj_weight, out_proj_bias)
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, dout):
+        # dout: (batch, seqlen, dim)
+        assert causal_conv1d_cuda is not None, "causal_conv1d_cuda is not available. Please install causal-conv1d."
+        (xz, conv1d_weight, conv1d_bias, x_dbl, x_proj_weight, delta_proj_weight, out_proj_weight,
+         conv1d_out, delta, A, B, C, D, delta_bias, scan_intermediates, out) = ctx.saved_tensors
+        L = xz.shape[-1]
+        delta_rank = delta_proj_weight.shape[1]
+        d_state = A.shape[-1] * (1 if not A.is_complex() else 2)
+        x, z = xz.chunk(2, dim=1)
+        if dout.stride(-1) != 1:
+            dout = dout.contiguous()
+        if ctx.checkpoint_lvl == 1:
+            conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(
+                x, conv1d_weight, conv1d_bias, None, None, None, True
+            )
+            delta = rearrange(delta_proj_weight @ x_dbl[:, :delta_rank].t(),
+                              "d (b l) -> b d l", l = L)
+        # The kernel supports passing in a pre-allocated dz (e.g., in case we want to fuse the
+        # backward of selective_scan_cuda with the backward of chunk).
+        dxz = torch.empty_like(xz)  # (batch, dim, seqlen)
+        dx, dz = dxz.chunk(2, dim=1)
+        dout = rearrange(dout, "b l e -> e (b l)")
+        dout_y = rearrange(out_proj_weight.t() @ dout, "d (b l) -> b d l", l=L)
+        dconv1d_out, ddelta, dA, dB, dC, dD, ddelta_bias, dz, out_z = selective_scan_cuda.bwd(
+            conv1d_out, delta, A, B, C, D, z, delta_bias, dout_y, scan_intermediates, out, dz,
+            ctx.delta_softplus,
+            True  # option to recompute out_z
+        )
+        dout_proj_weight = torch.einsum("eB,dB->ed", dout, rearrange(out_z, "b d l -> d (b l)"))
+        dout_proj_bias = dout.sum(dim=(0, 1)) if not ctx.out_proj_bias_is_None else None
+        dD = dD if D is not None else None
+        dx_dbl = torch.empty_like(x_dbl)
+        dB_proj_bias = None
+        if ctx.is_variable_B:
+            if not A.is_complex():
+                dB = rearrange(dB, "b 1 dstate l -> (b l) dstate").contiguous()
+            else:
+                dB = rearrange(dB, "b 1 dstate (l two) -> (b l) (dstate two)", two=2).contiguous()
+            dB_proj_bias = dB.sum(0) if not ctx.B_proj_bias_is_None else None
+            dx_dbl[:, delta_rank:delta_rank + d_state] = dB  # (bl d)
+            dB = None
+        dC_proj_bias = None
+        if ctx.is_variable_C:
+            if not A.is_complex():
+                dC = rearrange(dC, "b 1 dstate l -> (b l) dstate").contiguous()
+            else:
+                dC = rearrange(dC, "b 1 dstate (l two) -> (b l) (dstate two)", two=2).contiguous()
+            dC_proj_bias = dC.sum(0) if not ctx.C_proj_bias_is_None else None
+            dx_dbl[:, -d_state:] = dC  # (bl d)
+            dC = None
+        ddelta = rearrange(ddelta, "b d l -> d (b l)")
+        ddelta_proj_weight = torch.einsum("dB,Br->dr", ddelta, x_dbl[:, :delta_rank])
+        dx_dbl[:, :delta_rank] = torch.einsum("dB,dr->Br", ddelta, delta_proj_weight)
+        dconv1d_out = rearrange(dconv1d_out, "b d l -> d (b l)")
+        dx_proj_weight = torch.einsum("Br,Bd->rd", dx_dbl, rearrange(conv1d_out, "b d l -> (b l) d"))
+        dconv1d_out = torch.addmm(dconv1d_out, x_proj_weight.t(), dx_dbl.t(), out=dconv1d_out)
+        dconv1d_out = rearrange(dconv1d_out, "d (b l) -> b d l", b=x.shape[0], l=x.shape[-1])
+        # The kernel supports passing in a pre-allocated dx (e.g., in case we want to fuse the
+        # backward of conv1d with the backward of chunk).
+        dx, dconv1d_weight, dconv1d_bias, *_ = causal_conv1d_cuda.causal_conv1d_bwd(
+            x, conv1d_weight, conv1d_bias, dconv1d_out, None, None, None, dx, False, True
+        )
+        dconv1d_bias = dconv1d_bias if conv1d_bias is not None else None
+        dconv1d_weight = rearrange(dconv1d_weight, "d w -> d 1 w")
+        return (dxz, dconv1d_weight, dconv1d_bias, dx_proj_weight, ddelta_proj_weight,
+                dout_proj_weight, dout_proj_bias,
+                dA, dB, dC, dD,
+                ddelta_bias if delta_bias is not None else None,
+                dB_proj_bias, dC_proj_bias, None, None)
+
+
+def mamba_inner_fn(
+    xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+    out_proj_weight, out_proj_bias,
+    A, B=None, C=None, D=None, delta_bias=None, B_proj_bias=None,
+    C_proj_bias=None, mask=None, delta_softplus=True
+):
+    return MambaInnerFn.apply(xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+                              out_proj_weight, out_proj_bias,
+                              A, B, C, D, delta_bias, B_proj_bias, C_proj_bias, mask, delta_softplus)
+
+class SelectiveScanFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=False,
+                return_last_state=False):
+        if u.stride(-1) != 1:
+            u = u.contiguous()
+        if delta.stride(-1) != 1:
+            delta = delta.contiguous()
+        if D is not None:
+            D = D.contiguous()
+        if B.stride(-1) != 1:
+            B = B.contiguous()
+        if C.stride(-1) != 1:
+            C = C.contiguous()
+        if z is not None and z.stride(-1) != 1:
+            z = z.contiguous()
+        if B.dim() == 3:
+            B = rearrange(B, "b dstate l -> b 1 dstate l")
+            ctx.squeeze_B = True
+        if C.dim() == 3:
+            C = rearrange(C, "b dstate l -> b 1 dstate l")
+            ctx.squeeze_C = True
+        out, x, *rest = selective_scan_cuda.fwd(u, delta, A, B, C, D, z, delta_bias, delta_softplus)
+        ctx.delta_softplus = delta_softplus
+        ctx.has_z = z is not None
+        last_state = x[:, :, -1, 1::2]  # (batch, dim, dstate)
+        if not ctx.has_z:
+            ctx.save_for_backward(u, delta, A, B, C, D, delta_bias, x)
+            return out if not return_last_state else (out, last_state)
+        else:
+            ctx.save_for_backward(u, delta, A, B, C, D, z, delta_bias, x, out)
+            out_z = rest[0]
+            return out_z if not return_last_state else (out_z, last_state)
+
+    @staticmethod
+    def backward(ctx, dout, *args):
+        if not ctx.has_z:
+            u, delta, A, B, C, D, delta_bias, x = ctx.saved_tensors
+            z = None
+            out = None
+        else:
+            u, delta, A, B, C, D, z, delta_bias, x, out = ctx.saved_tensors
+        if dout.stride(-1) != 1:
+            dout = dout.contiguous()
+        # The kernel supports passing in a pre-allocated dz (e.g., in case we want to fuse the
+        # backward of selective_scan_cuda with the backward of chunk).
+        # Here we just pass in None and dz will be allocated in the C++ code.
+        du, ddelta, dA, dB, dC, dD, ddelta_bias, *rest = selective_scan_cuda.bwd(
+            u, delta, A, B, C, D, z, delta_bias, dout, x, out, None, ctx.delta_softplus,
+            False  # option to recompute out_z, not used here
+        )
+        dz = rest[0] if ctx.has_z else None
+        dB = dB.squeeze(1) if getattr(ctx, "squeeze_B", False) else dB
+        dC = dC.squeeze(1) if getattr(ctx, "squeeze_C", False) else dC
+        return (du, ddelta, dA, dB, dC,
+                dD if D is not None else None,
+                dz,
+                ddelta_bias if delta_bias is not None else None,
+                None,
+                None)
+
+
+def selective_scan_fn(u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=False,
+                     return_last_state=False):
+    """if return_last_state is True, returns (out, last_state)
+    last_state has shape (batch, dim, dstate). Note that the gradient of the last state is
+    not considered in the backward pass.
+    """
+    return SelectiveScanFn.apply(u, delta, A, B, C, D, z, delta_bias, delta_softplus, return_last_state)
+                         
+
+class _Phi3Mamba(nn.Module):
+    def __init__(self, d_model, d_state=16, d_conv=4, expand=2, dt_rank="auto", dt_min=0.001, dt_max=0.1,
+        dt_init="random", dt_scale=1.0, dt_init_floor=1e-4, conv_bias=True, bias=False, use_fast_path=True, layer_idx=None, device=None, dtype=None,
+    ):
+        factory_kwargs = {"dtype": dtype}
+        super().__init__()
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_conv = d_conv
+        self.expand = expand
+        self.d_inner = int(self.expand * self.d_model)
+        self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
+        self.use_fast_path = use_fast_path
+        self.layer_idx = layer_idx
+
+        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs)
+
+        self.conv1d = nn.Conv1d(
+            in_channels=self.d_inner,
+            out_channels=self.d_inner,
+            bias=conv_bias,
+            kernel_size=d_conv,
+            groups=self.d_inner,
+            padding=d_conv - 1,
+            **factory_kwargs,
+        )
+
+        self.activation = "silu"
+        self.act = nn.SiLU()
+
+        self.x_proj = nn.Linear(
+            self.d_inner, self.dt_rank + self.d_state * 2, bias=False, **factory_kwargs
+        )
+        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True, **factory_kwargs)
+
+        # Initialize special dt projection to preserve variance at initialization
+        dt_init_std = self.dt_rank**-0.5 * dt_scale
+        if dt_init == "constant":
+            nn.init.constant_(self.dt_proj.weight, dt_init_std)
+        elif dt_init == "random":
+            nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
+        else:
+            raise NotImplementedError
+        # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
+        self.dt_proj.bias._no_reinit = True
+
+        # S4D real initialization
+        A = repeat(
+            torch.arange(1, self.d_state + 1, dtype=torch.float32),
+            "n -> d n",
+            d=self.d_inner,
+        ).contiguous()
+        A_log = torch.log(A)  # Keep A_log in fp32
+        self.A_log = nn.Parameter(A_log)
+        # D "skip" parameter
+        self.D = nn.Parameter(torch.ones(self.d_inner))  # Keep in fp32
+        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
+
+    def forward(self, hidden_states, inference_params=None, mask= None):
+        """
+        hidden_states: (B, L, D)
+        Returns: same shape as hidden_states
+        """
+        batch, seqlen, dim = hidden_states.shape
+        # print(hidden_states.shape,mask)
+        # print(inference_params)
+
+        
+        conv_state, ssm_state = None, None
+        if inference_params is not None:
+            conv_state, ssm_state = self._get_states_from_cache(inference_params, batch)
+            if hidden_states.shape[1] == 1: #inference_params.get_seq_length(self.layer_idx) > 0:
+                # The states are updated inplace
+                out, _, _ = self.step(hidden_states, conv_state, ssm_state)
+                return out
+
+        # We do matmul and transpose BLH -> HBL at the same time
+        xz = rearrange(
+            self.in_proj.weight @ rearrange(hidden_states.to(dtype = self.in_proj.weight.dtype), "b l d -> d (b l)"),
+            "d (b l) -> b d l",
+            l=seqlen,
+        )
+        if self.in_proj.bias is not None:
+            xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+
+        # if not self.training:
+        #     xz = xz.to(torch.float32)
+        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+        # In the backward pass we write dx and dz next to each other to avoid torch.cat
+        if self.use_fast_path and inference_params is None:  # Doesn't support outputting the states
+            out = mamba_inner_fn(
+                xz,
+                self.conv1d.weight,
+                self.conv1d.bias,
+                self.x_proj.weight,
+                self.dt_proj.weight,
+                self.out_proj.weight,
+                self.out_proj.bias,
+                A,
+                None,  # input-dependent B
+                None,  # input-dependent C
+                self.D.float(),
+                delta_bias=self.dt_proj.bias.float(),
+                mask=mask,
+                delta_softplus=True,
+            )
+        else:
+            x, z = xz.chunk(2, dim=1)
+            # #print(x.shape,mask.shape)
+            if mask is not None:
+                x = x * mask.unsqueeze(1)
+            # Compute short convolution
+            if conv_state is not None:
+                # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
+                # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
+                conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W)
+            if causal_conv1d_fn is None:
+                x = self.act(self.conv1d(x)[..., :seqlen])
+            else:
+                assert self.activation in ["silu", "swish"]
+                x = causal_conv1d_fn(
+                    x=x,
+                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                    bias=self.conv1d.bias,
+                    activation=self.activation,
+                )
+            if mask is not None:
+                x = x * mask.unsqueeze(1)
+            # print(mask[0,:])
+            # We're careful here about the layout, to avoid extra transposes.
+            # We want dt to have d as the slowest moving dimension
+            # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
+            x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
+            dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+            dt = self.dt_proj.weight @ dt.t()
+            dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
+            B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+            C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+            assert self.activation in ["silu", "swish"]
+            y = selective_scan_fn(
+                x,
+                dt,
+                A,
+                B,
+                C,
+                self.D.float(),
+                z=z,
+                delta_bias=self.dt_proj.bias.float(),
+                delta_softplus=True,
+                return_last_state=ssm_state is not None,
+            )
+            if ssm_state is not None:
+                y, last_state = y
+                ssm_state.copy_(last_state)
+            y = rearrange(y, "b d l -> b l d")
+            out = self.out_proj(y)
+        return out
+
+    def step(self, hidden_states, conv_state, ssm_state):
+        dtype = hidden_states.dtype
+        assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
+        xz = self.in_proj(hidden_states.to(dtype = self.in_proj.weight.dtype).squeeze(1))  # (B 2D)
+        x, z = xz.chunk(2, dim=-1)  # (B D)
+
+        # Conv step
+        if causal_conv1d_update is None:
+            conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
+            conv_state[:, :, -1] = x
+            x = torch.sum(conv_state * rearrange(self.conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
+            if self.conv1d.bias is not None:
+                x = x + self.conv1d.bias
+            x = self.act(x).to(dtype=dtype)
+        else:
+            x = causal_conv1d_update(
+                x,
+                conv_state,
+                rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                self.conv1d.bias,
+                self.activation,
+            )
+
+        x_db = self.x_proj(x)  # (B dt_rank+2*d_state)
+        dt, B, C = torch.split(x_db, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        # Don't add dt_bias here
+        dt = F.linear(dt, self.dt_proj.weight)  # (B d_inner)
+        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+
+        # SSM step
+        if selective_state_update is None:
+            # Discretize A and B
+            dt = F.softplus(dt + self.dt_proj.bias.to(dtype=dt.dtype))
+            dA = torch.exp(torch.einsum("bd,dn->bdn", dt, A))
+            dB = torch.einsum("bd,bn->bdn", dt, B)
+            ssm_state.copy_(ssm_state * dA + rearrange(x, "b d -> b d 1") * dB)
+            y = torch.einsum("bdn,bn->bd", ssm_state.to(dtype), C)
+            y = y + self.D.to(dtype) * x
+            y = y * self.act(z)  # (B D)
+        else:
+            y = selective_state_update(
+                ssm_state, x, dt, A, B, C, self.D, z=z, dt_bias=self.dt_proj.bias, dt_softplus=True
+            )
+
+        out = self.out_proj(y)
+        return out.unsqueeze(1), conv_state, ssm_state
+
+    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
+        device = self.out_proj.weight.device
+        conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
+        conv_state = torch.zeros(
+            batch_size, self.d_model * self.expand, self.d_conv, device=device, dtype=conv_dtype
+        )
+        ssm_dtype = self.dt_proj.weight.dtype if dtype is None else dtype
+        # ssm_dtype = torch.float32
+        ssm_state = torch.zeros(
+            batch_size, self.d_model * self.expand, self.d_state, device=device, dtype=ssm_dtype
+        )
+        return conv_state, ssm_state
+
+    def _get_states_from_cache(self, inference_params, batch_size, initialize_states=False):
+        assert self.layer_idx is not None
+        if len(inference_params) <= self.layer_idx:
+            conv_state = torch.zeros(
+                batch_size,
+                self.d_model * self.expand,
+                self.d_conv,
+                device=self.conv1d.weight.device,
+                dtype=self.conv1d.weight.dtype,
+            )
+            ssm_state = torch.zeros(
+                batch_size,
+                self.d_model * self.expand,
+                self.d_state,
+                device=self.dt_proj.weight.device,
+                dtype=self.dt_proj.weight.dtype,
+                # dtype=torch.float32,
+            )
+            inference_params.update(conv_state, ssm_state, self.layer_idx)
+        else:
+            #print(inference_params.max_batch_size)
+            # TODO: What if batch size changes between generation, and we reuse the same states?
+            # batch_start = inference_params.batch_size_offset
+            # batch_end = batch_start + batch_size
+            # assert batch_end <= inference_params.key_value_memory_dict[self.layer_idx][0].shape[0]
+            # conv_state = inference_params.key_value_memory_dict[self.layer_idx][0][batch_start:batch_end, ...]
+            # ssm_state = inference_params.key_value_memory_dict[self.layer_idx][1][batch_start:batch_end, ...]
+            conv_state, ssm_state = inference_params[self.layer_idx]         
+            if initialize_states:
+                conv_state.zero_()
+                ssm_state.zero_()
+        return conv_state, ssm_state
+
+
+
+class _SambaDecoderLayer(nn.Module):
+    def __init__(self, config, layer_idx: int):
         super().__init__()
         self.config = config
-        #print('config._attn_implementation', config._attn_implementation)
-        self.self_attn = _Phi3FlashAttention2(config, layer_idx=layer_idx) 
-        # _PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
-
-        self.mlp = _Phi3MLP(config)
-        self.input_layernorm = _Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.mlp = _SambaMLP(config)
+        self.input_layernorm = PHI_NORM_CLASS(config.hidden_size, eps=config.layer_norm_eps)
+        self.use_mamba = config.mb_per_layer > 0 and layer_idx % config.mb_per_layer == 0        
+        if self.use_mamba:
+            factory_kwargs = {"dtype": torch.float32}
+            self.attn = _Phi3Mamba(config.hidden_size, layer_idx=layer_idx, **factory_kwargs)
+        else:
+            self.attn = PHI_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
 
         self.resid_attn_dropout = nn.Dropout(config.resid_pdrop)
         self.resid_mlp_dropout = nn.Dropout(config.resid_pdrop)
-        self.post_attention_layernorm = _Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = PHI_NORM_CLASS(config.hidden_size, eps=config.layer_norm_eps)
 
+    
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        #output_attentions: Optional[bool] = False,
-        #use_cache: Optional[bool] = False,
-        #**kwargs,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        #if "padding_mask" in kwargs:
-        #    warnings.warn(
-        #        "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
-        #    )
-        """
-        Args:
-            hidden_states (`torch.FloatTensor`):
-                input to the layer of shape `(batch, seq_len, embed_dim)`
-            attention_mask (`torch.FloatTensor`, *optional*): attention mask of size
-                `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
-            position_ids (`torch.LongTensor` of shape `({0})`, *optional*):
-                Indices of positions of each input sequence tokens in the position embeddings. Selected in the range
-                `[0, config.n_positions - 1]`. [What are position IDs?](../glossary#position-ids)
-            output_attentions (`bool`, *optional*):
-                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
-                returned tensors for more detail.
-            use_cache (`bool`, *optional*):
-                If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
-                (see `past_key_values`).
-            past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
-        """
+        past_cache = None,
+        inference_mode = False,
+    ):
         residual = hidden_states
-
         hidden_states = self.input_layernorm(hidden_states)
 
+        if self.use_mamba:
+            attn_outputs = self.attn(hidden_states, inference_params=past_key_value, mask = attention_mask)
+
+            #residual = residual.to(torch.float32) 
+            #present_key_value = past_key_value
+        else:
+            # Self Attention
+            attn_outputs, key_cache, value_cache = self.attn(
+                hidden_states=hidden_states,
+                position_ids=position_ids,
+                past_key_valu=past_cache
+            )
+            next_cache = (key_cache, value_cache)
         # Self Attention
-        attn_outputs, key_cache, value_cache = self.self_attn(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            #output_attentions=output_attentions,
-            #use_cache=use_cache,
-        )
+        #attn_outputs, key_cache, value_cache = self.self_attn(
+        #    hidden_states=hidden_states,
+        #    attention_mask=attention_mask,
+        #    position_ids=position_ids,
+        #    past_key_value=past_key_value,
+        #)
 
         hidden_states = residual + self.resid_attn_dropout(attn_outputs)
 
@@ -635,12 +1062,8 @@ class _Phi3DecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + self.resid_mlp_dropout(hidden_states)
 
-        #outputs = (hidden_states,)
-        #if use_cache:
-        #    outputs += (present_key_value,)
-        return hidden_states, key_cache, value_cache
-
-
+        return hidden_states, next_cache
+        
 class _SambaPreTrainedModel(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -684,256 +1107,40 @@ class _SambaModel(_SambaPreTrainedModel):
         inference_mode = False,
     ):  
         batch_size, seq_length = input_ids.shape[:2]
-        if past_length = 0 if past_caches is None else past_caches[0]
-        
-        device = input_ids.device
-        
-        if position_ids is None:
-             # if input_ids is not None else inputs_embeds.device
-            position_ids = torch.arange(
-                past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
-            )
-            position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
-        else:
-            position_ids = position_ids.view(-1, seq_length).long()
-        #if inputs_embeds is None:
+        past_length = 0 if past_caches is None else past_caches[0]
+        device = input_ids.device        
+        position_ids = torch.arange(past_length, seq_length + past_length, dtype=torch.long, device=device).unsqueeze(0).view(-1, seq_length)
+            
         inputs_embeds = self.embed_tokens(input_ids)
-        #if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
-        #    is_padding_right = attention_mask[:, -1].sum().item() != batch_size
-        #    if is_padding_right:
-        #        raise ValueError(
-        #            "You are attempting to perform batched generation with padding_side='right'"
-        #            " this may lead to unexpected behaviour for Flash Attention version of Phi3. Make sure to "
-        #            " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
-        #        )
-        if self._attn_implementation == "flash_attention_2":
-            # 2d mask is passed through the layers
-            attention_mask = None # attention_mask if (attention_mask is not None and 0 in attention_mask) else None
-        else:
-            attention_mask = torch.tril(torch.ones((seq_length, seq_length), device=device))
-            
-            # Add Causal Mask
-            if past_key_values is not None:
-                attention_mask = torch.cat([torch.ones((seq_length, past_key_values_length), device=device), attention_mask], dim=-1) 
-            #attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # Expand for batch & heads
-            # Apply the Mask
-            
         hidden_states = inputs_embeds
 
-        # decoder layers
-        #all_hidden_states = () if output_hidden_states else None
-        #all_self_attns = () if output_attentions else None
-        next_decoder_cache = [] #List[Tuple[torch.FloatTensor, torch.FloatTensor]]
-
+        next_caches = (past_length + seq_length, []) #List[Tuple[torch.FloatTensor, torch.FloatTensor]]
 
         for layer_idx, decoder_layer in enumerate(self.layers):
-            #if output_hidden_states:
-            #    all_hidden_states += (hidden_states,)
-            #print('layer_idx', layer_idx, 'hidden_state.dtype', hidden_states.dtype, 'decoder_layer.dtype', decoder_layer.self_attn.qkv_proj.weight.dtype)
 
-            kv_cache = None
-            if past_key_values is not None:
-                kv_cache = past_key_values[layer_idx]
+            past_cache = None if past_caches is None else past_caches[1][layer_idx]
                 
             if self.gradient_checkpointing and self.training:
-                #user_cp.CheckpointwithRngFunction.apply(layer_module.forward, len(args_tensors), *full_args)
-                
                 layer_outputs, nk_cache, nv_cache = checkpoint(
                     decoder_layer.__call__,
                     hidden_states,
-                    attention_mask,
                     position_ids,
-                    kv_cache
+                    past_cache
                 )
             else:
                 layer_outputs, nk_cache, nv_cache = decoder_layer(
                     hidden_states,
-                    attention_mask=attention_mask,
                     position_ids=position_ids,
-                    past_key_value=kv_cache,
+                    past_cache=past_cache,
                     #output_attentions=output_attentions,
                     #use_cache=use_cache,
                 )
 
             hidden_states = layer_outputs
             next_decoder_cache.append((nk_cache, nv_cache))
-            #if use_cache:
-            #    next_decoder_cache = layer_outputs[2 if output_attentions else 1]
-
-            #if output_attentions:
-            #    all_self_attns += (layer_outputs[1],)
-
-        hidden_states = self.norm(hidden_states)
-
-        # add hidden states from the last decoder layer
-        #if output_hidden_states:
-        #    all_hidden_states += (hidden_states,)
-        #next_cache = None
-        #if use_cache:
-        #    next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
-        
-        #if not return_dict:
-        #    return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
-        
-        #return BaseModelOutputWithPast(
-        #    last_hidden_state=hidden_states,
-        #    past_key_values=next_cache,
-        #    hidden_states=all_hidden_states,
-        #    attentions=all_self_attns,
-        #)
-        # return lastlayer hidden states, and KV cache.
-        return hidden_states, next_decoder_cache
-        
-    
-    def forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-        # print(use_cache)
-        # # use_cache = False
-        # print(input_ids)
-        # print(attention_mask)
-        # print(position_ids)
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        # retrieve input_ids and inputs_embeds
-        if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-        elif input_ids is not None:
-            batch_size, seq_length = input_ids.shape[:2]
-        elif inputs_embeds is not None:
-            batch_size, seq_length = inputs_embeds.shape[:2]
-        else:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
-
-        past_key_values_length = 0
-
-        if self.gradient_checkpointing and self.training:
-            if use_cache:
-                logger.warning_once(
-                    "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
-                )
-                use_cache = False
-
-        if use_cache:
-            use_legacy_cache = not isinstance(past_key_values, Cache)
-            if use_legacy_cache:
-                past_key_values = Phi3DynamicCache.from_legacy_cache(past_key_values)
-            past_key_values_length = past_key_values.get_usable_length(seq_length)
-
-        if position_ids is None:
-            device = input_ids.device if input_ids is not None else inputs_embeds.device
-            position_ids = torch.arange(
-                past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
-            )
-            position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
-        else:
-            position_ids = position_ids.view(-1, seq_length).long()
-
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
-
-        if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
-            is_padding_right = attention_mask[:, -1].sum().item() != batch_size
-            if is_padding_right:
-                raise ValueError(
-                    "You are attempting to perform batched generation with padding_side='right'"
-                    " this may lead to unexpected behaviour for Flash Attention version of Samba. Make sure to "
-                    " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
-                )
-
-        if self._attn_implementation == "flash_attention_2":
-            # 2d mask is passed through the layers
-            attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
-        elif self._attn_implementation == "sdpa" and not output_attentions:
-            # output_attentions=True can not be supported when using SDPA, and we fall back on
-            # the manual implementation that requires a 4D causal mask in all cases.
-            attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
-                attention_mask,
-                (batch_size, seq_length),
-                inputs_embeds,
-                past_key_values_length,
-            )
-        else:
-            # 4d mask is passed through the layers
-            attention_mask = _prepare_4d_causal_attention_mask(
-                attention_mask,
-                (batch_size, seq_length),
-                inputs_embeds,
-                past_key_values_length,
-                sliding_window=self.config.sliding_window,
-            )
-
-        hidden_states = inputs_embeds
-
-        # decoder layers
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
-        next_decoder_cache = None
-
-        for decoder_layer in self.layers:
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
-
-            if self.gradient_checkpointing and self.training:
-                layer_outputs = self._gradient_checkpointing_func(
-                    decoder_layer.__call__,
-                    hidden_states,
-                    attention_mask,
-                    position_ids,
-                    past_key_values,
-                    output_attentions,
-                    use_cache,
-                )
-            else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_value=past_key_values,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                )
-
-            hidden_states = layer_outputs[0]
-
-            if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1],)
-
-        hidden_states = self.final_layernorm(hidden_states.to(dtype=self.final_layernorm.weight.dtype))
-
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
-
-        next_cache = None
-        if use_cache:
-            next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
-        if not return_dict:
-            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=next_cache,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
-        )
-
+            
+        hidden_states = self.final_layernorm(hidden_states) #.to(dtype=self.final_layernorm.weight.dtype))
+        return hidden_states, next_caches
 
 import torch.nn.functional as F
 
