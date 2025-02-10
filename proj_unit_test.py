@@ -12,14 +12,6 @@ import torch.nn.functional as F
 
 from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 
-        self.d_model = d_model
-        self.d_state = d_state
-        self.d_conv = d_conv
-        self.expand = expand
-        self.d_inner = int(self.expand * self.d_model)
-        self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
-
-
 
 bs = 2
 seqlen = 16
