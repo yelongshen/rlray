@@ -20,6 +20,10 @@ from torch.utils.checkpoint import checkpoint
 
 logger = logging.get_logger(__name__)
 
+from einops import rearrange, repeat
+
+import torch.nn.functional as F
+
 import selective_scan_cuda
 
 try:
@@ -515,8 +519,6 @@ _PHI3_ATTENTION_CLASSES = {
 }
 
 
-
-
 class MambaInnerFn(torch.autograd.Function):
     @staticmethod
     @custom_fwd
@@ -586,6 +588,7 @@ class MambaInnerFn(torch.autograd.Function):
                 C = C.contiguous()
         if D is not None:
             D = D.contiguous()
+            
         out, scan_intermediates, out_z = selective_scan_cuda.fwd(
             conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus
         )
@@ -886,6 +889,7 @@ class _Phi3Mamba(nn.Module):
             # We want dt to have d as the slowest moving dimension
             # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
             x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
+            
             dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
             dt = self.dt_proj.weight @ dt.t()
             dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
