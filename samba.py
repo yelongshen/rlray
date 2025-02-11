@@ -25,12 +25,12 @@ try:
     _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
     if not _flash_supports_window_size:
         raise ValueError("Please update flash-attention to support window size.")
-    from flash_attn.ops.activations import swiglu
-    from flash_attn.ops.rms_norm import RMSNorm #as RMSNorm
+    #from flash_attn.ops.activations import swiglu
+    #from flash_attn.ops.rms_norm import RMSNorm #as RMSNorm
 except ImportError:
     logger.warning("Flash submodules not found, consider installing for better performance.")
-    swiglu = None
-    RMSNorm = None
+    #swiglu = None
+    #RMSNorm = None
 
 import causal_conv1d_cuda
 
@@ -67,7 +67,7 @@ class _RMSNorm(nn.Module):
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
         return self.weight * hidden_states.to(input_dtype)
 
-PHI_NORM_CLASS = _RMSNorm if RMSNorm is None else RMSNorm
+PHI_NORM_CLASS = _RMSNorm #if RMSNorm is None else RMSNorm
 
 # Copied from transformers.models.gemma.modeling_gemma.GemmaRotaryEmbedding with gemma->phi3, Gemma->Phi3
 class _RotaryEmbedding(nn.Module):
