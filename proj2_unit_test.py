@@ -147,14 +147,14 @@ def conv_case3():
     x2, z2 = xz2.chunk(2, dim=1)
 
     x2 = causal_conv1d_update(
-                x2,
+                x2.squeeze(),
                 conv_state,
                 rearrange(conv1d.weight, "d 1 w -> d w"),
                 conv1d.bias,
                 activation,
             )
 
-    return torch.cat([x1, x2], dim=-1) #x2
+    return torch.cat([x1, x2.unsqueeze(dim=-1)], dim=-1) #x2
   
 x1 = conv_case1()
 x2 = conv_case2()
