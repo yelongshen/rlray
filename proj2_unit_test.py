@@ -64,6 +64,10 @@ def conv_case1():
 
     x, z = xz.chunk(2, dim=1)
 
+    _conv_state = torch.zeros(bs, d_model * expand, d_conv, device = device)
+
+    _conv_state.copy_(F.pad(x, (d_conv - x.shape[-1], 0))) 
+
     # xz : torch.Size([2, 24, 16]  
     # x : torch.Size([2, 12, 16])
     # z : torch.Size([2, 12, 16])
@@ -73,11 +77,11 @@ def conv_case1():
     
     conv1d_weight = rearrange(conv1d_weight, "d 1 w -> d w")
     conv1d_bias = conv1d_bias.contiguous() 
-        
+    
     conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(x, conv1d_weight, conv1d_bias, None, None, None, True)
 
     # standard mode: 
-    return conv1d_out
+    return conv1d_out, _conv_state
 
 def conv_case2():
     global conv1d
@@ -93,6 +97,9 @@ def conv_case2():
 
     x, z = xz.chunk(2, dim=1)
 
+    _conv_state = torch.zeros(bs, d_model * expand, d_conv, device = device)
+    _conv_state.copy_(F.pad(x, (d_conv - x.shape[-1], 0))) 
+    
     # x : bs, dim, seqlength
     #x = hidden_states
     x = causal_conv1d_fn(
@@ -101,14 +108,14 @@ def conv_case2():
                     bias=conv1d.bias,
                     activation=activation
                 )
-    return x
+    return x, _conv_state
 
 def conv_case3():
     # split x into two part, first 15, second 1.
     
     global conv1d
     global hidden_states
-    global conv_state
+    #global conv_state
   
     h1 = hidden_states[:, :seqlen-1, :].contiguous()
     h2 = hidden_states[:, -1:, :].contiguous()
@@ -123,8 +130,10 @@ def conv_case3():
 
     x1, z1 = xz1.chunk(2, dim=1)
 
+    _conv_state = torch.zeros(bs, d_model * expand, d_conv, device = device)
+    
     # save the x into conv_states. 
-    conv_state.copy_(F.pad(x1, (d_conv - x1.shape[-1], 0))) 
+    _conv_state.copy_(F.pad(x1, (d_conv - x1.shape[-1], 0))) 
 
     # x : bs, dim, seqlength
     #x = hidden_states
@@ -155,23 +164,23 @@ def conv_case3():
 
     x2 = causal_conv1d_update(
                 x2,
-                conv_state,
+                _conv_state,
                 rearrange(conv1d.weight, "d 1 w -> d w"),
                 conv1d.bias,
                 activation,
             )
 
-    return torch.cat([x1, x2.unsqueeze(dim=-1)], dim=-1) #x2
+    return torch.cat([x1, x2.unsqueeze(dim=-1)], dim=-1), _conv_state #x2
   
-x1 = conv_case1()
-x2 = conv_case2()
-x3 = conv_case3()
-print(x1.shape, x1)
-print(x2.shape, x2)
-print(x3.shape, x3)
+x1,c1 = conv_case1()
+x2,c2 = conv_case2()
+x3,c3 = conv_case3()
+print(c1.shape, c1)
+print(c2.shape, c2)
+print(c3.shape, c3)
 
-assert torch.allclose(x1, x2, atol=1e-2)
-assert torch.allclose(x1, x3, atol=1e-2)
+assert torch.allclose(c1, c2, atol=1e-2)
+assert torch.allclose(c1, c3, atol=1e-2)
 
 
 #x1 = 
