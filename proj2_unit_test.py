@@ -21,7 +21,7 @@ print(triton.__version__)
 from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 
 bs = 2
-seqlen = 7
+seqlen = 4
 
 # meta-hyper
 d_model = 6
