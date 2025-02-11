@@ -613,7 +613,7 @@ class _SambaModel(_SambaPreTrainedModel):
                     inference_mode = inference_mode
                 )
             hidden_states = layer_outputs
-            next_caches.append(next_cache)
+            next_caches[1].append(next_cache)
         hidden_states = self.final_layernorm(hidden_states) #.to(dtype=self.final_layernorm.weight.dtype))
         return hidden_states, next_caches
 
