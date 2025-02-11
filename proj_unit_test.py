@@ -133,7 +133,10 @@ def case1():
     
     print(out_z.shape)
     print(out_z)
-    return out
+
+    ssm_state = scan_intermediates[:, :, -1, 1::2]  # (batch, dim, dstate)
+    
+    return out_z, ssm_state, conv_state
     
     # x = self.act(self.conv1d(x)[..., :seqlen])
     # x : b, dim, l
