@@ -677,7 +677,7 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        past_caches : = None, # Optional[List[Tuple[torch.FloatTensor, torch.FloatTensor]]] = None,
+        past_caches = None, # Optional[List[Tuple[torch.FloatTensor, torch.FloatTensor]]] = None,
         labels: Optional[torch.LongTensor] = None,
         num_logits_to_keep: int = 0,
         inference_mode = False
