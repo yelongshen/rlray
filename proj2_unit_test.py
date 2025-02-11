@@ -15,6 +15,8 @@ from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 import selective_scan_cuda
 import causal_conv1d_cuda
 
+from mamba_ssm.ops.triton.selective_state_update import selective_state_update
+
 bs = 2
 seqlen = 7
 
@@ -188,10 +190,19 @@ def conv_case3():
     global conv1d
     global hidden_states
     #global conv_state
-  
+    global x_proj
+    global dt_proj
+    global A_log
+    global D
+    global out_proj
+
+    A = -torch.exp(A_log.float())
+    D = D.contiguous()
+    
     h1 = hidden_states[:, :seqlen-1, :].contiguous()
     h2 = hidden_states[:, -1:, :].contiguous()
-  
+
+    
     xz1 = rearrange(
             in_proj.weight @ rearrange(h1.to(dtype = in_proj.weight.dtype), "b l d -> d (b l)"),
             "d (b l) -> b d l",
@@ -215,25 +226,56 @@ def conv_case3():
                     bias=conv1d.bias,
                     activation=activation
                 )
+    
+    x1_dbl = x_proj(rearrange(x1, "b d l -> (b l) d"))  # (bl d)
+    
+    dt1, B1, C1 = torch.split(x1_dbl, [dt_rank, d_state, d_state], dim=-1)
+    dt1 = dt_proj.weight @ dt1.t()
 
+    dt1 = rearrange(dt1, "d (b l) -> b d l", l=seqlen)
+    B1 = rearrange(B1, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+    C1 = rearrange(C1, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
 
+    if x1.stride(-1) != 1:
+        x1 = x1.contiguous()
+    if dt1.stride(-1) != 1:
+        dt1 = dt1.contiguous()
+        
+    if B1.stride(-1) != 1:
+        B1 = B1.contiguous()
+    if C1.stride(-1) != 1:
+        C1 = C1.contiguous()
+
+    
+    if z is not None and z.stride(-1) != 1:
+        z = z.contiguous()
+        
+    if B.dim() == 3:
+        B = rearrange(B, "b dstate l -> b 1 dstate l")
+        #ctx.squeeze_B = True
+    if C.dim() == 3:
+        C = rearrange(C, "b dstate l -> b 1 dstate l")
+        #ctx.squeeze_C = True
+            
+    out1, x1, rest1 = selective_scan_cuda.fwd(x1, dt1, A, B1, C1, D.float(), z1, dt_proj.bias.float(), True)
+    y1 = rearrange(rest1, "b d l -> b l d")
+    fout = out_proj(y1)
+    _ssm_state = x1[:, :, -1, 1::2] # (batch, dim, dstate)
+    
+    ################### segment 2
     xz2 = rearrange(
             in_proj.weight @ rearrange(h2.to(dtype = in_proj.weight.dtype), "b l d -> d (b l)"),
             "d (b l) -> b d l",
             l=1)
-
     if in_proj.bias is not None:
         xz2 = xz2 + rearrange(in_proj.bias.to(dtype=xz2.dtype), "d -> d 1")
-
     x2, z2 = xz2.chunk(2, dim=1)
     x2 = x2.squeeze()
-    
     #conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
     #conv_state[:, :, -1] = x2
     #x2 = torch.sum(conv_state * rearrange(conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
     #x2 = x2 + conv1d.bias
     #x2 = act(x2)#.to(dtype=dtype)
-
     x2 = causal_conv1d_update(
                 x2,
                 _conv_state,
@@ -242,27 +284,53 @@ def conv_case3():
                 activation,
             )
 
-    return torch.cat([x1, x2.unsqueeze(dim=-1)], dim=-1), _conv_state #x2
+
+    x2_db = x_proj(x2)  # (B dt_rank+2*d_state)
+    dt2, B2, C2 = torch.split(x2_db, [dt_rank, d_state, d_state], dim=-1)
+    # Don't add dt_bias here
+    dt2 = F.linear(dt2, dt_proj.weight)  # (B d_inner)
+
+    y2 = selective_state_update(_ssm_state, x2, dt2, A, B2, C2, D.float(), z2, dt_proj.bias.float(), True)
+
+    fout2 = out_proj(y2)
+    
+    return torch.cat([fout, fout2.unsqueeze(dim=1)], dim=1), _conv_state, _ssm_state
+
   
 x1,c1,s1 = conv_case1()
 x2,c2,s2 = conv_case2()
+x3,c3,s3 = conv_case3()
 
+print('--------------------------------')
 print(x1.shape, x1)
 print(x2.shape, x2)    
+print(x3.shape, x3)
+
 #print(x3.shape, x3)
 #x3,c3 = conv_case3()
+print('--------------------------------')
 print(c1.shape, c1)
 print(c2.shape, c2)
+print(c3.shape, c3)
+
 #print(c3.shape, c3)
+
+print('--------------------------------')
 print(s1.shape, s1)
 print(s2.shape, s2)
+print(s3.shape, s3)
 
 assert torch.allclose(c1, c2, atol=1e-2)
 #assert torch.allclose(c1, c3, atol=1e-2)
-
 assert torch.allclose(x1, x2, atol=1e-2)
 
 assert torch.allclose(s1, s2, atol=1e-2)
+
+assert torch.allclose(c1, c3, atol=1e-2)
+
+assert torch.allclose(x1, x3, atol=1e-2)
+
+assert torch.allclose(s1, s3, atol=1e-2)
 
 #assert torch.allclose(x1, x3, atol=1e-2)
 
