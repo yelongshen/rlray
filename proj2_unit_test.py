@@ -119,7 +119,7 @@ def conv_case3():
             l=seqlen-1)
 
     if in_proj.bias is not None:
-        xz1 = xz1 + rearrange(in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+        xz1 = xz1 + rearrange(in_proj.bias.to(dtype=xz1.dtype), "d -> d 1")
 
     x1, z1 = xz1.chunk(2, dim=1)
 
@@ -142,7 +142,7 @@ def conv_case3():
             l=1)
 
     if in_proj.bias is not None:
-        xz2 = xz2 + rearrange(in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+        xz2 = xz2 + rearrange(in_proj.bias.to(dtype=xz2.dtype), "d -> d 1")
 
     x2, z2 = xz2.chunk(2, dim=1)
 
