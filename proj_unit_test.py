@@ -36,20 +36,20 @@ activation = "silu"
 act = nn.SiLU()
 
 x_proj = nn.Linear(d_inner, dt_rank + d_state * 2, bias=False, device=device)
-dt_proj = nn.Linear(dt_rank, d_inner, bias=True)
+dt_proj = nn.Linear(dt_rank, d_inner, bias=True, device=device)
 
 # bs, d_model * expand, d_conv = 4 
 conv_state = torch.zeros(bs, d_model * expand, d_conv, device = device)
 
 ssm_state = torch.zeros(bs, d_model * expand, d_state, device = device)
 
-A = repeat(torch.arange(1, d_state + 1, dtype=torch.float32), "n -> d n", d = d_inner,).contiguous()
+A = repeat(torch.arange(1, d_state + 1, dtype=torch.float32, device = device), "n -> d n", d = d_inner,).contiguous()
 A_log = torch.log(A)  # Keep A_log in fp32
 A_log = nn.Parameter(A_log)
 
 # D "skip" parameter
 D = nn.Parameter(torch.ones(d_inner))  # Keep in fp32
-out_proj = nn.Linear(d_inner, d_model, bias=True) #, **factory_kwargs)
+out_proj = nn.Linear(d_inner, d_model, bias=True, device = device) #, **factory_kwargs)
 
 def case1():
     xz = rearrange(
