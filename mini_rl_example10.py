@@ -106,7 +106,7 @@ def main(args):
     llm_model = _SambaForCausalLM(llm_config) 
     
     # Step 4: Apply the merged state_dict to the model
-    missing_keys, unexpected_keys = llm_model.load_state_dict(checkpoint, strict=False) 
+    missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
     print('missing_keys: ', missing_keys)
     print('unexpected_keys: ', unexpected_keys)    
     llm_model = llm_model.to(torch.bfloat16).to(device) 
