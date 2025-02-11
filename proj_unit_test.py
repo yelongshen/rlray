@@ -245,9 +245,9 @@ def conv_case2():
     x = causal_conv1d_fn(
                     x = x,
                     weight=rearrange(conv1d.weight, "d 1 w -> d w"),
-                    bias=conv1d.bias,
-                    activation=activation,
-                )
+                    bias=conv1d.bias)
+                #    activation=activation,
+                #)
     return x
 
 x1 = conv_case1()
