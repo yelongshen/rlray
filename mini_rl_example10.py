@@ -52,12 +52,12 @@ from transformers.cache_utils import Cache, DynamicCache
 from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel, Phi3Model, Phi3DecoderLayer
 from transformers.models.phi3.configuration_phi3 import Phi3Config
 
-from phimodel import _Phi3ForCausalLM
+from samba import _SambaForCausalLM
 from replaybuffer import ReplayBuffer, Sample
 from ppo import ppo_train 
 from math_util import compare_math_answers, process_math_prompt, process_math_answer
 
-def initmodel_sync(model:_Phi3ForCausalLM):
+def initmodel_sync(model:_SambaForCausalLM):
     with torch.no_grad():
         torch.distributed.broadcast(model.critic_head.weight, 0, async_op=False)
         torch.distributed.broadcast(model.critic_head.bias, 0, async_op=False)
@@ -86,26 +86,25 @@ def main(args):
     vocab_size = llm_config.vocab_size 
     eos_token_id = llm_config.eos_token_id #": 32000,
   
-    #safetensor_files = [
-    #    f"{local_model_path}/model-00001-of-00002.safetensors",
-    #    f"{local_model_path}/model-00002-of-00002.safetensors"
-    #]
-    #model_state_dict = {}
-    #for file in safetensor_files:
-    #    part_state_dict = load_file(file, device="cpu")  # Load each part
-    #    model_state_dict.update(part_state_dict)  # Merge into one dictionary
-    #print('load model weight ... ')
+    safetensor_files = [
+        f"{local_model_path}/model-00001-of-00002.safetensors",
+        f"{local_model_path}/model-00002-of-00002.safetensors"
+    ]
+    
+    model_state_dict = {}
+    for file in safetensor_files:
+        part_state_dict = load_file(file, device="cpu")  # Load each part
+        model_state_dict.update(part_state_dict)  # Merge into one dictionary
+    print('load model weight ... ')
 
     # Load the model checkpoint
-    model_path = f"{local_model_path}/pytorch_model.bin"  # Change to your file path
-    checkpoint = torch.load(model_path, map_location="cpu")
-    
-    # Print the keys
-    print("Keys in pytorch_model.bin:")
-    for key in checkpoint.keys():
-        print(key)
+    #model_path = f"{local_model_path}/pytorch_model.bin"  # Change to your file path
+    #checkpoint = torch.load(model_path, map_location="cpu")
+    #print("Keys in pytorch_model.bin:")
+    #for key in checkpoint.keys():
+    #    print(key)
 
-    llm_model = _Phi3ForCausalLM(llm_config) 
+    llm_model = _SambaForCausalLM(llm_config) 
     
     # Step 4: Apply the merged state_dict to the model
     missing_keys, unexpected_keys = llm_model.load_state_dict(checkpoint, strict=False) 
