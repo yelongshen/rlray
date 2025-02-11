@@ -103,8 +103,10 @@ def conv_case1():
 
     fout = F.linear(rearrange(out_z, "b d l -> b l d"), out_proj.weight, out_proj.bias)
 
+    _ssm_state = scan_intermediates[:, :, -1, 1::2]
+    
     # standard mode: 
-    return fout, _conv_state, None # _ssm_state not there yet. 
+    return fout, _conv_state, _ssm_state # _ssm_state not there yet. 
 
 def conv_case2():
     global conv1d
@@ -174,8 +176,10 @@ def conv_case2():
     y = rearrange(rest, "b d l -> b l d")
     
     fout = out_proj(y)
+    
+    _ssm_state = x[:, :, -1, 1::2] # (batch, dim, dstate)
 
-    return fout, _conv_state, None # _ssm_state not there yet. 
+    return fout, _conv_state, _ssm_state # _ssm_state not there yet. 
     
 
 def conv_case3():
@@ -244,18 +248,22 @@ x1,c1,s1 = conv_case1()
 x2,c2,s2 = conv_case2()
 
 print(x1.shape, x1)
-print(x2.shape, x2)
+print(x2.shape, x2)    
 #print(x3.shape, x3)
-
 #x3,c3 = conv_case3()
 print(c1.shape, c1)
 print(c2.shape, c2)
 #print(c3.shape, c3)
+print(s1.shape, s1)
+print(s2.shape, s2)
 
 assert torch.allclose(c1, c2, atol=1e-2)
 #assert torch.allclose(c1, c3, atol=1e-2)
 
 assert torch.allclose(x1, x2, atol=1e-2)
+
+assert torch.allclose(s1, s2, atol=1e-2)
+
 #assert torch.allclose(x1, x3, atol=1e-2)
 
 #x1 = 
