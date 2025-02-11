@@ -210,8 +210,8 @@ def conv_case1():
 
     x, z = xz.chunk(2, dim=1)
 
-    conv1d_weight = conv1d.weight,
-    conv1d_bias = conv1d.bias,
+    conv1d_weight = conv1d.weight
+    conv1d_bias = conv1d.bias
     
     conv1d_weight = rearrange(conv1d_weight, "d 1 w -> d w")
     conv1d_bias = conv1d_bias.contiguous() 
