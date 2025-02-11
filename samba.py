@@ -485,8 +485,8 @@ class _Mamba(nn.Module):
             ssm_state = torch.zeros(batch, self.d_model * self.expand, self.d_state, device=hidden_states.device, dtype= self.dt_proj.weight.dtype)
             
         out = MambaInnerFn.apply(xz, self.conv1d.weight, self.conv1d.bias, self.x_proj.weight, self.dt_proj.weight,
-                                self.out_proj.weight, self.out_proj.bias, A, self.D.float(), self.dt_proj.bias.float(), delta_softplus = True, 
-                                conv_state = conv_state, ssm_state = ssm_state, recurrent_mode = inference_mode)
+                                self.out_proj.weight, self.out_proj.bias, A, self.D.float(), self.dt_proj.bias.float(), True, 
+                                conv_state, ssm_state, inference_mode)
         return out, conv_state, ssm_state
 
 class _SambaDecoderLayer(nn.Module):
