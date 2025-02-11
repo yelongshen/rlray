@@ -602,7 +602,7 @@ class _SambaModel(_SambaPreTrainedModel):
                     hidden_states,
                     position_ids=position_ids,
                     past_cache=past_cache,
-                    inference_mode,
+                    inference_mode = inference_mode
                 )
             hidden_states = layer_outputs
             next_caches.append(next_cache)
