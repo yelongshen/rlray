@@ -15,6 +15,9 @@ from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 import selective_scan_cuda
 import causal_conv1d_cuda
 
+import triton
+print(triton.__version__)
+
 from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 
 bs = 2
