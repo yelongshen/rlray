@@ -16,7 +16,7 @@ import selective_scan_cuda
 import causal_conv1d_cuda
 
 bs = 2
-seqlen = 4
+seqlen = 3
 
 # meta-hyper
 d_model = 6
