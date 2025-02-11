@@ -156,7 +156,9 @@ def conv_case2():
         B = B.contiguous()
     if C.stride(-1) != 1:
         C = C.contiguous()
-        
+
+    A = -torch.exp(A_log.float())
+    
     if z is not None and z.stride(-1) != 1:
         z = z.contiguous()
         
@@ -171,9 +173,9 @@ def conv_case2():
 
     y = rearrange(rest, "b d l -> b l d")
     
-    out = out_proj(y)
+    fout = out_proj(y)
 
-    return out, _conv_state, None # _ssm_state not there yet. 
+    return fout, _conv_state, None # _ssm_state not there yet. 
     
 
 def conv_case3():
