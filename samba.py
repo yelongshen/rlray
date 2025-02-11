@@ -1,31 +1,24 @@
-
 import inspect
 import math
 import warnings
 from typing import List, Optional, Tuple, Union
+import logging
 
 import torch
 import torch.nn.functional as F
 
+from einops import rearrange, repeat
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+from torch.utils.checkpoint import checkpoint
+import checkpoint as user_checkpoint
 
 
 from transformers.activations import ACT2FN
-from transformers.cache_utils import Cache, DynamicCache
-from transformers.models.phi3.configuration_phi3 import Phi3Config
-
-import checkpoint as user_checkpoint
-from torch.utils.checkpoint import checkpoint
-
+#from transformers.cache_utils import Cache, DynamicCache
 logger = logging.get_logger(__name__)
 
-from einops import rearrange, repeat
-
-import torch.nn.functional as F
-
 import selective_scan_cuda
-
 try:
     from flash_attn import flash_attn_func, flash_attn_varlen_func
     #from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
@@ -39,13 +32,14 @@ except ImportError:
     swiglu = None
     RMSNorm = None
 
+import causal_conv1d_cuda
+
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 except ImportError:
     logger.warning("Causal Conv1d submodules not found, consider installing for better performance.")
     causal_conv1d_fn, causal_conv1d_update = None
 
-import causal_conv1d_cuda
 try:
     from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 except ImportError:
@@ -57,6 +51,7 @@ try:
 except ImportError:
     logger.warning("Triton LayerNorm submodules not found, consider installing for better performance.")
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
+
 from torch.cuda.amp import custom_bwd, custom_fwd
 
 class _RMSNorm(nn.Module):
@@ -149,7 +144,7 @@ class _FlashAttention2(nn.Module):
     untouched. The only required change would be on the forward pass where it needs to correctly call the public API of
     flash attention and deal with padding tokens in case the input contains any of them.
     """
-    def __init__(self, config: Phi3Config, layer_idx: Optional[int] = None):
+    def __init__(self, config, layer_idx: Optional[int] = None):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
