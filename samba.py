@@ -524,10 +524,8 @@ _PHI3_ATTENTION_CLASSES = {
 class MambaInnerFn(torch.autograd.Function):
     @staticmethod
     @custom_fwd
-    def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
-                out_proj_weight, out_proj_bias,
-                A, B=None, C=None, D=None, delta_bias=None, B_proj_bias=None,
-                C_proj_bias=None, mask=None, delta_softplus=True, checkpoint_lvl=1,):
+    def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight, out_proj_weight, out_proj_bias, 
+                A, D = None, delta_bias = None, delta_softplus = True, checkpoint_lvl = 1, conv_state = None, ssm_state = None, activation = 'silu'):
         """
              xz: (batch, dim, seqlen)
         """
@@ -536,22 +534,52 @@ class MambaInnerFn(torch.autograd.Function):
         L = xz.shape[-1]
         delta_rank = delta_proj_weight.shape[1]
         d_state = A.shape[-1] * (1 if not A.is_complex() else 2)
+                    
         if torch.is_autocast_enabled():
             x_proj_weight = x_proj_weight.to(dtype=torch.get_autocast_gpu_dtype())
             delta_proj_weight = delta_proj_weight.to(dtype=torch.get_autocast_gpu_dtype())
             out_proj_weight = out_proj_weight.to(dtype=torch.get_autocast_gpu_dtype())
             out_proj_bias = (out_proj_bias.to(dtype=torch.get_autocast_gpu_dtype())
                              if out_proj_bias is not None else None)
+            
         if xz.stride(-1) != 1:
             xz = xz.contiguous()
-        conv1d_weight = rearrange(conv1d_weight, "d 1 w -> d w")
+        
         x, z = xz.chunk(2, dim=1)
         #if mask is not None:
         #    x = x * mask.unsqueeze(1)
+        conv1d_weight = rearrange(conv1d_weight, "d 1 w -> d w")
         conv1d_bias = conv1d_bias.contiguous() if conv1d_bias is not None else None
-        conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(
-            x, conv1d_weight, conv1d_bias, None, None, None, True
-        )
+        
+        if conv_state is None: 
+            conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0))) 
+            conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(x, conv1d_weight, conv1d_bias, None, None, None, True)
+        else:
+            conv1d_out = causal_conv1d_update(
+                x,
+                conv_state,
+                conv1d_weight,
+                conv1d_bias,
+                activation,
+            )
+
+            
+            if conv_state is not None:
+                # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
+                # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
+                conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W)
+            if causal_conv1d_fn is None:
+                x = self.act(self.conv1d(x)[..., :seqlen])
+            else:
+                assert self.activation in ["silu", "swish"]
+                x = causal_conv1d_fn(
+                    x=x,
+                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                    bias=self.conv1d.bias,
+                    activation=self.activation,
+                )
+                
+        
         #if mask is not None:
         #    conv1d_out = conv1d_out * mask.unsqueeze(1)
         # print(mask[0,:])
