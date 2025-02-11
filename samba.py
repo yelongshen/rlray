@@ -519,6 +519,8 @@ _PHI3_ATTENTION_CLASSES = {
 }
 
 
+# Make this function support inference (prefilling / generation)
+
 class MambaInnerFn(torch.autograd.Function):
     @staticmethod
     @custom_fwd
@@ -544,14 +546,14 @@ class MambaInnerFn(torch.autograd.Function):
             xz = xz.contiguous()
         conv1d_weight = rearrange(conv1d_weight, "d 1 w -> d w")
         x, z = xz.chunk(2, dim=1)
-        if mask is not None:
-            x = x * mask.unsqueeze(1)
+        #if mask is not None:
+        #    x = x * mask.unsqueeze(1)
         conv1d_bias = conv1d_bias.contiguous() if conv1d_bias is not None else None
         conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(
             x, conv1d_weight, conv1d_bias, None, None, None, True
         )
-        if mask is not None:
-            conv1d_out = conv1d_out * mask.unsqueeze(1)
+        #if mask is not None:
+        #    conv1d_out = conv1d_out * mask.unsqueeze(1)
         # print(mask[0,:])
         # We're being very careful here about the layout, to avoid extra transposes.
         # We want delta to have d as the slowest moving dimension
@@ -562,6 +564,7 @@ class MambaInnerFn(torch.autograd.Function):
         ctx.is_variable_C = C is None
         ctx.B_proj_bias_is_None = B_proj_bias is None
         ctx.C_proj_bias_is_None = C_proj_bias is None
+                    
         if B is None:  # variable B
             B = x_dbl[:, delta_rank:delta_rank + d_state]  # (bl dstate)
             if B_proj_bias is not None:
@@ -592,6 +595,13 @@ class MambaInnerFn(torch.autograd.Function):
         out, scan_intermediates, out_z = selective_scan_cuda.fwd(
             conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus
         )
+
+        #out, x, *rest = selective_scan_cuda.fwd(u, delta, A, B, C, D, z, delta_bias, delta_softplus)
+        #ctx.delta_softplus = delta_softplus
+        #ctx.has_z = z is not None
+        #last_state = x[:, :, -1, 1::2]  # (batch, dim, dstate)
+
+                    
         ctx.delta_softplus = delta_softplus
         ctx.out_proj_bias_is_None = out_proj_bias is None
         ctx.checkpoint_lvl = checkpoint_lvl
@@ -711,24 +721,26 @@ class SelectiveScanFn(torch.autograd.Function):
         ctx.delta_softplus = delta_softplus
         ctx.has_z = z is not None
         last_state = x[:, :, -1, 1::2]  # (batch, dim, dstate)
-        if not ctx.has_z:
-            ctx.save_for_backward(u, delta, A, B, C, D, delta_bias, x)
-            return out if not return_last_state else (out, last_state)
-        else:
-            ctx.save_for_backward(u, delta, A, B, C, D, z, delta_bias, x, out)
-            out_z = rest[0]
-            return out_z if not return_last_state else (out_z, last_state)
+        
+        #if not ctx.has_z:
+        #    ctx.save_for_backward(u, delta, A, B, C, D, delta_bias, x)
+        #    return out if not return_last_state else (out, last_state)
+        #else:
+        ctx.save_for_backward(u, delta, A, B, C, D, z, delta_bias, x, out)
+        out_z = rest[0]
+        return out_z if not return_last_state else (out_z, last_state)
 
     @staticmethod
     def backward(ctx, dout, *args):
-        if not ctx.has_z:
-            u, delta, A, B, C, D, delta_bias, x = ctx.saved_tensors
-            z = None
-            out = None
-        else:
-            u, delta, A, B, C, D, z, delta_bias, x, out = ctx.saved_tensors
+        #if not ctx.has_z:
+        #    u, delta, A, B, C, D, delta_bias, x = ctx.saved_tensors
+        #    z = None
+        #    out = None
+        #else:
+        u, delta, A, B, C, D, z, delta_bias, x, out = ctx.saved_tensors
         if dout.stride(-1) != 1:
             dout = dout.contiguous()
+        
         # The kernel supports passing in a pre-allocated dz (e.g., in case we want to fuse the
         # backward of selective_scan_cuda with the backward of chunk).
         # Here we just pass in None and dz will be allocated in the C++ code.
@@ -845,6 +857,12 @@ class _Phi3Mamba(nn.Module):
         #     xz = xz.to(torch.float32)
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
+
+        #ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+        #        out_proj_weight, out_proj_bias,
+        #        A, [B=None, C=None], D=None, delta_bias=None, [B_proj_bias=None,
+        #        C_proj_bias=None], [mask=None], delta_softplus=True, [checkpoint_lvl=1],):
+        
         if self.use_fast_path and inference_params is None:  # Doesn't support outputting the states
             out = mamba_inner_fn(
                 xz,
@@ -865,8 +883,8 @@ class _Phi3Mamba(nn.Module):
         else:
             x, z = xz.chunk(2, dim=1)
             # #print(x.shape,mask.shape)
-            if mask is not None:
-                x = x * mask.unsqueeze(1)
+            #if mask is not None:
+            #    x = x * mask.unsqueeze(1)
             # Compute short convolution
             if conv_state is not None:
                 # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
