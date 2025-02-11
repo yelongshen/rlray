@@ -151,7 +151,7 @@ def conv_case3():
     conv_state[:, :, -1] = x2
     x2 = torch.sum(conv_state * rearrange(conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
     x2 = x2 + conv1d.bias
-    x2 = act(x2).to(dtype=dtype)
+    x2 = act(x2)#.to(dtype=dtype)
 
     #x2 = causal_conv1d_update(
     #            x2.squeeze(),
