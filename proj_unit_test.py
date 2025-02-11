@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 
 import selective_scan_cuda
+import causal_conv1d_cuda
 
 bs = 2
 seqlen = 16
@@ -188,10 +189,77 @@ def case2():
     #            self.conv1d.bias,
     #            self.activation,
     #        )
+
+def conv_case1():
+    global conv1d
+    global hidden_states
     
+    # torch.Size([2, 12, 16])
+    #x = hidden_states #.transpose(1,2)
+
+    xz = rearrange(
+            in_proj.weight @ rearrange(hidden_states.to(dtype = in_proj.weight.dtype), "b l d -> d (b l)"),
+            "d (b l) -> b d l",
+            l=seqlen)
+
+    # xz : torch.Size([2, 24, 16]  
+    # x : torch.Size([2, 12, 16])
+    # z : torch.Size([2, 12, 16])
+    if in_proj.bias is not None:
+        xz = xz + rearrange(in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+
+    x, z = xz.chunk(2, dim=1)
+
+    conv1d_weight = conv1d.weight,
+    conv1d_bias = conv1d.bias,
+    
+    conv1d_weight = rearrange(conv1d_weight, "d 1 w -> d w")
+    conv1d_bias = conv1d_bias.contiguous() 
+        
+    conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(x, conv1d_weight, conv1d_bias, None, None, None, True)
+            
+    return conv1d_out
+
+def conv_case2():
+    
+    global conv1d
+    global hidden_states
+    
+    #hidden_states = torch.randn(bs, seqlen, d_model, device = device)
+
+    xz = rearrange(
+            in_proj.weight @ rearrange(hidden_states.to(dtype = in_proj.weight.dtype), "b l d -> d (b l)"),
+            "d (b l) -> b d l",
+            l=seqlen)
+
+    # xz : torch.Size([2, 24, 16]  
+    # x : torch.Size([2, 12, 16])
+    # z : torch.Size([2, 12, 16])
+    if in_proj.bias is not None:
+        xz = xz + rearrange(in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+
+    x, z = xz.chunk(2, dim=1)
+
+    # x : bs, dim, seqlength
+    #x = hidden_states
+    x = causal_conv1d_fn(
+                    x = x,
+                    weight=rearrange(conv1d.weight, "d 1 w -> d w"),
+                    bias=conv1d.bias,
+                    activation=activation,
+                )
+    return x
+
+x1 = conv_case1()
+x2 = conv_case2()
+print(x1.shape, x1)
+print(x2.shape, x2)
+
+assert torch.allclose(x1, x2, atol=1e-2)
+
 
 #x1 = 
-case1()
+#case1()
 #x2 = case2()
 
 #print(x1.shape)
