@@ -52,6 +52,10 @@ D = nn.Parameter(torch.ones(d_inner, device=device))  # Keep in fp32
 out_proj = nn.Linear(d_inner, d_model, bias=True, device = device) #, **factory_kwargs)
 
 def case1():
+    global D
+    global A_log
+    global out_proj
+    
     xz = rearrange(
             in_proj.weight @ rearrange(hidden_states.to(dtype = in_proj.weight.dtype), "b l d -> d (b l)"),
             "d (b l) -> b d l",
