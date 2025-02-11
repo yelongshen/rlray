@@ -532,7 +532,7 @@ class _SambaDecoderLayer(nn.Module):
             attn_outputs, key_cache, value_cache = self.attn(
                 hidden_states=hidden_states,
                 position_ids=position_ids,
-                past_key_valu=past_cache
+                past_key_value=past_cache
             )
             next_cache = (key_cache, value_cache)
 
