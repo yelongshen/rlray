@@ -14,6 +14,8 @@ import psutil  # To check process status before killing
 import re
 import multiprocessing
 import logging
+import json
+from types import SimpleNamespace
 
 import numpy as np
 from queue import Queue
@@ -81,7 +83,10 @@ def main(args):
     local_model_path = args.pretrained_model 
     print('model_path', local_model_path) 
     
-    llm_config = AutoConfig.from_pretrained(local_model_path, local_files_only=True, trust_remote_code=True) 
+    #llm_config = AutoConfig.from_pretrained(local_model_path, local_files_only=True, trust_remote_code=True) 
+    with open(f'{local_model_path}/config.json', 'r') as file:
+        llm_config = json.load(file, object_hook=lambda d: SimpleNamespace(**d))
+
     vocab_size = llm_config.vocab_size 
     eos_token_id = llm_config.eos_token_id #": 32000,
   
