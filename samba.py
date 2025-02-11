@@ -295,6 +295,7 @@ class MambaInnerFn(torch.autograd.Function):
 
         if recurrent_mode and L == 1:
             # generation mode:
+            print('x.shape:', x.shape, x.squeeze().shape)
             conv1d_out = causal_conv1d_update(x.squeeze(), conv_state, conv1d_weight, conv1d_bias, activation)
             conv1d_out = conv1d_out.unsqueeze(dim = -1)
         else: 
