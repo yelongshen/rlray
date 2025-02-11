@@ -232,9 +232,9 @@ def conv_case3():
     dt1, B1, C1 = torch.split(x1_dbl, [dt_rank, d_state, d_state], dim=-1)
     dt1 = dt_proj.weight @ dt1.t()
 
-    dt1 = rearrange(dt1, "d (b l) -> b d l", l=seqlen)
-    B1 = rearrange(B1, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
-    C1 = rearrange(C1, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+    dt1 = rearrange(dt1, "d (b l) -> b d l", l=seqlen-1)
+    B1 = rearrange(B1, "(b l) dstate -> b dstate l", l=seqlen-1).contiguous()
+    C1 = rearrange(C1, "(b l) dstate -> b dstate l", l=seqlen-1).contiguous()
 
     if x1.stride(-1) != 1:
         x1 = x1.contiguous()
@@ -246,7 +246,6 @@ def conv_case3():
     if C1.stride(-1) != 1:
         C1 = C1.contiguous()
 
-    
     if z is not None and z.stride(-1) != 1:
         z = z.contiguous()
         
