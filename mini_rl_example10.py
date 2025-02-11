@@ -37,7 +37,6 @@ from torch.optim import AdamW
 
 from accelerate import Accelerator
 
-
 from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
 from safetensors.torch import load_file
 
@@ -46,11 +45,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from transformers import get_linear_schedule_with_warmup
 
 from transformers.activations import ACT2FN
-from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.cache_utils import Cache, DynamicCache
+#from transformers.modeling_outputs import CausalLMOutputWithPast
+#from transformers.cache_utils import Cache, DynamicCache
 
-from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel, Phi3Model, Phi3DecoderLayer
-from transformers.models.phi3.configuration_phi3 import Phi3Config
+#from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel, Phi3Model, Phi3DecoderLayer
+#from transformers.models.phi3.configuration_phi3 import Phi3Config
 
 from samba import _SambaForCausalLM
 from replaybuffer import ReplayBuffer, Sample
@@ -82,7 +81,7 @@ def main(args):
     local_model_path = args.pretrained_model 
     print('model_path', local_model_path) 
     
-    llm_config = AutoConfig.from_pretrained(local_model_path, local_files_only=True) 
+    llm_config = AutoConfig.from_pretrained(local_model_path, local_files_only=True, trust_remote_code=True) 
     vocab_size = llm_config.vocab_size 
     eos_token_id = llm_config.eos_token_id #": 32000,
   
