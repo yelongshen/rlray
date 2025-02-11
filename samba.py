@@ -295,9 +295,9 @@ class MambaInnerFn(torch.autograd.Function):
 
         if recurrent_mode and L == 1:
             # generation mode:
-            print('x.shape:', x.shape, x.squeeze().shape)
-            conv1d_out = causal_conv1d_update(x.squeeze(), conv_state, conv1d_weight, conv1d_bias, activation)
-            conv1d_out = conv1d_out.unsqueeze(dim = -1)
+            #print('x.shape:', x.shape, x.squeeze().shape)
+            conv1d_out = causal_conv1d_update(x.squeeze(dim=-1), conv_state, conv1d_weight, conv1d_bias, activation)
+            conv1d_out = conv1d_out.unsqueeze(dim=-1)
         else: 
             # prefill mode & training mode;
             if recurrent_mode:
@@ -323,7 +323,8 @@ class MambaInnerFn(torch.autograd.Function):
         D = D.contiguous()
 
         if recurrent_mode and L == 1:
-            out_z = selective_state_update(ssm_state, conv1d_out.squeeze(), delta.squeeze(), A, B.squeeze(), C.squeeze(), D.float(), z.squeeze(), delta_bias, delta_softplus)
+            out_z = selective_state_update(ssm_state, conv1d_out.squeeze(dim=-1), delta.squeeze(dim=-1), A, B.squeeze(dim=-1), C.squeeze(dim=-1), D.float(), 
+                                            z.squeeze(dim=-1), delta_bias, delta_softplus)
             out_z = out_z.unsqueeze(dim = -1)
         else:
             out, scan_intermediates, out_z = selective_scan_cuda.fwd(conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus)
