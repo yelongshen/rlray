@@ -147,19 +147,19 @@ def conv_case3():
     x2, z2 = xz2.chunk(2, dim=1)
     x2 = x2.squeeze()
     
-    conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
-    conv_state[:, :, -1] = x2
-    x2 = torch.sum(conv_state * rearrange(conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
-    x2 = x2 + conv1d.bias
-    x2 = act(x2)#.to(dtype=dtype)
+    #conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
+    #conv_state[:, :, -1] = x2
+    #x2 = torch.sum(conv_state * rearrange(conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
+    #x2 = x2 + conv1d.bias
+    #x2 = act(x2)#.to(dtype=dtype)
 
-    #x2 = causal_conv1d_update(
-    #            x2.squeeze(),
-    #            conv_state,
-    #            rearrange(conv1d.weight, "d 1 w -> d w"),
-    #            conv1d.bias,
-    #            activation,
-    #        )
+    x2 = causal_conv1d_update(
+                x2.squeeze(),
+                conv_state,
+                rearrange(conv1d.weight, "d 1 w -> d w"),
+                conv1d.bias,
+                activation,
+            )
 
     return torch.cat([x1, x2.unsqueeze(dim=-1)], dim=-1) #x2
   
