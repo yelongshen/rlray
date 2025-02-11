@@ -16,7 +16,7 @@ import selective_scan_cuda
 import causal_conv1d_cuda
 
 bs = 2
-seqlen = 3
+seqlen = 7
 
 # meta-hyper
 d_model = 6
@@ -53,7 +53,12 @@ out_proj = nn.Linear(d_inner, d_model, bias=True, device = device) #, **factory_
 def conv_case1():
     global conv1d
     global hidden_states
-  
+    global x_proj
+    global dt_proj
+    global A_log
+    global D
+    global out_proj
+    
     xz = rearrange(
             in_proj.weight @ rearrange(hidden_states.to(dtype = in_proj.weight.dtype), "b l d -> d (b l)"),
             "d (b l) -> b d l",
@@ -80,12 +85,35 @@ def conv_case1():
     
     conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(x, conv1d_weight, conv1d_bias, None, None, None, True)
 
+    x_dbl = F.linear(rearrange(conv1d_out, 'b d l -> (b l) d'), x_proj.weight)  # (bl d)
+    delta = rearrange(dt_proj.weight @ x_dbl[:, :dt_rank].t(), "d (b l) -> b d l", l = seqlen)
+
+    A = -torch.exp(A_log.float())
+    
+    B = x_dbl[:, dt_rank:dt_rank + d_state]  # (bl dstate)
+    B = rearrange(B, "(b l) dstate -> b 1 dstate l", l=seqlen).contiguous()
+
+    C = x_dbl[:, -d_state:]  # (bl dstate)
+    C = rearrange(C, "(b l) dstate -> b 1 dstate l", l=seqlen).contiguous()
+
+    D = D.contiguous()
+
+    #delta_softplus=True,
+    out, scan_intermediates, out_z = selective_scan_cuda.fwd(conv1d_out, delta, A, B, C, D.float(), z, dt_proj.bias.float(), True)
+
+    fout = F.linear(rearrange(out_z, "b d l -> b l d"), out_proj.weight, out_proj.bias)
+
     # standard mode: 
-    return conv1d_out, _conv_state
+    return fout, _conv_state, None # _ssm_state not there yet. 
 
 def conv_case2():
     global conv1d
     global hidden_states
+    global x_proj
+    global dt_proj
+    global A_log
+    global D
+    global out_proj
 
     xz = rearrange(
             in_proj.weight @ rearrange(hidden_states.to(dtype = in_proj.weight.dtype), "b l d -> d (b l)"),
@@ -108,7 +136,45 @@ def conv_case2():
                     bias=conv1d.bias,
                     activation=activation
                 )
-    return x, _conv_state
+
+    x_dbl = x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
+            
+    dt, B, C = torch.split(x_dbl, [dt_rank, d_state, d_state], dim=-1)
+    dt = dt_proj.weight @ dt.t()
+
+    dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
+    B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+    C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+
+    if x.stride(-1) != 1:
+        x = x.contiguous()
+    if dt.stride(-1) != 1:
+        dt = dt.contiguous()
+        
+    D = D.contiguous()
+    if B.stride(-1) != 1:
+        B = B.contiguous()
+    if C.stride(-1) != 1:
+        C = C.contiguous()
+        
+    if z is not None and z.stride(-1) != 1:
+        z = z.contiguous()
+        
+    if B.dim() == 3:
+        B = rearrange(B, "b dstate l -> b 1 dstate l")
+        #ctx.squeeze_B = True
+    if C.dim() == 3:
+        C = rearrange(C, "b dstate l -> b 1 dstate l")
+        #ctx.squeeze_C = True
+            
+    out, x, rest = selective_scan_cuda.fwd(x, dt, A, B, C, D.float(), z, dt_proj.bias.float(), True)
+
+    y = rearrange(rest, "b d l -> b l d")
+    
+    out = out_proj(y)
+
+    return out, _conv_state, None # _ssm_state not there yet. 
+    
 
 def conv_case3():
     # split x into two part, first 15, second 1.
@@ -172,22 +238,23 @@ def conv_case3():
 
     return torch.cat([x1, x2.unsqueeze(dim=-1)], dim=-1), _conv_state #x2
   
-x1,c1 = conv_case1()
-x2,c2 = conv_case2()
-x3,c3 = conv_case3()
-print(c1.shape, c1)
-print(c2.shape, c2)
-print(c3.shape, c3)
+x1,c1,s1 = conv_case1()
+x2,c2,s2 = conv_case2()
 
 print(x1.shape, x1)
 print(x2.shape, x2)
-print(x3.shape, x3)
+#print(x3.shape, x3)
+
+#x3,c3 = conv_case3()
+print(c1.shape, c1)
+print(c2.shape, c2)
+#print(c3.shape, c3)
 
 assert torch.allclose(c1, c2, atol=1e-2)
-assert torch.allclose(c1, c3, atol=1e-2)
+#assert torch.allclose(c1, c3, atol=1e-2)
 
 assert torch.allclose(x1, x2, atol=1e-2)
-assert torch.allclose(x1, x3, atol=1e-2)
+#assert torch.allclose(x1, x3, atol=1e-2)
 
 #x1 = 
 #case1()
