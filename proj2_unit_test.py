@@ -16,7 +16,7 @@ import selective_scan_cuda
 import causal_conv1d_cuda
 
 bs = 2
-seqlen = 16
+seqlen = 4
 
 # meta-hyper
 d_model = 6
@@ -179,9 +179,15 @@ print(c1.shape, c1)
 print(c2.shape, c2)
 print(c3.shape, c3)
 
+print(x1.shape, x1)
+print(x2.shape, x2)
+print(x3.shape, x3)
+
 assert torch.allclose(c1, c2, atol=1e-2)
 assert torch.allclose(c1, c3, atol=1e-2)
 
+assert torch.allclose(x1, x2, atol=1e-2)
+assert torch.allclose(x1, x3, atol=1e-2)
 
 #x1 = 
 #case1()
