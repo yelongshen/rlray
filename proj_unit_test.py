@@ -48,7 +48,7 @@ A_log = torch.log(A)  # Keep A_log in fp32
 A_log = nn.Parameter(A_log)
 
 # D "skip" parameter
-D = nn.Parameter(torch.ones(d_inner))  # Keep in fp32
+D = nn.Parameter(torch.ones(d_inner, device=device))  # Keep in fp32
 out_proj = nn.Linear(d_inner, d_model, bias=True, device = device) #, **factory_kwargs)
 
 def case1():
