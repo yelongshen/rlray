@@ -250,10 +250,10 @@ def conv_case3():
         z1 = z1.contiguous()
         
     if B1.dim() == 3:
-        B1 = rearrange(B, "b dstate l -> b 1 dstate l")
+        B1 = rearrange(B1, "b dstate l -> b 1 dstate l")
         #ctx.squeeze_B = True
     if C1.dim() == 3:
-        C1 = rearrange(C, "b dstate l -> b 1 dstate l")
+        C1 = rearrange(C1, "b dstate l -> b 1 dstate l")
         #ctx.squeeze_C = True
             
     out1, x1, rest1 = selective_scan_cuda.fwd(x1, dt1, A, B1, C1, D.float(), z1, dt_proj.bias.float(), True)
