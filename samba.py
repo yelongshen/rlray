@@ -31,6 +31,7 @@ except ImportError:
     logger.warning("Flash submodules not found, consider installing for better performance.")
     #swiglu = None
     #RMSNorm = None
+from flash_attn.ops.activations import swiglu
 
 import causal_conv1d_cuda
 
@@ -67,7 +68,7 @@ class _RMSNorm(nn.Module):
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
         return self.weight * hidden_states.to(input_dtype)
 
-PHI_NORM_CLASS = _RMSNorm #if RMSNorm is None else RMSNorm
+PHI_NORM_CLASS = RMSNorm #_RMSNorm #if RMSNorm is None else RMSNorm
 
 # Copied from transformers.models.gemma.modeling_gemma.GemmaRotaryEmbedding with gemma->phi3, Gemma->Phi3
 class _RotaryEmbedding(nn.Module):
@@ -118,14 +119,23 @@ class _MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.gate_up_proj = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+        #self.gate_up_proj = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
+        #self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+        self.fc1 = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
+        self.fc2 = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+
         self.activation_fn = ACT2FN[config.hidden_act]
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        up_states = self.gate_up_proj(hidden_states)
-        gate, up_states = up_states.chunk(2, dim=-1)
-        up_states = up_states * self.activation_fn(gate)
-        return self.down_proj(up_states)
+        y = self.fc1(hidden_states)
+        # Special case for SwiGLU
+        if self.config.hidden_act == "silu" and swiglu is not None:
+            gate, y = y.chunk(2, dim=-1)
+            y = swiglu(gate, y)
+        else:
+            gate, y = y.chunk(2, dim=-1)
+            y = y * self.activation_fn(gate)
+        return self.fc2(y)
+        
         
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
