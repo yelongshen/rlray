@@ -246,14 +246,14 @@ def conv_case3():
     if C1.stride(-1) != 1:
         C1 = C1.contiguous()
 
-    if z is not None and z.stride(-1) != 1:
-        z = z.contiguous()
+    if z1 is not None and z1.stride(-1) != 1:
+        z1 = z1.contiguous()
         
-    if B.dim() == 3:
-        B = rearrange(B, "b dstate l -> b 1 dstate l")
+    if B1.dim() == 3:
+        B1 = rearrange(B, "b dstate l -> b 1 dstate l")
         #ctx.squeeze_B = True
-    if C.dim() == 3:
-        C = rearrange(C, "b dstate l -> b 1 dstate l")
+    if C1.dim() == 3:
+        C1 = rearrange(C, "b dstate l -> b 1 dstate l")
         #ctx.squeeze_C = True
             
     out1, x1, rest1 = selective_scan_cuda.fwd(x1, dt1, A, B1, C1, D.float(), z1, dt_proj.bias.float(), True)
