@@ -331,14 +331,16 @@ class MambaInnerFn(torch.autograd.Function):
             if recurrent_mode:
                 ssm_state.copy_(scan_intermediates[:, :, -1, 1::2])
             
-        ctx.delta_softplus = delta_softplus
-        ctx.out_proj_bias_is_None = out_proj_bias is None
-        ctx.checkpoint_lvl = checkpoint_lvl
-        if checkpoint_lvl >= 1:  # Will recompute conv1d_out and delta in the backward pass
-            conv1d_out, delta = None, None
-        ctx.save_for_backward(xz, conv1d_weight, conv1d_bias, x_dbl, x_proj_weight,
-                              delta_proj_weight, out_proj_weight, conv1d_out, delta,
-                              A, B, C, D, delta_bias, scan_intermediates, out)
+            ctx.delta_softplus = delta_softplus
+            ctx.out_proj_bias_is_None = out_proj_bias is None
+            ctx.checkpoint_lvl = checkpoint_lvl
+            if checkpoint_lvl >= 1:  # Will recompute conv1d_out and delta in the backward pass
+                conv1d_out, delta = None, None
+                
+            ctx.save_for_backward(xz, conv1d_weight, conv1d_bias, x_dbl, x_proj_weight,
+                                  delta_proj_weight, out_proj_weight, conv1d_out, delta,
+                                  A, B, C, D, delta_bias, scan_intermediates, out)
+            
         return F.linear(rearrange(out_z, "b d l -> b l d"), out_proj_weight, out_proj_bias)
 
     @staticmethod
