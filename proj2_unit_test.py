@@ -110,13 +110,13 @@ def conv_case3():
     global hidden_states
     global conv_state
   
-    h1 = hidden_states[:, :seqlen-1, :]
-    h2 = hidden_states[:, -1:, :]
+    h1 = hidden_states[:, :seqlen-1, :].contiguous()
+    h2 = hidden_states[:, -1:, :].contiguous()
   
     xz1 = rearrange(
             in_proj.weight @ rearrange(h1.to(dtype = in_proj.weight.dtype), "b l d -> d (b l)"),
             "d (b l) -> b d l",
-            l=seqlen)
+            l=seqlen-1)
 
     if in_proj.bias is not None:
         xz1 = xz1 + rearrange(in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
@@ -139,7 +139,7 @@ def conv_case3():
     xz2 = rearrange(
             in_proj.weight @ rearrange(h2.to(dtype = in_proj.weight.dtype), "b l d -> d (b l)"),
             "d (b l) -> b d l",
-            l=seqlen)
+            l=1)
 
     if in_proj.bias is not None:
         xz2 = xz2 + rearrange(in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
