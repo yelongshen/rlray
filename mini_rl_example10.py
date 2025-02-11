@@ -255,10 +255,24 @@ def main(args):
         print('final average reward: ', acc_reward / acc_num, ', acc_num: ', acc_num)
         print('final topk reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num)
         
+        if rank == 0 and args.save_ckpt is not None:
+            # Save only on rank 0
+            checkpoint = {
+                "epoch": epoch,
+                "model_state_dict": llm.module.state_dict(),  # Remove DDP wrapper
+            }
+            save_path = f"{args.save_ckpt}/ckpt_{epoch}.pth"
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            torch.save(checkpoint, save_path)
+            print(f"Checkpoint saved at: {save_path}")
+        # Synchronize all processes to ensure rank 0 saves first
+        dist.barrier()
+        
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretrained_model", type=str, default="none", help="path to pretrained ckpt.")
+    parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
     parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
     parser.add_argument("--lr", type=float, default=1e-6, help="peak learning rate.")
