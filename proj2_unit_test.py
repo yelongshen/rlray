@@ -154,7 +154,7 @@ def conv_case3():
     #x2 = act(x2)#.to(dtype=dtype)
 
     x2 = causal_conv1d_update(
-                x2.squeeze(),
+                x2,
                 conv_state,
                 rearrange(conv1d.weight, "d 1 w -> d w"),
                 conv1d.bias,
