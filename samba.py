@@ -741,13 +741,13 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
         #assert max_prompt_len <= params.max_seq_len
         total_len = min(4096, max_gen_len + max_prompt_len)
 
-        pad_id = self.config.pad_token_id
+        pad_id = self.config.eos_token_id # self.config.pad_token_id
         eos_id = self.config.eos_token_id # eos_token_id
         bos_id = self.config.bos_token_id
         
         tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cuda")
         # position starts with 0.
-        pos_ids = torch.full((bsz, total_len), 0, dtype=torch.long, device="cuda")
+        # pos_ids = torch.full((bsz, total_len), 0, dtype=torch.long, device="cuda")
         
         for k, t in enumerate(prompt_tokens):
             tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
@@ -788,7 +788,6 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
                 input=logits.reshape(-1, self.vocab_size), #.transpose(1, 2),
                 target=tokens[:, prev_pos + 1 : cur_pos + 1].reshape(-1),
                 reduction="none",
-                ignore_index=pad_id,
             )
             #print('critics.shape', critics.shape)
             #print('token_critics[:, prev_pos: cur_pos].shape', token_critics[:, prev_pos: cur_pos].shape)
@@ -801,9 +800,7 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
             if all(eos_reached):
                 break
 
-        #print('generation done...................')
         token_logprobs = token_logprobs.tolist()
-        #print('token_logprobs', token_logprobs.shape, token_logprobs.tolist())
         token_critics = token_critics.tolist()
         
         out_tokens, out_logprobs, out_critics = [], [], []
