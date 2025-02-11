@@ -272,7 +272,7 @@ def conv_case3():
     if in_proj.bias is not None:
         xz2 = xz2 + rearrange(in_proj.bias.to(dtype=xz2.dtype), "d -> d 1")
     x2, z2 = xz2.chunk(2, dim=1)
-    x2 = x2.squeeze()
+    #x2 = x2.squeeze()
     z2 = z2.squeeze()
     
     #conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
@@ -281,7 +281,7 @@ def conv_case3():
     #x2 = x2 + conv1d.bias
     #x2 = act(x2)#.to(dtype=dtype)
     x2 = causal_conv1d_update(
-                x2,
+                x2.squeeze(),
                 _conv_state,
                 rearrange(conv1d.weight, "d 1 w -> d w"),
                 conv1d.bias,
