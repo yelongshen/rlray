@@ -525,7 +525,8 @@ class _SambaDecoderLayer(nn.Module):
 
         if self.use_mamba:
             #  hidden_states, conv_state = None, ssm_state = None, inference_mode = False):
-            conv_state, ssm_state = None, None if past_cache is None else past_cache
+            # conv_state, ssm_state = None, None if past_cache is None else past_cache
+            conv_state, ssm_state = past_cache if past_cache is not None else (None, None)
             #forward(self, hidden_states, conv_state = None, ssm_state = None, inference_mode = False):
             attn_outputs, conv_state, ssm_state = self.attn(hidden_states, conv_state = conv_state, ssm_state = ssm_state, inference_mode = inference_mode)
             #residual = residual.to(torch.float32) 
