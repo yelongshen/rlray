@@ -123,6 +123,9 @@ def conv_case3():
 
     x1, z1 = xz1.chunk(2, dim=1)
 
+    # save the x into conv_states. 
+    conv_state.copy_(F.pad(x1, (d_conv - x1.shape[-1], 0))) 
+
     # x : bs, dim, seqlength
     #x = hidden_states
     x1 = causal_conv1d_fn(
@@ -131,9 +134,6 @@ def conv_case3():
                     bias=conv1d.bias,
                     activation=activation
                 )
-
-    # save the x into conv_states. 
-    conv_state.copy_(F.pad(x1, (d_conv - x1.shape[-1], 0))) 
 
 
     xz2 = rearrange(
