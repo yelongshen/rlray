@@ -261,7 +261,7 @@ class _FlashAttention2(nn.Module):
             use_sliding_windows (`bool`, *optional*):
                 Whether to activate sliding window attention.
         """
-        attn_output = flash_attn_func(query_states, key_states, value_states, dropout, softmax_scale=softmax_scale, causal=True, window_size=(window, window))
+        attn_output = flash_attn_func(query_states, key_states, value_states, dropout, softmax_scale=softmax_scale, causal=True, window_size=(windows, windows))
         return attn_output
 
 PHI_ATTENTION_CLASSES = { "flash_attention_2": _FlashAttention2 }
