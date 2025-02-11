@@ -121,10 +121,18 @@ def case1():
     out, scan_intermediates, out_z = selective_scan_cuda.fwd(x, dt, A, B, C, D, z, dt_proj.bias, True)
     
 
-    print(out.shape)
-    print(scan_intermediates.shape)
-    print(out_z.shape)
+    #torch.Size([2, 12, 16])
+    #torch.Size([2, 12, 1, 32])
+    #torch.Size([2, 12, 16])
 
+    print(out.shape)
+    print(out)
+    
+    print(scan_intermediates.shape)
+    print(scan_intermediates)
+    
+    print(out_z.shape)
+    print(out_z)
     return out
     
     # x = self.act(self.conv1d(x)[..., :seqlen])
