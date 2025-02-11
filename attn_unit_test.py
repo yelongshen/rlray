@@ -12,10 +12,10 @@ import math
 
 # query size
 bs = 2
-seq_len = 16
+seq_len = 4
 n_head = 6
 head_dim = 8
-window = 4
+window = 8
 
 device = 'cuda:0'
 
@@ -137,11 +137,11 @@ def flash_step_attention():
 #o1 = vanilla_attention()
 #o2 = flash_attention()
 
-#o1 = vanilla_sliding_attention()
-#o2 = flash_sliding_attention()
+o1 = vanilla_sliding_attention()
+o2 = flash_sliding_attention()
 
-o1 = vanilla_step_attention()
-o2 = flash_step_attention()
+#o1 = vanilla_step_attention()
+#o2 = flash_step_attention()
 
 print(o1)
 print(o2)
