@@ -13,7 +13,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from phimodel import _Phi3ForCausalLM
 from replaybuffer import ReplayBuffer, Sample
 
-def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device):
+def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device, critic_alpha=0.01):
     llm.train()    
     #critic_loss = 0.0
     #policy_loss = 0.0
@@ -75,21 +75,20 @@ def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device
         # we shall do advantage normalization. 
         ratios = torch.exp(logprobs - old_logprobs.detach() + 1e-10)
         
-        eps_clip = 0.2
+        eps_clip = 0.5
         surr1 = ratios * advantages       
         surr2 = torch.clamp(ratios, 1 - eps_clip, 1 + eps_clip) * advantages
         _policy_loss = -torch.min(surr1, surr2).mean() 
         _critic_loss = mseLoss(critics, returns).mean() 
 
-        _total_loss = (_policy_loss + 0.01 * _critic_loss) / micro_training_steps 
-      
+        _total_loss = (_policy_loss + critic_alpha * _critic_loss) / micro_training_steps 
+        _total_loss.backward()
+
         # final loss of clipped objective PPO objective. 
-            
         # take gradient step
         mini_critic_loss = mini_critic_loss + _critic_loss.detach() / micro_training_steps 
         mini_policy_loss = mini_policy_loss + _policy_loss.detach() / micro_training_steps
             
-        _total_loss.backward()
         #print(' _policy_loss:', _policy_loss, ' , _critic_loss:', _critic_loss, ' , device:', device)
         
         step = step + 1
