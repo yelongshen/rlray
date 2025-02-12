@@ -75,7 +75,7 @@ class ReplayBuffer:
         rewards = [d.reward for d in self.buffer]
 
         def _norm(x):
-            _mean = numpy.mean(x)
+            _mean = np.mean(x)
             _l2 = [(_r - _mean) **2 for _r in x]
             return [(_r - _mean) / math.sqrt(np.sum(_l2)/len(x) + 1e-4) for _r in x]
 
