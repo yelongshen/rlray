@@ -80,7 +80,7 @@ class ReplayBuffer:
             return [(_r - _mean) / math.sqrt(np.sum(_l2)/len(x) + 1e-4) for _r in x]
 
         norm_rewards = []
-        for g in range(0, len(self.buffer) / group):
+        for g in range(0, len(self.buffer) // group):
             _rewards = rewards[g * group: (g+1) * group]
             _norm_rewards = _norm(_rewards)
             norm_rewards = norm_rewards + _norm_rewards
