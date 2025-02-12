@@ -29,7 +29,7 @@ def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device
     micro_training_steps = buffer_size / batch_size
     
     # 
-    pad_id = llm_config.pad_token_id
+    #pad_id = llm_config.pad_token_id
     vocab_size = llm_config.vocab_size
     
     optimizer.zero_grad()
@@ -64,7 +64,7 @@ def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device
             input = logits.reshape(-1, vocab_size)[:-1,:], #.transpose(1, 2),
             target = input_tokens.reshape(-1)[1:], 
             reduction = "none",
-            ignore_index = pad_id,
+            #ignore_index = pad_id,
         ).reshape(1, -1)
 
         # critics align with the ground truth. 
