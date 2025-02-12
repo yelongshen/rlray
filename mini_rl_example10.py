@@ -236,7 +236,8 @@ def main(args):
                     output_rewards.append(_rewards)
     
                 #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>    
-                experience = Sample(prompt = prompt, response = response, reward = reward, probs = probs[0], crits = crits[0], tokens = all_tokens[0], masks = all_masks[0], seq_rewards = output_rewards[0])
+                experience = Sample(prompt = prompt, response = response, reward = reward, probs = probs[0], crits = crits[0], 
+                                    tokens = all_tokens[0], masks = all_masks[0], seq_rewards = output_rewards[0])
                 buffer.push(experience)
 
             topk_reward = topk_reward + topk_hit
@@ -245,15 +246,19 @@ def main(args):
                 avg_reward = buffer.mean_reward()
                 avg_response_len = buffer.avg_responselen()
                 print('progress: ', batch_idx, ', avg_reward: ', avg_reward, ', avg_response_len: ', avg_response_len , ', rank: ', rank)
-                print('topk_reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num, ', rank: ', rank)
+                print('topk_reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num,   ', rank: ', rank)
+                print('acc_reward: ',  acc_reward / acc_num, ', acc_num: ', acc_num, ', rank: ', rank)
                 
-                buffer.calculate_advantage()
                 dist.barrier()
-                buffer.distributed_advantage_norm(device, dist)
-                policy_loss_log, critic_loss_log = ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device)
-
-                print('policy_loss_log: ', policy_loss_log)
-                print('critic_loss_log: ', critic_loss_log)
+                if args.advantage == 'distgae':
+                    buffer.calculate_advantage()
+                    buffer.distributed_advantage_norm(device, dist)
+                elif args.advantage == 'group':
+                    buffer.calculate_group_advantage(group = args.n_rollout)
+                    
+                policy_loss_log, critic_loss_log = ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device, critic_alpha = args.critic_alpha)
+                print('policy_loss_log: ', policy_loss_log, ', critic_loss_log: ', critic_loss_log, ', lr:', scheduler.get_last_lr() )
+                
                 ## start the model training; 
                 buffer.clear()    
                 llm.eval()
@@ -284,6 +289,9 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-6, help="peak learning rate.")
     parser.add_argument("--epoch", type=int, default=30, help="number of epoches.")
     parser.add_argument("--n_rollout", type=int, default=1, help="number of rollout per sample.")
+    parser.add_argument("--advantage", type=str, default="distgae", choices=["distgae", "group"], help="Choose the advantage function.")
+    parser.add_argument("--critic_alpha", type=float, default=0.01, help="alpha for critic loss.")
+    
     args = parser.parse_args()
     
     assert args.replay_size % args.n_rollout == 0, 'pls make sure replay_size mod n_rollout == 0'
