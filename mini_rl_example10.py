@@ -246,10 +246,12 @@ def main(args):
                 avg_response_len = buffer.avg_responselen()
                 print('progress: ', batch_idx, ', avg_reward: ', avg_reward, ', avg_response_len: ', avg_response_len , ', rank: ', rank)
                 print('topk_reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num, ', rank: ', rank)
-
+                
+                buffer.calculate_advantage()
                 dist.barrier()
+                buffer.distributed_advantage_norm(device, dist)
                 policy_loss_log, critic_loss_log = ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device)
-    
+
                 print('policy_loss_log: ', policy_loss_log)
                 print('critic_loss_log: ', critic_loss_log)
                 ## start the model training; 
