@@ -70,7 +70,7 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
-    def group_advantage(self, group = 8):
+    def calculate_group_advantage(self, gamma=0.995, group = 8):
         assert len(self.buffer) % group == 0 
         rewards = [d.reward for d in self.buffer]
 
@@ -87,6 +87,19 @@ class ReplayBuffer:
             
         for idx, d in enumerate(self.buffer):
             d.norm_reward = norm_rewards[idx]
+
+        for d in self.buffer:
+            #prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
+            acc_reward = d.reward
+            d.advantages = []
+            d.returns = []
+            for r, c in zip(reversed(d.seq_rewards), reversed(d.crits)):
+                acc_reward = gamma * acc_reward #+ d.norm_reward
+                #advantage = acc_reward # - c
+                d.advantages.insert(0, d.norm_reward)
+                d.returns.insert(0, acc_reward)
+
+            d.normalized_advantages = d.advantages
             
     def calculate_advantage(self, gamma=0.9995):
         for d in self.buffer:
