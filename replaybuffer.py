@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import torch
 
 import numpy as np
+import math
 
 @dataclass
 class Sample:
@@ -34,6 +35,7 @@ class Sample:
     advantages : Optional[List[float]] = None
     returns : Optional[List[float]] = None
     normalized_advantages : Optional[List[float]] = None
+    norm_reward: float = None
 # ReplayBuffer 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -68,7 +70,24 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
-        
+    def group_advantage(self, gamma=0.9995, rollout = 8):
+        assert len(self.buffer) % rollout == 0 
+        rewards = [d.reward for d in self.buffer]
+
+        def _norm(x):
+            _mean = numpy.mean(x)
+            _l2 = [(_r - _mean) **2 for _r in x]
+            return [(_r - _mean) / math.sqrt(np.sum(_l2)/len(x) + 1e-4) for _r in x]
+
+        norm_rewards = []
+        for g in range(0, len(self.buffer) / rollout):
+            _rewards = rewards[g * rollout: (g+1) * rollout]
+            _norm_rewards = _norm(_rewards)
+            norm_rewards = norm_rewards + _norm_rewards
+            
+        for idx, d in enumerate(self.buffer):
+            d.norm_reward = norm_rewards[idx]
+            
     def calculate_advantage(self, gamma=0.9995):
         for d in self.buffer:
             #prompt, response, reward, probs, crits, tokens, masks, seq_rewards = d
