@@ -70,8 +70,8 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
-    def group_advantage(self, gamma=0.9995, rollout = 8):
-        assert len(self.buffer) % rollout == 0 
+    def group_advantage(self, group = 8):
+        assert len(self.buffer) % group == 0 
         rewards = [d.reward for d in self.buffer]
 
         def _norm(x):
@@ -80,8 +80,8 @@ class ReplayBuffer:
             return [(_r - _mean) / math.sqrt(np.sum(_l2)/len(x) + 1e-4) for _r in x]
 
         norm_rewards = []
-        for g in range(0, len(self.buffer) / rollout):
-            _rewards = rewards[g * rollout: (g+1) * rollout]
+        for g in range(0, len(self.buffer) / group):
+            _rewards = rewards[g * group: (g+1) * group]
             _norm_rewards = _norm(_rewards)
             norm_rewards = norm_rewards + _norm_rewards
             
