@@ -256,9 +256,11 @@ def main(args):
                     buffer.distributed_advantage_norm(device, dist)
                 elif args.advantage == 'group':
                     buffer.calculate_group_advantage(group = args.n_rollout)
-                    
+
                 policy_loss_log, critic_loss_log = ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device, critic_alpha = args.critic_alpha)
-                print('policy_loss_log: ', policy_loss_log, ', critic_loss_log: ', critic_loss_log, ', lr:', scheduler.get_last_lr() )
+                
+                if local_rank == 0:
+                    print('policy_loss_log: ', policy_loss_log, ', critic_loss_log: ', critic_loss_log, ', lr:', scheduler.get_last_lr() )
                 
                 ## start the model training; 
                 buffer.clear()    
