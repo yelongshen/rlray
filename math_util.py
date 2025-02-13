@@ -5,6 +5,7 @@ import re
 
 from latex2sympy.latex2sympy2 import latex2sympy
 from math_evaluation import is_equiv
+from math_verify_util import math_verify
 
 def is_numeric(s):
     """Check if a string is a valid numeric value (integer or float)."""
@@ -74,8 +75,9 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8"):
         answer_tokens = tokenizer([extracted_answer], add_special_tokens=False, max_length=1024, truncation=True)
         extracted_answer = tokenizer.decode(answer_tokens['input_ids'][0], skip_special_tokens=True)
 
+        #     print('verify', math_verify("${1,3} \\cup {2,4}$", "${1,2,3,4}$")) 
         for ans in answers:
-            is_match = compare_math_answers(ans, extracted_answer) or is_equiv(ans, extracted_answer)
+            is_match = compare_math_answers(ans, extracted_answer) or is_equiv(ans, extracted_answer) or math_verify(extracted_answer, ans):
             if is_match:
                 box_match = 1.0
                 break
