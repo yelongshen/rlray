@@ -58,7 +58,7 @@ from replaybuffer import ReplayBuffer, Sample
 from ppo import ppo_train 
 from math_util import compare_math_answers, process_math_prompt, process_math_answer
 
-from math_verify import math_verify
+from math_verify_util import math_verify
 
 def initmodel_sync(model:_SambaForCausalLM):
     with torch.no_grad():
