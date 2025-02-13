@@ -3,7 +3,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 
 local_path = './Samba_3_8B_IT_long_new/'
-tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
+tokenizer = AutoTokenizer.from_pretrained(local_path, local_files_only=True) 
 tokenizer.model_max_length = 4096 
 tokenizer.pad_token = tokenizer.unk_token # use unk rather than eos token to prevent endless generation
 tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token) 
