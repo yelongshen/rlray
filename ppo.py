@@ -78,7 +78,7 @@ def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device
         eps_clip = 0.5
         surr1 = ratios * advantages       
         surr2 = torch.clamp(ratios, 1 - eps_clip, 1 + eps_clip) * advantages
-        _policy_loss = -torch.min(surr1, surr2).mean() 
+        _policy_loss = -torch.min(surr1, surr2).sum() 
         _critic_loss = mseLoss(critics, returns).mean() 
 
         _total_loss = (_policy_loss + critic_alpha * _critic_loss) / micro_training_steps 
