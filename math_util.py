@@ -77,7 +77,7 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8"):
 
         #     print('verify', math_verify("${1,3} \\cup {2,4}$", "${1,2,3,4}$")) 
         for ans in answers:
-            is_match = compare_math_answers(ans, extracted_answer) or is_equiv(ans, extracted_answer) or math_verify(extracted_answer, ans):
+            is_match = compare_math_answers(ans, extracted_answer) or is_equiv(ans, extracted_answer) or math_verify(extracted_answer, ans)
             if is_match:
                 box_match = 1.0
                 break
