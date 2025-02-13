@@ -58,7 +58,6 @@ from replaybuffer import ReplayBuffer, Sample
 from ppo import ppo_train 
 from math_util import compare_math_answers, process_math_prompt, process_math_answer
 
-from math_verify_util import math_verify
 
 def initmodel_sync(model:_SambaForCausalLM):
     with torch.no_grad():
@@ -283,7 +282,6 @@ def main(args):
         
 
 if __name__ == "__main__":
-    print('verify', math_verify("${1,3} \\cup {2,4}$", "${1,2,3,4}$")) 
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretrained_model", type=str, default="none", help="path to pretrained ckpt.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
