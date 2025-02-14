@@ -164,7 +164,7 @@ def main(args):
         print(f"loaded {sft_dataset} with data_files={args.sft_data}")
         print(sft_dataset['train'])
         sft_sampler = torch.utils.data.distributed.DistributedSampler(sft_dataset['train'], num_replicas=world_size, rank=rank, shuffle=True) 
-        sft_dataloader = DataLoader(dataset['train'], batch_size=1, sampler=sft_sampler) 
+        sft_dataloader = DataLoader(sft_dataset['train'], batch_size=1, sampler=sft_sampler) 
 
         category = [0, 0, 0, 0, 0]
         for _b_idx, sft_d in enumerate(sft_dataloader):
