@@ -62,9 +62,12 @@ def process_math_prompt(original_question, prompt_type = "v8"):
     return prompt
 
 def process_math_answer(response, answers, tokenizer, prompt_type = "v8"):
-    if math_verify(answers[0], response):
-        return response, answers[0], 1.0
-    
+    try:
+        if math_verify(answers[0], response):
+            return response, answers[0], 1.0
+    except:
+        print('error response:', response)
+        
     pattern = r'The answer is:\s*(.+)'
 
     box_match = 0.0
