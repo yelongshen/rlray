@@ -10,7 +10,6 @@ import torch.distributed as dist
 from torch.optim import AdamW
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from phimodel import _Phi3ForCausalLM
 from replaybuffer import ReplayBuffer, Sample
 
 def ppo_gradient(llm, llm_config, buffer, buffer_size, device, critic_alpha=0.01):
