@@ -27,15 +27,15 @@ class Sample:
     prompt : str
     response : str
     reward : float
-    probs : List[float]
-    crits : List[float]
     tokens : List[int]
     masks : List[int]
-    seq_rewards : List[float]
+    norm_reward: float = None
+    probs : Optional[List[float]] = None
+    crits : Optional[List[float]] = None
+    seq_rewards : Optional[List[float]] = None
     advantages : Optional[List[float]] = None
     returns : Optional[List[float]] = None
     normalized_advantages : Optional[List[float]] = None
-    norm_reward: float = None
 # ReplayBuffer 
 class ReplayBuffer:
     def __init__(self, capacity):
