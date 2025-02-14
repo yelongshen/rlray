@@ -213,7 +213,7 @@ def main(args):
                     crits[0] = crits[0][ : response_idx]
                 response = tokenizer.decode(outputs[0])
 
-                if reward > 0.5:
+                if reward >= 0.5:
                     topk_hit = 1
                 acc_reward = acc_reward + reward
                 acc_num = acc_num + 1
@@ -250,7 +250,7 @@ def main(args):
                     output_rewards.append(_rewards)
     
                 #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>    
-                experience = Sample(prompt = prompt, response = response, reward = reward, probs = probs[0], crits = crits[0], 
+                experience = Sample(prompt = prompt, response = response, reward = reward, probs = probs[0], crits = crits[0], seq_rewards = output_rewards[0],
                                     tokens = all_tokens[0], masks = all_masks[0])
                 buffer.push(experience)
             
@@ -303,7 +303,6 @@ def main(args):
                 scheduler.step()
                 if local_rank == 0:
                     print('policy_loss_log: ', policy_loss_log, ', critic_loss_log: ', critic_loss_log, ', sft_loss_log: ', sft_loss_log, ', lr:', scheduler.get_last_lr() )
-                
                 ## start the model training; 
                 buffer.clear()    
                 sft_buffer.clear()
