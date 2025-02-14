@@ -62,6 +62,9 @@ def process_math_prompt(original_question, prompt_type = "v8"):
     return prompt
 
 def process_math_answer(response, answers, tokenizer, prompt_type = "v8"):
+    if math_verify(answers[0], response):
+        return response, answers[0], 1.0
+    
     pattern = r'The answer is:\s*(.+)'
 
     box_match = 0.0
@@ -74,7 +77,6 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8"):
         # clean up special tokens.
         answer_tokens = tokenizer([extracted_answer], add_special_tokens=False, max_length=1024, truncation=True)
         extracted_answer = tokenizer.decode(answer_tokens['input_ids'][0], skip_special_tokens=True)
-
         #     print('verify', math_verify("${1,3} \\cup {2,4}$", "${1,2,3,4}$")) 
         for ans in answers:
             is_match = compare_math_answers(ans, extracted_answer) or is_equiv(ans, extracted_answer) or math_verify(extracted_answer, ans)
