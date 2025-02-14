@@ -45,13 +45,8 @@ from safetensors.torch import load_file
 from transformers import AutoConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline 
 from transformers import get_linear_schedule_with_warmup
-
 from transformers.activations import ACT2FN
-#from transformers.modeling_outputs import CausalLMOutputWithPast
-#from transformers.cache_utils import Cache, DynamicCache
 
-#from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi3PreTrainedModel, Phi3Model, Phi3DecoderLayer
-#from transformers.models.phi3.configuration_phi3 import Phi3Config
 
 from samba import _SambaForCausalLM
 from replaybuffer import ReplayBuffer, Sample
@@ -132,7 +127,7 @@ def main(args):
     tokenizer.pad_token = tokenizer.unk_token # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token) 
     tokenizer.padding_side = 'right'     
-    new_special_tokens = ['<think>', '</think>']
+    new_special_tokens = ['<think>', '</think>', '<answer>', '</answer>']
     tokenizer.add_tokens(new_special_tokens)
 
     # load dataset....
@@ -165,30 +160,15 @@ def main(args):
         print(sft_dataset['train'])
         sft_sampler = torch.utils.data.distributed.DistributedSampler(sft_dataset['train'], num_replicas=world_size, rank=rank, shuffle=True) 
         sft_dataloader = DataLoader(sft_dataset['train'], batch_size=1, sampler=sft_sampler) 
+        sft_iter = iter(sft_dataloader)
 
-        category = [0, 0, 0, 0, 0]
-        for _b_idx, sft_d in enumerate(sft_dataloader):
-            prompt = sft_d['messages'][0]['content'][0]
-            completion = sft_d['messages'][1]['content'][0]
+        sft_buffer = ReplayBuffer(args.sft_replay_size)
 
-            completion_tokens = tokenizer([completion], add_special_tokens=False, max_length=32768, truncation=True)
-            input_ids = completion_tokens['input_ids'][0] 
-            
-            if len(input_ids) < 4096:
-                category[0] += 1
-            elif len(input_ids) < 8192:
-                category[1] += 1
-            elif len(input_ids) < 16384:
-                category[2] += 1
-            elif len(input_ids) < 32768:
-                category[3] += 1
-        print('category', category, 'rank', rank)
-        return
         #dataset_b = DatasetB()
         #dataloader_b = DataLoader(dataset_b, batch_size=batch_size, shuffle=True)
         #iter_b = iter(dataloader_b)
     ### 
-    rl_update = 0    
+    #rl_update = 0    
     for epoch in range(0, args.epoch):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         acc_reward = 0
@@ -271,7 +251,7 @@ def main(args):
     
                 #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>    
                 experience = Sample(prompt = prompt, response = response, reward = reward, probs = probs[0], crits = crits[0], 
-                                    tokens = all_tokens[0], masks = all_masks[0], seq_rewards = output_rewards[0])
+                                    tokens = all_tokens[0], masks = all_masks[0])
                 buffer.push(experience)
             
             topk_reward = topk_reward + topk_hit
@@ -290,21 +270,45 @@ def main(args):
                 elif args.advantage == 'group':
                     buffer.calculate_group_advantage(group = args.n_rollout)
 
-                policy_loss_log, critic_loss_log = ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device, critic_alpha = args.critic_alpha)
+                # insert new SFT data into replay buffer;
+                for _idx in range(0, args.sft_replay_size):
+                    try 
+                        sft_data = next(sft_iter)
+                    except:
+                        sft_iter = iter(sft_dataloader)
+                        sft_data = next(sft_iter)
+
+                    prompt = sft_data['messages'][0]['content'][0]
+                    response = sft_data['messages'][1]['content'][0]
+
+                    prompt_tokens =  tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=True)
+                    response_tokens = tokenizer(['\n\n' + response], add_special_tokens=False, max_length=7168, truncation=True)
+
+                    prompt_tokens = prompt_tokens['input_ids'][0] 
+                    response_tokens = response_tokens['input_ids'][0] + [tokenizer.eos_token_id]
+
+                    all_tokens = prompt_tokens + response_tokens 
+                    masks = [0] * len(prompt_tokens) + [1] * len(response_tokens)
+                    experience = Sample(prompt = prompt, response = response, reward = 1.0, tokens = all_tokens, masks = masks)
+                    sft_buffer.push(experience)
+
+                #optimizer, scheduler,
+                optimizer.zero_grad()
+                policy_loss_log, critic_loss_log = ppo_gradient(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)
                 
+                if args.sft_replay_size > 0:
+                    sft_loss_log = sft_gradient(llm, llm_config, sft_buffer, args.sft_replay_size, device, weight = args.sft_weight)
+                
+                optimizer.step()
+                scheduler.step()
                 if local_rank == 0:
-                    print('policy_loss_log: ', policy_loss_log, ', critic_loss_log: ', critic_loss_log, ', lr:', scheduler.get_last_lr() )
+                    print('policy_loss_log: ', policy_loss_log, ', critic_loss_log: ', critic_loss_log, ', sft_loss_log: ', sft_loss_log, ', lr:', scheduler.get_last_lr() )
                 
                 ## start the model training; 
                 buffer.clear()    
+                sft_buffer.clear()
                 llm.eval()
-                rl_update = rl_update + 1
-
-            if args.sft_turn > 0 and rl_update >= args.rl_turn:
-                for sft_update in range(0, args.sft_turn):
-                    print('sft update')
-                rl_update = 0
-                
+            
                 
         print('final average reward: ', acc_reward / acc_num, ', acc_num: ', acc_num)
         print('final topk reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num)
@@ -335,9 +339,8 @@ if __name__ == "__main__":
     parser.add_argument("--advantage", type=str, default="distgae", choices=["distgae", "group"], help="Choose the advantage function.")
     parser.add_argument("--critic_alpha", type=float, default=0.01, help="alpha for critic loss.")
     parser.add_argument("--sft_data", type=str, default=None, help="path to sft data.")
-    parser.add_argument("--rl_turn", type=int, default=0, help="RL update steps, 0 indicates all rl")
-    parser.add_argument("--sft_turn", type=int, default=0, help="SFT update steps, 0 indicates no SFT")
-    parser.add_argument("--sft_batch", type=int, default=16, help="SFT update batch size")
+    parser.add_argument("--sft_replay_size", type=int, default=16, help="SFT update batch size.")
+    parser.add_argument("--sft_weight", type=float, default=0.1, help="token weight of sft dataset.")
     
     args = parser.parse_args()
     
