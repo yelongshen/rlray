@@ -124,13 +124,16 @@ def main(args):
     # setup model distribution.
     llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
     print('distributed language model creation.') 
-    
+
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     # Load tokenizer from local path 
     tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
     tokenizer.model_max_length = 4096 
     tokenizer.pad_token = tokenizer.unk_token # use unk rather than eos token to prevent endless generation
     tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token) 
     tokenizer.padding_side = 'right'     
+    new_special_tokens = ['<think>', '</think>']
+    tokenizer.add_tokens(new_special_tokens)
 
     # load dataset....
     datafile = 'math_level3to5_data_processed_with_qwen_prompt.json' 
@@ -155,7 +158,18 @@ def main(args):
     llm.eval()
     buffer_size = args.replay_size
     buffer = ReplayBuffer(buffer_size)
+
+    ## load sft dataset.
+    if args.sft_data is not None:
+        sft_dataset = load_dataset('json', data_files=args.sft_data) 
+        print(f"loaded {sft_dataset} with data_files={args.sft_data}")
+        print(sft_dataset['train'])
+        return
+        #dataset_b = DatasetB()
+        #dataloader_b = DataLoader(dataset_b, batch_size=batch_size, shuffle=True)
+        #iter_b = iter(dataloader_b)
     ### 
+    rl_update = 0    
     for epoch in range(0, args.epoch):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         acc_reward = 0
@@ -265,6 +279,15 @@ def main(args):
                 ## start the model training; 
                 buffer.clear()    
                 llm.eval()
+                rl_update = rl_update + 1
+
+            if args.sft_turn > 0 and rl_update >= args.rl_turn:
+                for sft_update in range(0, args.sft_turn):
+                    
+                    
+                
+                rl_update = 0
+                
                 
         print('final average reward: ', acc_reward / acc_num, ', acc_num: ', acc_num)
         print('final topk reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num)
@@ -294,6 +317,10 @@ if __name__ == "__main__":
     parser.add_argument("--n_rollout", type=int, default=1, help="number of rollout per sample.")
     parser.add_argument("--advantage", type=str, default="distgae", choices=["distgae", "group"], help="Choose the advantage function.")
     parser.add_argument("--critic_alpha", type=float, default=0.01, help="alpha for critic loss.")
+    parser.add_argument("--sft_data", type=str, default=None, help="path to sft data.")
+    parser.add_argument("--rl_turn", type=int, default=0, help="RL update steps, 0 indicates all rl")
+    parser.add_argument("--sft_turn", type=int, default=0, help="SFT update steps, 0 indicates no SFT")
+    parser.add_argument("--sft_batch", type=int, default=16, help="SFT update batch size")
     
     args = parser.parse_args()
     
