@@ -13,26 +13,15 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from phimodel import _Phi3ForCausalLM
 from replaybuffer import ReplayBuffer, Sample
 
-def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device, critic_alpha=0.01):
-    llm.train()    
-    #critic_loss = 0.0
-    #policy_loss = 0.0
-    #mini_c_loss = 0.0
-    #mini_p_loss = 0.0
-    # update_step = 0
-
-    # processing reward.
-    # accumulate gradient for the whole batchsize.     
+def ppo_gradient(llm, llm_config, buffer, buffer_size, device, critic_alpha=0.01):
+    llm.train() 
     step = 0
     batch_size = 1
     max_seq_len = 4096
     micro_training_steps = buffer_size / batch_size
-    
-    # 
-    #pad_id = llm_config.pad_token_id
+
     vocab_size = llm_config.vocab_size
     
-    optimizer.zero_grad()
     mseLoss = torch.nn.MSELoss(size_average=None, reduce=None, reduction='none')
     mini_policy_loss = 0
     mini_critic_loss = 0
@@ -90,13 +79,21 @@ def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device
         mini_policy_loss = mini_policy_loss + _policy_loss.detach() / micro_training_steps
             
         #print(' _policy_loss:', _policy_loss, ' , _critic_loss:', _critic_loss, ' , device:', device)
-        
         step = step + 1
-        if step % micro_training_steps == 0:
-            optimizer.step()
-            optimizer.zero_grad()
-            scheduler.step()
     return mini_policy_loss, mini_critic_loss
+
+
+def ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device, critic_alpha=0.01):
+    optimizer.zero_grad()
+    mini_policy_loss, mini_critic_loss = ppo_gradient(llm, llm_config, buffer, buffer_size, device, critic_alpha)
+    optimizer.step()
+    optimizer.zero_grad()
+    scheduler.step()
+
+    return mini_policy_loss, mini_critic_loss
+    # 
+    #pad_id = llm_config.pad_token_id
+    
         
 
         
