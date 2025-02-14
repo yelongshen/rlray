@@ -38,7 +38,7 @@ def sft_gradient(llm, llm_config, buffer, buffer_size, device, weight = 0.1):
         # generation token index. 
         # re-evaluate the policy.     
         # return: next_token_loss, logits, critics, next_decoder_cache 
-        _, logits, _, _ = llm(input_tokens)
+        _, logits, critics, _ = llm(input_tokens)
     
         logprobs = -F.cross_entropy(
             input = logits.reshape(-1, vocab_size)[:-1,:], #.transpose(1, 2),
@@ -48,10 +48,9 @@ def sft_gradient(llm, llm_config, buffer, buffer_size, device, weight = 0.1):
         ).reshape(1, -1)
 
         logprobs = logprobs[:, _response_idx-1:]
-
         # we shall do advantage normalization. 
-
-        _total_loss = - logprobs.mean() *  weight / micro_training_steps # (_policy_loss + critic_alpha * _critic_loss) / micro_training_steps 
+        
+        _total_loss = - (logprobs.mean() *  weight + critics.mean() * 0.0) / micro_training_steps # (_policy_loss + critic_alpha * _critic_loss) / micro_training_steps 
         
         # final loss of clipped objective PPO objective. 
         # take gradient step
