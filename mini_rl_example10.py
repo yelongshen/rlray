@@ -272,7 +272,7 @@ def main(args):
 
                 # insert new SFT data into replay buffer;
                 for _idx in range(0, args.sft_replay_size):
-                    try 
+                    try: 
                         sft_data = next(sft_iter)
                     except:
                         sft_iter = iter(sft_dataloader)
