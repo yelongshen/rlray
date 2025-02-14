@@ -283,9 +283,7 @@ def main(args):
 
             if args.sft_turn > 0 and rl_update >= args.rl_turn:
                 for sft_update in range(0, args.sft_turn):
-                    
-                    
-                
+                    print('sft update')
                 rl_update = 0
                 
                 
