@@ -338,7 +338,7 @@ if __name__ == "__main__":
     parser.add_argument("--advantage", type=str, default="distgae", choices=["distgae", "group"], help="Choose the advantage function.")
     parser.add_argument("--critic_alpha", type=float, default=0.01, help="alpha for critic loss.")
     parser.add_argument("--sft_data", type=str, default=None, help="path to sft data.")
-    parser.add_argument("--sft_replay_size", type=int, default=16, help="SFT update batch size.")
+    parser.add_argument("--sft_replay_size", type=int, default=0, help="SFT update batch size.")
     parser.add_argument("--sft_weight", type=float, default=0.1, help="token weight of sft dataset.")
     
     args = parser.parse_args()
