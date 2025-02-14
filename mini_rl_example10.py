@@ -156,14 +156,33 @@ def main(args):
 
     ### initialize replaybuffer.
     llm.eval()
-    buffer_size = args.replay_size
-    buffer = ReplayBuffer(buffer_size)
+    buffer = ReplayBuffer(args.replay_size)
 
     ## load sft dataset.
     if args.sft_data is not None:
         sft_dataset = load_dataset('json', data_files=args.sft_data) 
         print(f"loaded {sft_dataset} with data_files={args.sft_data}")
         print(sft_dataset['train'])
+        sft_sampler = torch.utils.data.distributed.DistributedSampler(sft_dataset['train'], num_replicas=world_size, rank=rank, shuffle=True) 
+        sft_dataloader = DataLoader(dataset['train'], batch_size=1, sampler=sft_sampler) 
+
+        category = [0, 0, 0, 0, 0]
+        for _b_idx, sft_d in enumerate(sft_dataloader):
+            prompt = sft_d['messages'][0]['content'][0]
+            completion = sft_d['messages'][1]['content'][0]
+
+            completion_tokens = tokenizer([completion], add_special_tokens=False, max_length=32768, truncation=True)
+            input_ids = completion_tokens['input_ids'][0] 
+            
+            if len(input_ids) < 4096:
+                category[0] += 1
+            elif len(input_ids) < 8192:
+                category[1] += 1
+            elif len(input_ids) < 16384:
+                category[2] += 1
+            elif len(input_ids) < 32768:
+                category[3] += 1
+        print('category', category, 'rank', rank)
         return
         #dataset_b = DatasetB()
         #dataloader_b = DataLoader(dataset_b, batch_size=batch_size, shuffle=True)
@@ -254,10 +273,10 @@ def main(args):
                 experience = Sample(prompt = prompt, response = response, reward = reward, probs = probs[0], crits = crits[0], 
                                     tokens = all_tokens[0], masks = all_masks[0], seq_rewards = output_rewards[0])
                 buffer.push(experience)
-
+            
             topk_reward = topk_reward + topk_hit
             topk_num = topk_num + 1
-            if len(buffer) >= buffer_size:    
+            if len(buffer) >= args.replay_size:    
                 avg_reward = buffer.mean_reward()
                 avg_response_len = buffer.avg_responselen()
                 print('progress: ', batch_idx, ', avg_reward: ', avg_reward, ', avg_response_len: ', avg_response_len , ', rank: ', rank)
