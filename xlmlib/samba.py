@@ -661,7 +661,7 @@ def sample_top_p(probs, top_p=0.9):
 class _SambaForCausalLM(_SambaPreTrainedModel):
     
     @staticmethod
-    def load_hfckpt(load_model_path):
+    def load_hfckpt(local_model_path):
         with open(f'{local_model_path}/config.json', 'r') as file:
             llm_config = json.load(file, object_hook=lambda d: SimpleNamespace(**d))
         #vocab_size = llm_config.vocab_size 
