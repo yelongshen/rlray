@@ -4,6 +4,7 @@ from xlmlib import _SambaForCausalLM
 import argparse
 import io
 import sys
+import os
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
