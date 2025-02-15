@@ -13,7 +13,7 @@ from einops import rearrange, repeat
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torch.utils.checkpoint import checkpoint
-import checkpoint as user_checkpoint
+#import .checkpoint as user_checkpoint
 
 from transformers.activations import ACT2FN
 from transformers.utils import logging
