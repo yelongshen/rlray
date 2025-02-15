@@ -1,10 +1,12 @@
-import xlmlib
-from xlmlib import _SambaForCausalLM
 
 import argparse
 import io
 import sys
 import os
+import torch
+
+import xlmlib
+from xlmlib import _SambaForCausalLM
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
