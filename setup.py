@@ -1,4 +1,13 @@
 from setuptools import setup, find_packages
+import sys
+
+print('locate packages', find_packages())
+print(sys.path)
+
+import site
+print(site.getusersitepackages())
+site.addsitedir(site.getusersitepackages())
+print(sys.path)
 
 setup(
     name='xlmlib',
