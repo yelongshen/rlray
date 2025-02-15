@@ -1,10 +1,13 @@
 import inspect
 import math
 import warnings
+import json
 from typing import List, Optional, Tuple, Union
+from types import SimpleNamespace
 
 import torch
 import torch.nn.functional as F
+from safetensors.torch import load_file
 
 from einops import rearrange, repeat
 from torch import nn
@@ -14,6 +17,7 @@ import checkpoint as user_checkpoint
 
 from transformers.activations import ACT2FN
 from transformers.utils import logging
+from transformers import AutoTokenizer 
 
 #from transformers.cache_utils import Cache, DynamicCache
 logger = logging.get_logger(__name__)
@@ -655,6 +659,36 @@ def sample_top_p(probs, top_p=0.9):
 
 
 class _SambaForCausalLM(_SambaPreTrainedModel):
+    
+    @staticmethod
+    def load_hfckpt(load_model_path):
+        with open(f'{local_model_path}/config.json', 'r') as file:
+            llm_config = json.load(file, object_hook=lambda d: SimpleNamespace(**d))
+        #vocab_size = llm_config.vocab_size 
+        #eos_token_id = llm_config.eos_token_id #": 32000,
+
+        # check for the ckpt. 
+        safetensor_files = [
+            f"{local_model_path}/model-00001-of-00002.safetensors",
+            f"{local_model_path}/model-00002-of-00002.safetensors"
+        ]
+        
+        model_state_dict = {}
+        for file in safetensor_files:
+            part_state_dict = load_file(file, device="cpu")  # Load each part
+            model_state_dict.update(part_state_dict)  # Merge into one dictionary
+
+        llm_model = _SambaForCausalLM(llm_config) 
+    
+        # Step 4: Apply the merged state_dict to the model
+        missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
+        print('missing_keys: ', missing_keys)
+        print('unexpected_keys: ', unexpected_keys)    
+
+        tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
+        
+        return llm_model, llm_config, tokenizer
+        
     def __init__(self, config):
         super().__init__(config)
         self.config = config
