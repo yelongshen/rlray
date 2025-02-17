@@ -5,32 +5,12 @@ import os
 import torch
 import json
 from typing import Iterable, Union, Any
+import torch.distributed as dist
 
 
 import xlmlib
 from xlmlib import _SambaForCausalLM
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_path", default="aime24", type=str)
-    parser.add_argument("--model_path", default="gpt-4", type=str)
-    parser.add_argument("--output_dir", default="./output", type=str)
-    parser.add_argument("--prompt_type", default="tool-integrated", type=str)
-  
-    parser.add_argument("--temperature", default=0, type=float)
-    parser.add_argument("--n_sampling", default=1, type=int)
-    parser.add_argument("--top_p", default=1, type=float)
-    parser.add_argument("--max_tokens_per_call", default=2048, type=int)
-  
-    parser.add_argument("--save_outputs", action="store_true")
-    parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--use_safetensors", action="store_true")
-
-    args = parser.parse_args()
-    args.top_p = (
-        1 if args.temperature == 0 else args.top_p
-    )  # top_p must be 1 when using greedy sampling (vllm)
-    return args
 
 def load_jsonl(file) -> Iterable[Any]:
     with open(file, "r", encoding="utf-8") as f:
@@ -40,10 +20,27 @@ def load_jsonl(file) -> Iterable[Any]:
             except:
                 print("Error in loading:", line)
                 exit()
-
 # implement a easy version of distributed inference pipeline. 
 # define a inference engine to automatically process request. 
 
+def setup_dist_eval(args):
+    # on-policy ppo experiments with phi3.5 model on math dataset. 
+    local_rank = int(os.environ['LOCAL_RANK']) 
+    print('local rank', local_rank) 
+    rank = int(os.environ['RANK']) 
+    print('rank', rank) 
+    world_size = int(os.environ['WORLD_SIZE']) 
+    print('WORLD_SIZE', world_size)      
+    gpus_per_node = 8 
+    node_idx = rank // gpus_per_node 
+    torch.cuda.set_device(local_rank) 
+    device = torch.device(f"cuda:{local_rank}") 
+    # init distributed process group.
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)    
+
+    model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
+
+    
 def eval(llm, tokenizer, args):
     data_path = 'aime24_test.jsonl'
     #for data in load_jsonl(data_path):
@@ -289,9 +286,33 @@ def eval(llm, tokenizer, args):
     ) as f:
         json.dump(result_json, f, indent=4)
     return result_json
-  
 
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_path", default="aime24", type=str)
+    parser.add_argument("--model_path", default="gpt-4", type=str)
+    parser.add_argument("--output_dir", default="./output", type=str)
+    parser.add_argument("--prompt_type", default="tool-integrated", type=str)
+  
+    parser.add_argument("--temperature", default=0, type=float)
+    parser.add_argument("--n_sampling", default=1, type=int)
+    parser.add_argument("--top_p", default=1, type=float)
+    parser.add_argument("--max_tokens_per_call", default=2048, type=int)
+  
+    parser.add_argument("--save_outputs", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--use_safetensors", action="store_true")
+
+    args = parser.parse_args()
+    args.top_p = (
+        1 if args.temperature == 0 else args.top_p
+    )  # top_p must be 1 when using greedy sampling (vllm)
+    return args
+    
 if __name__ == "__main__":
     args = parse_args()
+
+    
     #set_seed(args.seed)
     setup(args)
