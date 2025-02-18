@@ -5,7 +5,7 @@ import re
 
 from latex2sympy.latex2sympy2 import latex2sympy
 from math_evaluation import is_equiv
-from math_verify_util import math_verify
+from .math_verify_util import math_verify
 
 def is_numeric(s):
     """Check if a string is a valid numeric value (integer or float)."""
