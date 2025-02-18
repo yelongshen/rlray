@@ -42,6 +42,7 @@ def setup_dist_eval(args):
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)    
 
     #model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
+    #model.eval()
     
     rpc_worker_name = f"worker-{rank}"
     rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
@@ -63,7 +64,6 @@ def setup_dist_eval(args):
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, False)
 
     dist.barrier()
-    model.eval()
     while RpcReplayBuffer.Length(request_buffer_name) > 0:
         prompt = RpcReplayBuffer.Pop(request_buffer_name)
         print(prompt, ', rpc:', rpc_worker_name)
