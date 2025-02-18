@@ -190,7 +190,7 @@ class RpcReplayBuffer(AsyncReplayBuffer):
 
     @staticmethod
     def Push(buffer_name, data):
-        if buffer_name in RpcFactory:
+        if buffer_name in RpcReplayBuffer.RpcFactory:
             RpcReplayBuffer.RpcFactory[buffer_name].push(data)
         else:
             main_worker = RpcReplayBuffer.RpcMain[buffer_name]
@@ -198,7 +198,7 @@ class RpcReplayBuffer(AsyncReplayBuffer):
 
     @staticmethod
     def Pop(buffer_name):
-        if buffer_name in RpcFactory:
+        if buffer_name in RpcReplayBuffer.RpcFactory:
             return RpcReplayBuffer.RpcFactory[buffer_name].pop()
         else:
             main_worker = RpcReplayBuffer.RpcMain[buffer_name]
@@ -206,7 +206,7 @@ class RpcReplayBuffer(AsyncReplayBuffer):
             
     @staticmethod
     def Length(buffer_name):
-        if buffer_name in RpcFactory:
+        if buffer_name in RpcReplayBuffer.RpcFactory:
             return len(RpcReplayBuffer.RpcFactory[buffer_name])
         else:
             main_worker = RpcReplayBuffer.RpcMain[buffer_name]
