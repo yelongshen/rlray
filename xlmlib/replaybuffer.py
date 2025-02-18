@@ -36,6 +36,7 @@ class Sample:
     advantages : Optional[List[float]] = None
     returns : Optional[List[float]] = None
     normalized_advantages : Optional[List[float]] = None
+
 # ReplayBuffer 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -43,7 +44,6 @@ class ReplayBuffer:
         self.buffer = deque(maxlen=capacity) # every sample is very different. 
         self.epsilon = 1e-8
         self.alpha = 0.01       
-        #self.lock = threading.Lock()
 
     # experience : #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>
     def push(self, experience):
@@ -153,3 +153,18 @@ class ReplayBuffer:
         std = np.std(rewards) + self.epsilon
         return (rewards - mean) / std
 
+class AsyncReplayBuffer(ReplayBuffer):
+    def __init__(self, capacity):
+        super().__init__(capacity)
+        self.lock = threading.Lock()
+
+    def push(self, data):
+        """ Add new experience to the buffer """
+        with self.lock:
+            self.push(data) 
+
+    def pop(self):
+        with self.lock:
+            return self.pop(1)[0]
+    
+        
