@@ -177,26 +177,16 @@ class RpcReplayBuffer(AsyncReplayBuffer):
     RpcFactory = {}
     RpcMain = {}
     
+    def __init__(self, capacity, main_worker):
+        super().__init__(capacity)
+        self.main_worker = main_worker
+        
     @staticmethod
-    def Register(buffer_name, capacity, main_worker, is_main):
+    def Register(buffer_name, main_worker, is_main, capacity=0):
         if is_main:
             RpcFactory[buffer_name] = RpcReplayBuffer(capacity, main_worker)
         else:
             RpcMain[buffer_name] = main_worker
-            
-                                                 
-    def __init__(self, capacity, main_worker):
-        super().__init__(capacity)
-        self.main_worker = main_worker
-
-    #def push(self, data):
-    #    if self.is_main:
-    #        self.push(data)
-    #    else:
-    #        rpc.rpc_async(self.main_worker,            
-    #            add_to_buffer(_tokens, _masks, _probs, _reward, _crits)
-    #        else:
-    #            rpc.rpc_async(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
 
     @staticmethod
     def Push(buffer_name, data):
@@ -204,16 +194,20 @@ class RpcReplayBuffer(AsyncReplayBuffer):
             RpcFactory[buffer_name].push(data)
         else:
             main_worker = RpcMain[buffer_name]
-            rpc.rpc_async(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data), timeout=0)
+            rpc.rpc_sync(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data), timeout=0)
 
-        
+    @staticmethod
+    def Pop(buffer_name):
+        if buffer_name in RpcFactory:
+            return RpcFactory[buffer_name].pop()
         else:
-                
-            RpcMain worker, 
-        if 
-        RpcFactory[buffer_name]
-        
-    def pop(self):
-
-    def __len__(self):
-        
+            main_worker = RpcMain[buffer_name]
+            return rpc.rpc_sync(main_worker, RpcReplayBuffer.Pop, args=(buffer_name), timeout=0)
+            
+    @staticmethod
+    def Length(buffer_name):
+        if buffer_name in RpcFactory:
+            return len(RpcFactory[buffer_name])
+        else:
+            main_worker = RpcMain[buffer_name]
+            return rpc.rpc_sync(main_worker, RpcReplayBuffer.Length, args=(buffer_name), timeout=10)
