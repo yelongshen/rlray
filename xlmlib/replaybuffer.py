@@ -184,30 +184,30 @@ class RpcReplayBuffer(AsyncReplayBuffer):
     @staticmethod
     def Register(buffer_name, main_worker, is_main, capacity=0):
         if is_main:
-            RpcFactory[buffer_name] = RpcReplayBuffer(capacity, main_worker)
+            RpcReplayBuffer.RpcFactory[buffer_name] = RpcReplayBuffer(capacity, main_worker)
         else:
-            RpcMain[buffer_name] = main_worker
+            RpcReplayBuffer.RpcMain[buffer_name] = main_worker
 
     @staticmethod
     def Push(buffer_name, data):
         if buffer_name in RpcFactory:
-            RpcFactory[buffer_name].push(data)
+            RpcReplayBuffer.RpcFactory[buffer_name].push(data)
         else:
-            main_worker = RpcMain[buffer_name]
+            main_worker = RpcReplayBuffer.RpcMain[buffer_name]
             rpc.rpc_sync(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data), timeout=0)
 
     @staticmethod
     def Pop(buffer_name):
         if buffer_name in RpcFactory:
-            return RpcFactory[buffer_name].pop()
+            return RpcReplayBuffer.RpcFactory[buffer_name].pop()
         else:
-            main_worker = RpcMain[buffer_name]
+            main_worker = RpcReplayBuffer.RpcMain[buffer_name]
             return rpc.rpc_sync(main_worker, RpcReplayBuffer.Pop, args=(buffer_name), timeout=0)
             
     @staticmethod
     def Length(buffer_name):
         if buffer_name in RpcFactory:
-            return len(RpcFactory[buffer_name])
+            return len(RpcReplayBuffer.RpcFactory[buffer_name])
         else:
-            main_worker = RpcMain[buffer_name]
+            main_worker = RpcReplayBuffer.RpcMain[buffer_name]
             return rpc.rpc_sync(main_worker, RpcReplayBuffer.Length, args=(buffer_name), timeout=10)
