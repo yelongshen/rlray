@@ -42,6 +42,7 @@ def setup_dist_eval(args):
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)    
 
     #model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
+    #model = model.to(torch.bfloat16).to(device) 
     #model.eval()
     
     rpc_worker_name = f"worker-{rank}"
@@ -64,16 +65,16 @@ def setup_dist_eval(args):
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, False)
 
     dist.barrier()
-    while RpcReplayBuffer.Length(request_buffer_name) > 0:
+    while True: 
         prompt = RpcReplayBuffer.Pop(request_buffer_name)
+        if prompt is None:
+            break
         print(prompt, ', rpc:', rpc_worker_name)
         time.sleep(1)
-        
         #prompt = 'I am a big big girl, in a'
         #_tokens = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=False)
-        #_tokens = _tokens['input_ids']
-        #model = model.to(torch.bfloat16).to(device) 
-        #outputs, _, _ = model.generate(input_ids, max_gen_len = 1000)
+        #input_ids = _tokens['input_ids']
+        #outputs, _, _ = model.generate(input_ids, max_gen_len = 4096)
         #response = tokenizer.decode(outputs[0])
         #print('response: ', response)
     
