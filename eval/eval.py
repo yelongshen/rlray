@@ -37,10 +37,12 @@ def setup_dist_eval(args):
     node_idx = rank // gpus_per_node 
     torch.cuda.set_device(local_rank) 
     device = torch.device(f"cuda:{local_rank}") 
+    
     # init distributed process group.
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)    
 
     #model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
+    
     rpc_worker_name = f"worker-{rank}"
     rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
 
@@ -61,11 +63,22 @@ def setup_dist_eval(args):
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, False)
 
     dist.barrier()
+    model.eval()
     while RpcReplayBuffer.Length(request_buffer_name) > 0:
-        data = RpcReplayBuffer.Pop(request_buffer_name)
-        print(data, ', rpc:', rpc_worker_name)
+        prompt = RpcReplayBuffer.Pop(request_buffer_name)
+        print(prompt, ', rpc:', rpc_worker_name)
         time.sleep(1)
-
+        
+        #prompt = 'I am a big big girl, in a'
+        #_tokens = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=False)
+        #_tokens = _tokens['input_ids']
+        #model = model.to(torch.bfloat16).to(device) 
+        #outputs, _, _ = model.generate(input_ids, max_gen_len = 1000)
+        #response = tokenizer.decode(outputs[0])
+        #print('response: ', response)
+    
+        
+        
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_path", default="aime24", type=str)
