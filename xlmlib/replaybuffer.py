@@ -21,6 +21,7 @@ import torch
 
 import numpy as np
 import math
+import torch.distributed.rpc as rpc
 
 @dataclass
 class Sample:
@@ -161,10 +162,58 @@ class AsyncReplayBuffer(ReplayBuffer):
     def push(self, data):
         """ Add new experience to the buffer """
         with self.lock:
-            self.push(data) 
+            super().push(data) 
 
     def pop(self):
         with self.lock:
-            return self.pop(1)[0]
+            return super().pop(1)[0]
+
+    def __len__(self):
+        with self.lock:
+            return super().__len__()
+
+# the class is served as Rpc factory.
+class RpcReplayBuffer(AsyncReplayBuffer):
+    RpcFactory = {}
+    RpcMain = {}
     
+    @staticmethod
+    def Register(buffer_name, capacity, main_worker, is_main):
+        if is_main:
+            RpcFactory[buffer_name] = RpcReplayBuffer(capacity, main_worker)
+        else:
+            RpcMain[buffer_name] = main_worker
+            
+                                                 
+    def __init__(self, capacity, main_worker):
+        super().__init__(capacity)
+        self.main_worker = main_worker
+
+    #def push(self, data):
+    #    if self.is_main:
+    #        self.push(data)
+    #    else:
+    #        rpc.rpc_async(self.main_worker,            
+    #            add_to_buffer(_tokens, _masks, _probs, _reward, _crits)
+    #        else:
+    #            rpc.rpc_async(f"worker-{buffer_rank}", add_to_buffer, args=_info, timeout=0)
+
+    @staticmethod
+    def Push(buffer_name, data):
+        if buffer_name in RpcFactory:
+            RpcFactory[buffer_name].push(data)
+        else:
+            main_worker = RpcMain[buffer_name]
+            rpc.rpc_async(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data), timeout=0)
+
+        
+        else:
+                
+            RpcMain worker, 
+        if 
+        RpcFactory[buffer_name]
+        
+    def pop(self):
+
+    def __len__(self):
         
