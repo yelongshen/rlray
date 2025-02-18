@@ -77,8 +77,8 @@ def setup_dist_eval(args):
         #outputs, _, _ = model.generate(input_ids, max_gen_len = 4096)
         #response = tokenizer.decode(outputs[0])
         #print('response: ', response)
-    
-        
+    rpc.shutdown(graceful=True)
+
         
 def parse_args():
     parser = argparse.ArgumentParser()
