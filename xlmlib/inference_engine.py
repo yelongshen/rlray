@@ -11,16 +11,19 @@ from safetensors.torch import load_file
 
 from einops import rearrange, repeat
 from torch import nn
-#from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-#from torch.utils.checkpoint import checkpoint
-#import .checkpoint as user_checkpoint
-
-#from transformers.activations import ACT2FN
-#from transformers.utils import logging
-#from transformers import AutoTokenizer 
 
 import threading
+from dataclasses import dataclass
 
+
+from dataclasses import dataclass
+from .replaybuffer import AsyncReplayBuffer
+
+@dataclass
+class Request:
+    id : int
+    prompt : str
+    prompt_tokens : List[int]
 
 # distributed inference engine.
 # usage:
@@ -41,7 +44,30 @@ class _inference_engine:
         self.rank = rank
         self.world_size = world_size
 
-    def start(self):
+    def create_request_pool(self, requests):
+        self.request_buffer = AsyncReplayBuffer(len(requests))
+        for i in range(0, len(requests)):
+            self.request_buffer.push(requests[i])
+        # add buffer for results.
+        self.result_buffer = AsyncReplayBuffer(len(requests))
         
+    def start(self):        
+        def perform_request():
+            # Simulate a time-consuming calculation
+            print("inference started...")
+            while len(self.request_buffer) > 0:
+                 data, avg_reward, ema_reward = pop_from_buffer(batch_size) if rank == buffer_rank else rpc.rpc_sync(f"worker-{buffer_rank}", pop_from_buffer, args=(batch_size, ), timeout=10)
+            
+            return result
+        
+        # Create a Thread object targeting the perform_calculation function
+        self.inference_thread = threading.Thread(target=perform_request)
+        # Start the thread
+        self.inference_thread.start()
+
+    def join(self):
+        # Wait for the thread to complete
+        self.inference_thread.join()
+
         
         
