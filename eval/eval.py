@@ -8,12 +8,25 @@ from typing import Iterable, Union, Any
 import torch.distributed as dist
 import torch.distributed.rpc as rpc
 import time
+from dataclasses import dataclass
 
 
 import xlmlib
 from xlmlib import _SambaForCausalLM
 from xlmlib import RpcReplayBuffer
+from xlmlib import process_math_prompt, process_math_answer
 
+
+@dataclass
+class Request:
+    id : int
+    prompt : str
+    answer : str
+
+@dataclass
+class Result(Request):
+    reward : float
+    
 def load_jsonl(file) -> Iterable[Any]:
     with open(file, "r", encoding="utf-8") as f:
         for line in f:
@@ -41,42 +54,63 @@ def setup_dist_eval(args):
     # init distributed process group.
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)    
 
-    #model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
-    #model = model.to(torch.bfloat16).to(device) 
-    #model.eval()
+    model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
+    model = model.to(torch.bfloat16).to(device) 
+    model.eval()
     
     rpc_worker_name = f"worker-{rank}"
     rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
 
     request_buffer_name = 'request_buffer'
     request_buffer_worker = f"worker-{0}"
+
+    result_buffer_name = 'result_buffer'
+    result_buffer_worker = f"worker-{0}"
     
     # load file.
     if rank == 0:
-        prompt_list = []
+        request_list = []
         for data in load_jsonl(args.data_path):
             prompt = data['problem']
-            prompt_list.append(prompt)
-        RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, True, capacity = len(prompt_list))
+            ans = data['answer']
+            solution = data['solution']
+            id = data['id']
+            request_list.append(Request(id = id, prompt = prompt, answer = ans))
+
+        RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, True, capacity = len(request_list))
+        RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, True, capacity = len(request_list))
         
-        for prompt in prompt_list:
-            RpcReplayBuffer.Push(request_buffer_name, prompt)
+        for req in request_list:
+            RpcReplayBuffer.Push(request_buffer_name, req)
     else:
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, False)
-
+        RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, False)
+        
     dist.barrier()
     while True: 
-        prompt = RpcReplayBuffer.Pop(request_buffer_name)
-        if prompt is None:
-            break
-        print(prompt, ', rpc:', rpc_worker_name)
-        time.sleep(1)
-        #prompt = 'I am a big big girl, in a'
-        #_tokens = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=False)
-        #input_ids = _tokens['input_ids']
-        #outputs, _, _ = model.generate(input_ids, max_gen_len = 4096)
-        #response = tokenizer.decode(outputs[0])
-        #print('response: ', response)
+        req = RpcReplayBuffer.Pop(request_buffer_name)
+        if req is None:
+            break    
+        prompt = process_math_prompt(req.prompt)
+        _tokens = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=False)
+        input_ids = _tokens['input_ids']
+        outputs, _, _ = model.generate(input_ids, max_gen_len = 8192)
+        response = tokenizer.decode(outputs[0])
+        mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer)
+        
+        result = Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward)
+        RpcReplayBuffer.Push(result_buffer_name, result)
+
+    dist.barrier()
+    if rank == 0:
+        total_reward = 0
+        total_count = 0
+        for i in range(0, len(request_list)):
+            result = RpcReplayBuffer.Pop(result_buffer_name)
+            total_count = total_count + 1
+            total_reward = total_reward + result.reward
+
+        print('average reward:', total_reward * 1.0 / total_count)
     rpc.shutdown(graceful=True)
 
         
