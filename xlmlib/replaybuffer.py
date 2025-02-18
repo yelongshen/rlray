@@ -166,7 +166,11 @@ class AsyncReplayBuffer(ReplayBuffer):
 
     def pop(self):
         with self.lock:
-            return super().pop(1)[0]
+            x = super().pop(1)
+            if len(x) == 0:
+                return None
+            else:
+                return x[0]
 
     def __len__(self):
         with self.lock:
