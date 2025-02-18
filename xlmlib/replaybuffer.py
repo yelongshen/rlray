@@ -202,7 +202,7 @@ class RpcReplayBuffer(AsyncReplayBuffer):
             return RpcReplayBuffer.RpcFactory[buffer_name].pop()
         else:
             main_worker = RpcReplayBuffer.RpcMain[buffer_name]
-            return rpc.rpc_sync(main_worker, RpcReplayBuffer.Pop, args=(buffer_name), timeout=0)
+            return rpc.rpc_sync(main_worker, RpcReplayBuffer.Pop, args=buffer_name, timeout=0)
             
     @staticmethod
     def Length(buffer_name):
@@ -210,4 +210,4 @@ class RpcReplayBuffer(AsyncReplayBuffer):
             return len(RpcReplayBuffer.RpcFactory[buffer_name])
         else:
             main_worker = RpcReplayBuffer.RpcMain[buffer_name]
-            return rpc.rpc_sync(main_worker, RpcReplayBuffer.Length, args=(buffer_name), timeout=10)
+            return rpc.rpc_sync(main_worker, RpcReplayBuffer.Length, args=buffer_name, timeout=10)
