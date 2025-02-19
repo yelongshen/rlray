@@ -76,14 +76,15 @@ def setup_dist_eval(args):
             ans = data['answer']
             solution = data['solution']
             id = data['id']
-            request_list.append(Request(id = id, prompt = prompt, answer = ans))
+            
+            for n in range(0, args.n_rollout):
+                request_list.append(Request(id = id, prompt = prompt, answer = ans))
 
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, True, capacity = len(request_list))
         RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, True, capacity = len(request_list))
         
         for req in request_list:
-            for n in range(0, args.n_rollout):
-                RpcReplayBuffer.Push(request_buffer_name, req)
+            RpcReplayBuffer.Push(request_buffer_name, req)
     else:
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, False)
         RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, False)
@@ -110,9 +111,9 @@ def setup_dist_eval(args):
         print('eval length', RpcReplayBuffer.Length(result_buffer_name))
         
         eval_results = {}
-        for i in range(0, len(request_list) * args.n_rollout):
+        for i in range(0, len(request_list)):
             result = RpcReplayBuffer.Pop(result_buffer_name)
-            if results is None:
+            if result is None:
                 break
             if not result.id in eval_results:
                 eval_results[result.id] = []
