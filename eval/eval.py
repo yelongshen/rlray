@@ -107,9 +107,13 @@ def setup_dist_eval(args):
 
     dist.barrier()
     if rank == 0:
+        print('eval length', RpcReplayBuffer.Length(result_buffer_name))
+        
         eval_results = {}
         for i in range(0, len(request_list) * args.n_rollout):
             result = RpcReplayBuffer.Pop(result_buffer_name)
+            if results is None:
+                break
             if not result.id in eval_results:
                 eval_results[result.id] = []
             eval_results[result.id].append(result.reward)
