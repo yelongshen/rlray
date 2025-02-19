@@ -64,7 +64,7 @@ def setup_dist_eval(args):
             model, config, tokenizer = _SambaForCausalLM.load_customckpt(args.model_path, args.weight_path)
     elif args.model_type == 'phi4':
         if args.weight_path is None:
-            model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
+            model, config, tokenizer = _Phi4ForCausalLM.load_hfckpt(args.model_path)
             
     model = model.to(torch.bfloat16).to(device) 
     model.eval()
