@@ -13,7 +13,7 @@ import numpy
 
 
 import xlmlib
-from xlmlib import _SambaForCausalLM
+from xlmlib import _SambaForCausalLM, _Phi4ForCausalLM
 from xlmlib import RpcReplayBuffer
 from xlmlib import process_math_prompt, process_math_answer
 
@@ -56,12 +56,16 @@ def setup_dist_eval(args):
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)    
 
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    
-    if args.weight_path is None:
-        model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
-    else:
-        model, config, tokenizer = _SambaForCausalLM.load_customckpt(args.model_path, args.weight_path)
-    
+
+    if args.model_type == 'samba':
+        if args.weight_path is None:
+            model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
+        else:
+            model, config, tokenizer = _SambaForCausalLM.load_customckpt(args.model_path, args.weight_path)
+    elif args.model_type == 'phi4':
+        if args.weight_path is None:
+            model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
+            
     model = model.to(torch.bfloat16).to(device) 
     model.eval()
     
@@ -151,6 +155,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_path", default="aime24", type=str)
     parser.add_argument("--model_path", default="gpt-4", type=str)
+    parser.add_argument("--model_type", type=str, default="samba", choices=["samba", "phi4"], help="choose model type.")
+
     #parser.add_argument("--output_dir", default="./output", type=str)
     #parser.add_argument("--prompt_type", default="tool-integrated", type=str)
     parser.add_argument("--weight_path", default=None, type=str)
