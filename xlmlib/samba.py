@@ -688,7 +688,22 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
         tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
         
         return llm_model, llm_config, tokenizer
+
+    @staticmethod
+    def load_customckpt(hf_model_path, custom_weight_path):
+        with open(f'{hf_model_path}/config.json', 'r') as file:
+            llm_config = json.load(file, object_hook=lambda d: SimpleNamespace(**d))
+
+        ckpt = torch.load(custom_weight_path, map_location=torch.device('cpu'))
+        model_state_dict = ckpt['model_state_dict']        
         
+        llm_model = _SambaForCausalLM(llm_config) 
+        missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
+        print('missing_keys: ', missing_keys)
+        print('unexpected_keys: ', unexpected_keys)    
+        tokenizer = AutoTokenizer.from_pretrained(hf_model_path, local_files_only=True) 
+        return llm_model, llm_config, tokenizer
+
     def __init__(self, config):
         super().__init__(config)
         self.config = config
