@@ -9,6 +9,7 @@ import torch.distributed as dist
 import torch.distributed.rpc as rpc
 import time
 from dataclasses import dataclass
+import numpy
 
 
 import xlmlib
@@ -81,7 +82,8 @@ def setup_dist_eval(args):
         RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, True, capacity = len(request_list))
         
         for req in request_list:
-            RpcReplayBuffer.Push(request_buffer_name, req)
+            for n in range(0, args.n_rollout):
+                RpcReplayBuffer.Push(request_buffer_name, req)
     else:
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, False)
         RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, False)
@@ -94,7 +96,9 @@ def setup_dist_eval(args):
         prompt = process_math_prompt(req.prompt)
         _tokens = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=False)
         input_ids = _tokens['input_ids']
-        outputs, _, _ = model.generate(input_ids, max_gen_len = 8192)
+        #temperature: float = 0.7,
+        #top_p: float = 0.95,
+        outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p)
         response = tokenizer.decode(outputs[0])
         mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer)
         
@@ -103,14 +107,26 @@ def setup_dist_eval(args):
 
     dist.barrier()
     if rank == 0:
-        total_reward = 0
-        total_count = 0
-        for i in range(0, len(request_list)):
+        eval_results = {}
+        for i in range(0, len(request_list) * args.n_rollout):
             result = RpcReplayBuffer.Pop(result_buffer_name)
+            if not result.id in eval_results:
+                eval_results[result.id] = []
+            eval_results[result.id].append(result.reward)
+            
+        #total_reward = 0
+        pass_1 = 0
+        pass_n = 0
+        total_count = 0
+        for mkey in eval_results:
+            rlist = eval_results[mkey]
+            pass_1 = pass_1 + numpy.mean(rlist)
+            pass_n = pass_n + min(1, numpy.sum(rlist))
             total_count = total_count + 1
-            total_reward = total_reward + result.reward
-
-        print('average reward:', total_reward * 1.0 / total_count)
+            
+        print(f'average pass@1:', pass_1 * 1.0 / total_count)
+        print(f'average pass@{args.n_rollout}:', pass_n * 1.0 / total_count)
+        
     rpc.shutdown(graceful=True)
 
         
@@ -118,17 +134,14 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_path", default="aime24", type=str)
     parser.add_argument("--model_path", default="gpt-4", type=str)
-    parser.add_argument("--output_dir", default="./output", type=str)
-    parser.add_argument("--prompt_type", default="tool-integrated", type=str)
+    #parser.add_argument("--output_dir", default="./output", type=str)
+    #parser.add_argument("--prompt_type", default="tool-integrated", type=str)
   
-    parser.add_argument("--temperature", default=0, type=float)
-    parser.add_argument("--n_sampling", default=1, type=int)
-    parser.add_argument("--top_p", default=1, type=float)
-    parser.add_argument("--max_tokens_per_call", default=2048, type=int)
+    parser.add_argument("--temperature", default=0.7, type=float)
+    parser.add_argument("--n_rollout", default=1, type=int)
+    parser.add_argument("--top_p", default=0.95, type=float)
+    parser.add_argument("--max_generation", default=4096, type=int)
   
-    parser.add_argument("--save_outputs", action="store_true")
-    parser.add_argument("--overwrite", action="store_true")
-
     args = parser.parse_args()
     args.top_p = (
         1 if args.temperature == 0 else args.top_p
