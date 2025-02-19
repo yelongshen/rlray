@@ -778,10 +778,11 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
         bsz = len(prompt_tokens)
         #assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
 
-        #min_prompt_len = min(len(t) for t in prompt_tokens)
-        #max_prompt_len = max(len(t) for t in prompt_tokens)
+        min_prompt_len = min(len(t) for t in prompt_tokens)
+        max_prompt_len = max(len(t) for t in prompt_tokens)
+        
         #assert max_prompt_len <= params.max_seq_len
-        total_len = max_gen_len # min(4096, max_gen_len + max_prompt_len)
+        total_len = min_prompt_len + max_gen_len # min(4096, max_gen_len + max_prompt_len)
 
         pad_id = self.config.eos_token_id # self.config.pad_token_id
         eos_id = self.config.eos_token_id # eos_token_id
