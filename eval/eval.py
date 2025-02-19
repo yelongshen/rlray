@@ -55,6 +55,8 @@ def setup_dist_eval(args):
     # init distributed process group.
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)    
 
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    
     if args.weight_path is None:
         model, config, tokenizer = _SambaForCausalLM.load_hfckpt(args.model_path)
     else:
