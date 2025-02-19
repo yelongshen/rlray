@@ -96,7 +96,7 @@ def setup_dist_eval(args):
         input_ids = _tokens['input_ids']
         outputs, _, _ = model.generate(input_ids, max_gen_len = 8192)
         response = tokenizer.decode(outputs[0])
-        mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer)
+        mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer)
         
         result = Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward)
         RpcReplayBuffer.Push(result_buffer_name, result)
