@@ -297,11 +297,6 @@ class _Phi4Attention(nn.Module):
 
 
 class _Phi4FlashAttention2(_Phi4Attention):
-    """
-    Phi-3 flash attention module. This module inherits from `Phi3Attention` as the weights of the module stays
-    untouched. The only required change would be on the forward pass where it needs to correctly call the public API of
-    flash attention and deal with padding tokens in case the input contains any of them.
-    """
     # Copied from transformers.models.llama.modeling_llama.LlamaFlashAttention2.__init__
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -450,12 +445,12 @@ class _Phi4DecoderLayer(nn.Module):
         self.self_attn = _Phi4FlashAttention2(config, layer_idx=layer_idx) 
         # _PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
 
-        self.mlp = _Phi3MLP(config)
-        self.input_layernorm = _Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.mlp = _Phi4MLP(config)
+        self.input_layernorm = _Phi4RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.resid_attn_dropout = nn.Dropout(config.resid_pdrop)
         self.resid_mlp_dropout = nn.Dropout(config.resid_pdrop)
-        self.post_attention_layernorm = _Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = _Phi4RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
@@ -659,6 +654,36 @@ def sample_top_p(probs, top_p=0.9):
 # PP, TP, DP
 # Causal Large Language Model 
 class _Phi4ForCausalLM(_Phi4PreTrainedModel):
+    
+    @staticmethod
+    def load_hfckpt(local_model_path):
+        with open(f'{local_model_path}/config.json', 'r') as file:
+            llm_config = json.load(file, object_hook=lambda d: SimpleNamespace(**d))
+        #vocab_size = llm_config.vocab_size 
+        #eos_token_id = llm_config.eos_token_id #": 32000,
+
+        # check for the ckpt. 
+        safetensor_files = [
+            f"{local_model_path}/model-00001-of-00002.safetensors",
+            f"{local_model_path}/model-00002-of-00002.safetensors"
+        ]
+        
+        model_state_dict = {}
+        for file in safetensor_files:
+            part_state_dict = load_file(file, device="cpu")  # Load each part
+            model_state_dict.update(part_state_dict)  # Merge into one dictionary
+
+        llm_model = _Phi4ForCausalLM(llm_config) 
+    
+        # Step 4: Apply the merged state_dict to the model
+        missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
+        print('missing_keys: ', missing_keys)
+        print('unexpected_keys: ', unexpected_keys)    
+
+        tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
+        
+        return llm_model, llm_config, tokenizer
+        
     def __init__(self, config):
         super().__init__(config)
         self.config = config
