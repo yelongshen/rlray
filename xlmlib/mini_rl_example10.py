@@ -77,40 +77,25 @@ def main(args):
 
     # Step 3: Load and merge multiple safetensor state_dicts
     dist.barrier()
-    local_model_path = args.pretrained_model 
-    print('model_path', local_model_path) 
-    
-    #llm_config = AutoConfig.from_pretrained(local_model_path, local_files_only=True, trust_remote_code=True) 
-    with open(f'{local_model_path}/config.json', 'r') as file:
-        llm_config = json.load(file, object_hook=lambda d: SimpleNamespace(**d))
+
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    if args.weight_path is None:
+        llm_model, llm_config, tokenizer = _SambaForCausalLM.load_hfckpt(args.pretrained_model)
+    else:
+        llm_model, llm_config, tokenizer = _SambaForCausalLM.load_customckpt(args.pretrained_model, args.weight_path)
+        
+    # Load tokenizer from local path 
+    #tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
+    #tokenizer.model_max_length = 4096 
+    tokenizer.pad_token = tokenizer.unk_token # use unk rather than eos token to prevent endless generation
+    tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token) 
+    tokenizer.padding_side = 'right'     
+    new_special_tokens = ['<think>', '</think>', '<answer>', '</answer>']
+    tokenizer.add_tokens(new_special_tokens)
 
     vocab_size = llm_config.vocab_size 
     eos_token_id = llm_config.eos_token_id #": 32000,
   
-    safetensor_files = [
-        f"{local_model_path}/model-00001-of-00002.safetensors",
-        f"{local_model_path}/model-00002-of-00002.safetensors"
-    ]
-    
-    model_state_dict = {}
-    for file in safetensor_files:
-        part_state_dict = load_file(file, device="cpu")  # Load each part
-        model_state_dict.update(part_state_dict)  # Merge into one dictionary
-    print('load model weight ... ')
-
-    # Load the model checkpoint
-    #model_path = f"{local_model_path}/pytorch_model.bin"  # Change to your file path
-    #checkpoint = torch.load(model_path, map_location="cpu")
-    #print("Keys in pytorch_model.bin:")
-    #for key in checkpoint.keys():
-    #    print(key)
-
-    llm_model = _SambaForCausalLM(llm_config) 
-    
-    # Step 4: Apply the merged state_dict to the model
-    missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
-    print('missing_keys: ', missing_keys)
-    print('unexpected_keys: ', unexpected_keys)    
     llm_model = llm_model.to(torch.bfloat16).to(device) 
     llm_model.model.gradient_checkpointing = True 
     dist.barrier()
@@ -120,16 +105,6 @@ def main(args):
     # setup model distribution.
     llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
     print('distributed language model creation.') 
-
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    # Load tokenizer from local path 
-    tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
-    tokenizer.model_max_length = 4096 
-    tokenizer.pad_token = tokenizer.unk_token # use unk rather than eos token to prevent endless generation
-    tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token) 
-    tokenizer.padding_side = 'right'     
-    new_special_tokens = ['<think>', '</think>', '<answer>', '</answer>']
-    tokenizer.add_tokens(new_special_tokens)
 
     # load dataset....
     datafile = 'math_level3to5_data_processed_with_qwen_prompt.json' 
@@ -164,7 +139,6 @@ def main(args):
         sft_iter = iter(sft_dataloader)
 
         sft_buffer = ReplayBuffer(args.sft_replay_size)
-
         #dataset_b = DatasetB()
         #dataloader_b = DataLoader(dataset_b, batch_size=batch_size, shuffle=True)
         #iter_b = iter(dataloader_b)
@@ -330,6 +304,8 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretrained_model", type=str, default="none", help="path to pretrained ckpt.")
+    parser.add_argument("--weight_path", default=None, type=str, help="customized model weight path.")
+    
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
     parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
