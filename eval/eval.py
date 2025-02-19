@@ -20,7 +20,7 @@ from xlmlib import process_math_prompt, process_math_answer
 
 @dataclass
 class Request:
-    id : int
+    id : str
     prompt : str
     answer : str
 
@@ -71,12 +71,18 @@ def setup_dist_eval(args):
     # load file.
     if rank == 0:
         request_list = []
+        idx = 0
         for data in load_jsonl(args.data_path):
             prompt = data['problem']
             ans = data['answer']
             solution = data['solution']
-            id = data['id']
-            
+            if 'id' in data:
+                id = str(data['id'])
+            elif 'unique_id' in data:
+                id = str(data['unique_id'])
+            else:
+                id = str(idx)
+            idx += 1
             for n in range(0, args.n_rollout):
                 request_list.append(Request(id = id, prompt = prompt, answer = ans))
 
