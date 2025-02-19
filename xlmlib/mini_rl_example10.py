@@ -270,17 +270,20 @@ def main(args):
                 #optimizer, scheduler,
                 optimizer.zero_grad()
                 policy_loss_log, critic_loss_log = ppo_gradient(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)
-                
+
+                sft_loss_log = 0.0
                 if args.sft_replay_size > 0:
-                    sft_loss_log = sft_gradient(llm, llm_config, sft_buffer, args.sft_replay_size, device, weight = args.sft_weight)
-                
+                    sft_loss_log = sft_gradient(llm, llm_config, sft_buffer, args.sft_replay_size, device, weight = args.sft_weight)                    
+                    
                 optimizer.step()
                 scheduler.step()
                 if local_rank == 0:
                     print('policy_loss_log: ', policy_loss_log, ', critic_loss_log: ', critic_loss_log, ', sft_loss_log: ', sft_loss_log, ', lr:', scheduler.get_last_lr() )
                 ## start the model training; 
+                
                 buffer.clear()    
-                sft_buffer.clear()
+                if args.sft_replay_size > 0:
+                    sft_buffer.clear()
                 llm.eval()
 
                 # Save only on rank 0
