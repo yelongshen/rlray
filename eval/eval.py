@@ -110,7 +110,7 @@ def setup_dist_eval(args):
         req = RpcReplayBuffer.Pop(request_buffer_name)
         if req is None:
             break    
-        prompt = process_math_prompt(req.prompt)
+        prompt = process_math_prompt(req.prompt, prompt_type = args.prompt_type)
         _tokens = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=False)
         input_ids = _tokens['input_ids']
         #temperature: float = 0.7,
@@ -156,7 +156,8 @@ def parse_args():
     parser.add_argument("--data_path", default="aime24", type=str)
     parser.add_argument("--model_path", default="gpt-4", type=str)
     parser.add_argument("--model_type", type=str, default="samba", choices=["samba", "phi4"], help="choose model type.")
-
+    parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9"], help="choose prompt type.")
+    
     #parser.add_argument("--output_dir", default="./output", type=str)
     #parser.add_argument("--prompt_type", default="tool-integrated", type=str)
     parser.add_argument("--weight_path", default=None, type=str)
