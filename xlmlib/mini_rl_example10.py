@@ -142,7 +142,12 @@ def main(args):
         #dataset_b = DatasetB()
         #dataloader_b = DataLoader(dataset_b, batch_size=batch_size, shuffle=True)
         #iter_b = iter(dataloader_b)
-    ### 
+    
+    if args.profile:
+        elapsed_time_generation = 0
+        elapsed_time_train = 0
+        elapsed_time_reward = 0
+    
     #rl_update = 0    
     for epoch in range(0, args.epoch):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
@@ -165,16 +170,31 @@ def main(args):
 
             topk_hit = 0
             for rollout in range(0, args.n_rollout):
-                outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 3000)
+                if args.profile:
+                    start_time = time.perf_counter()
+                    
+                outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 4096)
+
+                if args.profile:
+                    end_time = time.perf_counter()
+                    elapsed_time_generation = elapsed_time_generation + end_time - start_time
+                
                 if batch_idx == 0 and local_rank == 0 and rollout == 0:
                     print('probs.shape', len(probs[0]))
                     print('crits.shape', len(crits[0]))
                     print('outputs.shape', len(outputs[0]))
                 response = tokenizer.decode(outputs[0])
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
-                
+
+                if args.profile:
+                    start_time = time.perf_counter()
                 #processed_response, extract_answer, reward
                 mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer)
+                
+                if args.profile:
+                    end_time = time.perf_counter()
+                    elapsed_time_reward = elapsed_time_reward + end_time - start_time
+                    
                 def getindex(char_pos, offset_mapping):
                     for token_idx, (start, end) in enumerate(offset_mapping):
                         if start <= char_pos < end:
@@ -267,6 +287,10 @@ def main(args):
                     experience = Sample(prompt = prompt, response = response, reward = 1.0, tokens = all_tokens, masks = masks)
                     sft_buffer.push(experience)
 
+                
+                if args.profile:
+                    start_time = time.perf_counter()
+                    
                 #optimizer, scheduler,
                 optimizer.zero_grad()
                 policy_loss_log, critic_loss_log = ppo_gradient(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)
@@ -277,8 +301,18 @@ def main(args):
                     
                 optimizer.step()
                 scheduler.step()
+
+                if args.profile:
+                    end_time = time.perf_counter()
+                    elapsed_time_train = elapsed_time_train + end_time - start_time
+                    
                 if local_rank == 0:
                     print('policy_loss_log: ', policy_loss_log, ', critic_loss_log: ', critic_loss_log, ', sft_loss_log: ', sft_loss_log, ', lr:', scheduler.get_last_lr() )
+                    if args.profile:
+                        print('elapsed_time_generation:', elapsed_time_generation)
+                        print('elapsed_time_train:', elapsed_time_train)
+                        print('elapsed_time_reward:', elapsed_time_reward)
+                        
                 ## start the model training; 
                 
                 buffer.clear()    
@@ -321,7 +355,7 @@ if __name__ == "__main__":
     parser.add_argument("--sft_data", type=str, default=None, help="path to sft data.")
     parser.add_argument("--sft_replay_size", type=int, default=0, help="SFT update batch size.")
     parser.add_argument("--sft_weight", type=float, default=0.1, help="token weight of sft dataset.")
-    
+    parser.add_argument('--profile', action='store_true')
     args = parser.parse_args()
     
     assert args.replay_size % args.n_rollout == 0, 'pls make sure replay_size mod n_rollout == 0'
