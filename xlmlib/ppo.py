@@ -61,8 +61,11 @@ def ppo_gradient(llm, llm_config, buffer, buffer_size, device, critic_alpha=0.01
         logprobs = logprobs[:, _response_idx-1:]
 
         # we shall do advantage normalization. 
+        # let's try to stablizae the training. 
         ratios = torch.exp(logprobs - old_logprobs.detach() + 1e-10)
-        
+        #if debug:
+        #    print('ratio:', ratios)
+            
         eps_clip = 0.5
         surr1 = ratios * advantages       
         surr2 = torch.clamp(ratios, 1 - eps_clip, 1 + eps_clip) * advantages
