@@ -1,15 +1,18 @@
-
 import inspect
 import math
 import warnings
 from typing import List, Optional, Tuple, Union
+import json
+from types import SimpleNamespace
+
+from einops import rearrange, repeat
 
 import torch
-import torch.nn.functional as F
-
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torch.utils.checkpoint import checkpoint
+import torch.nn.functional as F
+from safetensors.torch import load_file
 
 from transformers.activations import ACT2FN
 
@@ -19,8 +22,9 @@ from transformers.utils import (
     logging,
 )
 
+#import .checkpoint as user_checkpoint
+from transformers import AutoTokenizer 
 #import checkpoint as user_checkpoint
-
 logger = logging.get_logger(__name__)
 
 # Transformers scans dependencies in the modeling file, causing issues on conditional loading. The regex only ignores try/catch blocks, but not if statements
