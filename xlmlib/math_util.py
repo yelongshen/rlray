@@ -63,12 +63,16 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     candidate_prompt_8 = "First, think step by step to carefully analyze the problem. Then, conclude a concise, one-line answer at the end in this format: 'The answer is: <your_answer>' \n\n"
 
+    candidate_prompt_9 = "You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
     #pattern = r'The answer is:\s*(.+)'
 
-    prefix_instruct = candidate_prompt_8 if prompt_type == 'v8' else candidate_prompt_4
-    
     postfix_instruct = ''
     
+    if prompt_type == 'v8':
+        prefix_instruct = candidate_prompt_8 #if prompt_type == 'v8' else candidate_prompt_4    
+    elif prompt_type == 'v9':
+        prefix_instruct = candidate_prompt_9
+        
     prompt = prefix_instruct + original_question + postfix_instruct
 
     return prompt
