@@ -175,10 +175,7 @@ def parse_args():
     parser.add_argument("--temperature", default=0.7, type=float)
     parser.add_argument("--n_rollout", default=1, type=int)
     parser.add_argument("--top_p", default=0.95, type=float)
-    parser.add_argument("--max_generation", default=4096, type=int)
-    
-    parser.add_argument("--n_rollout", default=1, type=int)
-    
+    parser.add_argument("--max_generation", default=4096, type=int)    
     parser.add_argument('--debug', action='store_true')
 
     
