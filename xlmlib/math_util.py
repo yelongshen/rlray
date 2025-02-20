@@ -79,8 +79,8 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
 def process_math_answer(response, answers, tokenizer, prompt_type = "v8"):
     try:
-        split_response = response.strip().split('\n')[-1]
-        if math_verify(answers[0], split_response):
+        #split_response = response.strip().split('\n')[-1]
+        if math_verify(answers[0], response):
             return response, answers[0], 1.0
     except:
         print('error response:', response)
