@@ -91,8 +91,8 @@ class _Phi4LongRoPEScaledRotaryEmbedding(_Phi4RotaryEmbedding):
     def __init__(self, dim, config, device=None):
         super().__init__(dim, config.max_position_embeddings, config.rope_theta, device)
 
-        self.short_factor = config.rope_scaling["short_factor"]
-        self.long_factor = config.rope_scaling["long_factor"]
+        self.short_factor = config.rope_scaling.short_factor
+        self.long_factor = config.rope_scaling.long_factor
         self.original_max_position_embeddings = config.original_max_position_embeddings
 
     @torch.no_grad()
@@ -227,7 +227,7 @@ class _Phi4Attention(nn.Module):
                 base=self.rope_theta,
             )
         else:
-            scaling_type = self.config.rope_scaling["type"]
+            scaling_type = self.config.rope_scaling.type
             if scaling_type == "longrope":
                 self.rotary_emb = _Phi4LongRoPEScaledRotaryEmbedding(self.head_dim, self.config)
             else:
