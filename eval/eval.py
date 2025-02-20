@@ -117,7 +117,17 @@ def setup_dist_eval(args):
         #top_p: float = 0.95,
         outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p)
         response = tokenizer.decode(outputs[0])
+        
         mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer)
+
+        if args.debug:
+            print('######################\n\n')
+            print('prompt:\n', prompt)
+            print('response:\n', response)
+            print('filterd response:\n', mid_response)
+            print('extracted_answer:\n', extracted_answer)
+            print('gold answer:\n', req.answer)
+            print('reward:', reward)
         
         result = Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward)
         RpcReplayBuffer.Push(result_buffer_name, result)
@@ -166,7 +176,12 @@ def parse_args():
     parser.add_argument("--n_rollout", default=1, type=int)
     parser.add_argument("--top_p", default=0.95, type=float)
     parser.add_argument("--max_generation", default=4096, type=int)
-  
+    
+    parser.add_argument("--n_rollout", default=1, type=int)
+    
+    parser.add_argument('--debug', action='store_true')
+
+    
     args = parser.parse_args()
     args.top_p = (
         1 if args.temperature == 0 else args.top_p
