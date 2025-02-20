@@ -445,9 +445,7 @@ class _Phi4DecoderLayer(nn.Module):
     def __init__(self, config, layer_idx: int):
         super().__init__()
         self.config = config
-        #print('config._attn_implementation', config._attn_implementation)
         self.self_attn = _Phi4FlashAttention2(config, layer_idx=layer_idx) 
-        # _PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
 
         self.mlp = _Phi4MLP(config)
         self.input_layernorm = _Phi4RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -550,7 +548,7 @@ class _Phi4Model(_Phi4PreTrainedModel):
         self.layers = nn.ModuleList(
             [_Phi4DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        self._attn_implementation = config._attn_implementation
+        self._attn_implementation = 'flash_attention_2' # config._attn_implementation
         self.norm = _Phi4RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False
