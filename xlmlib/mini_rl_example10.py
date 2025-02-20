@@ -50,7 +50,7 @@ from transformers.activations import ACT2FN
 
 from samba import _SambaForCausalLM
 from replaybuffer import ReplayBuffer, Sample
-from ppo import ppo_gradient
+from ppo import ppo_gradient, ppo_gradient_v2
 from sft import sft_gradient
 from math_util import compare_math_answers, process_math_prompt, process_math_answer
 
@@ -293,8 +293,12 @@ def main(args):
                     
                 #optimizer, scheduler,
                 optimizer.zero_grad()
-                policy_loss_log, critic_loss_log = ppo_gradient(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)
-
+                
+                if args.rl_alg == 'ppo':
+                    policy_loss_log, critic_loss_log = ppo_gradient(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)
+                elif args.rl_alg == 'ppov2':
+                    policy_loss_log, critic_loss_log = ppo_gradient_v2(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)
+                    
                 sft_loss_log = 0.0
                 if args.sft_replay_size > 0:
                     sft_loss_log = sft_gradient(llm, llm_config, sft_buffer, args.sft_replay_size, device, weight = args.sft_weight)                    
@@ -351,6 +355,8 @@ if __name__ == "__main__":
     parser.add_argument("--epoch", type=int, default=30, help="number of epoches.")
     parser.add_argument("--n_rollout", type=int, default=1, help="number of rollout per sample.")
     parser.add_argument("--advantage", type=str, default="distgae", choices=["distgae", "group"], help="Choose the advantage function.")
+    parser.add_argument("--rl_alg", type=str, default="ppo", choices=["ppo", "ppov2"], help="Choose rl algorithm.")
+
     parser.add_argument("--critic_alpha", type=float, default=0.01, help="alpha for critic loss.")
     parser.add_argument("--sft_data", type=str, default=None, help="path to sft data.")
     parser.add_argument("--sft_replay_size", type=int, default=0, help="SFT update batch size.")
