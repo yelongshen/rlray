@@ -99,7 +99,7 @@ def setup_dist_eval(args):
                 request_list.append(Request(id = id, prompt = prompt, answer = ans))
 
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, True, capacity = len(request_list))
-        RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, True, capacity = len(request_list))
+        RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, True, capacity = len(request_list) * args.batch_size)
         
         for req in request_list:
             RpcReplayBuffer.Push(request_buffer_name, req)
