@@ -183,30 +183,31 @@ def main(args):
                 print('outputs.shape', len(outputs[0]))
 
             
-            response = tokenizer.decode(outputs[0])
-            response_mapping = tokenizer(response, return_offsets_mapping=True)
+            def getindex(char_pos, offset_mapping):
+                for token_idx, (start, end) in enumerate(offset_mapping):
+                    if start <= char_pos < end:
+                        return token_idx
+                return None
+                    
+            for input, output, prob, crit in zip(input_ids, outputs, probs, crits):
+                response = tokenizer.decode(output)
+                response_mapping = tokenizer(response, return_offsets_mapping=True)
 
                 if args.profile:
                     start_time = time.perf_counter()
                 #processed_response, extract_answer, reward
                 mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer)
-                
                 if args.profile:
                     end_time = time.perf_counter()
                     elapsed_time_reward = elapsed_time_reward + end_time - start_time
                     
-                def getindex(char_pos, offset_mapping):
-                    for token_idx, (start, end) in enumerate(offset_mapping):
-                        if start <= char_pos < end:
-                             return token_idx
-                    return None
                 response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
                 # 5 token space. 
-                if response_idx is not None and len(outputs[0]) > response_idx + 5:
-                    outputs[0] = outputs[0][ : response_idx]
-                    probs[0] = probs[0][ : response_idx]
-                    crits[0] = crits[0][ : response_idx]
-                response = tokenizer.decode(outputs[0])
+                if response_idx is not None and len(output) > response_idx + 5:
+                    output = output[ : response_idx]
+                    prob = prob[ : response_idx]
+                    crit = crit[ : response_idx]
+                response = tokenizer.decode(output)
 
                 if reward >= 0.5:
                     topk_hit = 1
@@ -226,27 +227,27 @@ def main(args):
                     print('\n\n\nreward: **********\n')
                     print(reward)
                     print('\n\ncrits: *******\n')
-                    print(np.mean(crits[0]), crits[0][-1])
+                    print(np.mean(crit), crit[-1])
                     print('\n\nprobs: *******\n')
-                    print(np.mean(probs[0]))
+                    print(np.mean(prob))
                     print('\n\n')
                     
                 # prompt_tokens: List[List[int]],
-                all_tokens = []
-                all_masks = []
-                output_rewards = []
-                for input_id, output_id in zip(input_ids, outputs):
-                    _ids = input_id + output_id 
-                    _masks = [0] * len(input_id) + [1] * len(output_id) 
-                    _rewards = [0] * (len(output_id)-1) + [reward] 
+                #all_tokens = []
+                #all_masks = []
+                #output_rewards = []
+                
+                #for input_id, output_id in zip(input_ids, outputs):
+                _ids = input + output 
+                _masks = [0] * len(input) + [1] * len(output) 
+                _rewards = [0] * (len(output)-1) + [reward] 
                     
-                    all_tokens.append(_ids)
-                    all_masks.append(_masks)
-                    output_rewards.append(_rewards)
+                #all_tokens.append(_ids)
+                #all_masks.append(_masks)
+                #output_rewards.append(_rewards)
     
                 #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>    
-                experience = Sample(prompt = prompt, response = response, reward = reward, probs = probs[0], crits = crits[0], seq_rewards = output_rewards[0],
-                                    tokens = all_tokens[0], masks = all_masks[0])
+                experience = Sample(prompt = prompt, response = response, reward = reward, probs = prob, crits = crit, seq_rewards = _rewards, tokens = _ids, masks = _masks)
                 buffer.push(experience)
             
             topk_reward = topk_reward + topk_hit
@@ -343,7 +344,6 @@ if __name__ == "__main__":
     parser.add_argument("--pretrained_model", type=str, default="none", help="path to pretrained ckpt.")
     parser.add_argument("--weight_path", default=None, type=str, help="customized model weight path.")
     parser.add_argument("--save_per_steps", type=int, default=40, help="save ckpt per steps.")
-    
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
     parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
