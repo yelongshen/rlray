@@ -821,7 +821,7 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
                 input = logits.reshape(-1, self.vocab_size), #.transpose(1, 2),
                 target = tokens[:, prev_pos + 1 : cur_pos + 1].reshape(-1),
                 reduction="none",
-            )
+            ).view(bsz, -1)
             
             token_critics[:, prev_pos: cur_pos] = critics.squeeze(-1) #[: -1]
             eos_reached |= (~input_text_mask[:, cur_pos]) & (
