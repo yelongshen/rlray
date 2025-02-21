@@ -775,58 +775,40 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
         max_gen_len: int = 4096,
         temperature: float = 0.7,
         top_p: float = 0.95,
-    ) -> Tuple[ List[List[int]], List[List[float]] ]: # these are the actions[token index, critic score, prob] 
-        """
-        Generate text sequences based on provided prompts using the language generation model.
-        Args:
-            prompt_tokens (List[List[int]]): List of tokenized prompts, where each prompt is represented as a list of integers.
-            max_gen_len (int): Maximum length of the generated text sequence.
-            temperature (float, optional): Temperature value for controlling randomness in sampling. Defaults to 0.6.
-            top_p (float, optional): Top-p probability threshold for nucleus sampling. Defaults to 0.9.
-        Returns:
-            Tuple[ List[List[int]], List[List[float]], List[List[float]] ]:  A tuple containing generated token sequences and, if logprobs is True, corresponding token log probabilities.
-        Note:
-            This method uses the provided prompts as a basis for generating text. It employs nucleus sampling to produce text with controlled randomness.
-            If logprobs is True, token log probabilities are computed for each generated token.
-        """
-        #params = self.model.params
+    ):  
         bsz = len(prompt_tokens)
-        #assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
-
         min_prompt_len = min(len(t) for t in prompt_tokens)
         max_prompt_len = max(len(t) for t in prompt_tokens)
-        
-        #assert max_prompt_len <= params.max_seq_len
-        total_len = min_prompt_len + max_gen_len # min(4096, max_gen_len + max_prompt_len)
+        total_len = max_gen_len 
 
         pad_id = self.config.eos_token_id # self.config.pad_token_id
         eos_id = self.config.eos_token_id # eos_token_id
         bos_id = self.config.bos_token_id
         
         tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cuda")
-        # position starts with 0.
-        # pos_ids = torch.full((bsz, total_len), 0, dtype=torch.long, device="cuda")
         
         for k, t in enumerate(prompt_tokens):
             tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
             
         token_logprobs = torch.zeros_like(tokens, dtype=torch.float)
         token_critics = torch.zeros_like(tokens, dtype=torch.float)
-        #token_critics = 
+
         prev_pos = 0
         eos_reached = torch.tensor([False] * bsz, device="cuda")
+        
         input_text_mask = tokens != pad_id
         
         _caches = None
         for cur_pos in range(min_prompt_len, total_len):
             _, logits, critics, _caches  = self.forward(tokens[:, prev_pos:cur_pos], past_caches = _caches, inference_mode = True)
 
+            # logits : bsz, seq, vocab
+            # logits[:, -1] : bsz, vocab
             if temperature > 0:
                 probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
                 next_token = sample_top_p(probs, top_p)
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
-            #print('next_token.shape', next_token.shape)
             
             next_token = next_token.reshape(-1)
             # only replace token if prompt has already been generated
@@ -835,20 +817,12 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
             )
             tokens[:, cur_pos] = next_token
             
-            #print('tokens', tokens)
-            #print(logits.shape)
-            
-            #if logprobs:
-            #print('logits.shape', logits.shape)
-            #print('target.shape', tokens[:, prev_pos + 1 : cur_pos + 1].shape)
-            
             token_logprobs[:, prev_pos: cur_pos] = -F.cross_entropy(
-                input=logits.reshape(-1, self.vocab_size), #.transpose(1, 2),
-                target=tokens[:, prev_pos + 1 : cur_pos + 1].reshape(-1),
+                input = logits.reshape(-1, self.vocab_size), #.transpose(1, 2),
+                target = tokens[:, prev_pos + 1 : cur_pos + 1].reshape(-1),
                 reduction="none",
             )
-            #print('critics.shape', critics.shape)
-            #print('token_critics[:, prev_pos: cur_pos].shape', token_critics[:, prev_pos: cur_pos].shape)
+            
             token_critics[:, prev_pos: cur_pos] = critics.squeeze(-1) #[: -1]
             eos_reached |= (~input_text_mask[:, cur_pos]) & (
                 next_token == eos_id
