@@ -119,6 +119,8 @@ def setup_dist_eval(args):
         #top_p: float = 0.95,
         outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p)
 
+        assert len(outputs) == args.batch_size
+        
         for output in outputs:
             response = tokenizer.decode(output)
             mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer)
@@ -158,7 +160,7 @@ def setup_dist_eval(args):
             pass_n = pass_n + min(1, numpy.sum(rlist))
             total_count = total_count + 1
             
-        print(f'average pass@1:', pass_1 * 1.0 / total_count)
+        print(f'average pass@1:', pass_1 * 1.0 / total_count, len(eval_results))
         print(f'average pass@{args.n_rollout}:', pass_n * 1.0 / total_count)
         
     rpc.shutdown(graceful=True)
