@@ -294,7 +294,11 @@ def main(args):
                     
                 #optimizer, scheduler,
                 optimizer.zero_grad()
-                policy_loss_log, critic_loss_log = ppo_gradient(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)
+
+                if args.rl_alg == 'ppo':
+                    policy_loss_log, critic_loss_log = ppo_gradient(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)
+                elif args.rl_alg == 'ppov2':
+                    policy_loss_log, critic_loss_log = ppo_gradient_v2(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)        
 
                 sft_loss_log = 0.0
                 if args.sft_replay_size > 0:
@@ -342,9 +346,12 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretrained_model", type=str, default="none", help="path to pretrained ckpt.")
+    parser.add_argument("--rl_alg", type=str, default="ppo", choices=["ppo", "ppov2"], help="Choose rl algorithm.")
     parser.add_argument("--weight_path", default=None, type=str, help="customized model weight path.")
+    
     parser.add_argument("--save_per_steps", type=int, default=40, help="save ckpt per steps.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
+    
     parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
     parser.add_argument("--lr", type=float, default=1e-6, help="peak learning rate.")
