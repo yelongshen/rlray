@@ -165,26 +165,26 @@ def main(args):
             answers = answers_1 + answers_2 + answers_3 + answers_4
             # features: ['input', 'answer', 'gt_answer', 'subject', 'level', 'question', 'ground_truth_answer', 'target']
             prompt = process_math_prompt(vanilla_prompts[0])
-            x1 = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=True)
+            
+            x1 = tokenizer([prompt] * args.n_rollout, add_special_tokens=False, max_length=1024, truncation=True)
             input_ids = x1['input_ids']
 
-            topk_hit = 0
-            for rollout in range(0, args.n_rollout):
-                if args.profile:
-                    start_time = time.perf_counter()
-                    
-                outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 4096)
-
-                if args.profile:
-                    end_time = time.perf_counter()
-                    elapsed_time_generation = elapsed_time_generation + end_time - start_time
+            topk_hit = 0    
+            if args.profile:
+                start_time = time.perf_counter()    
+            outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 4096)
+            if args.profile:
+                end_time = time.perf_counter()
+                elapsed_time_generation = elapsed_time_generation + end_time - start_time
                 
-                if batch_idx == 0 and local_rank == 0 and rollout == 0:
-                    print('probs.shape', len(probs[0]))
-                    print('crits.shape', len(crits[0]))
-                    print('outputs.shape', len(outputs[0]))
-                response = tokenizer.decode(outputs[0])
-                response_mapping = tokenizer(response, return_offsets_mapping=True)
+            if batch_idx == 0 and local_rank == 0: # and rollout == 0:
+                print('probs.shape', len(probs[0]))
+                print('crits.shape', len(crits[0]))
+                print('outputs.shape', len(outputs[0]))
+
+            
+            response = tokenizer.decode(outputs[0])
+            response_mapping = tokenizer(response, return_offsets_mapping=True)
 
                 if args.profile:
                     start_time = time.perf_counter()
