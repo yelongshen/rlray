@@ -78,7 +78,7 @@ def setup_dist_eval(args):
     result_buffer_name = 'result_buffer'
     result_buffer_worker = f"worker-{0}"
 
-    assert args.batch_size == 1 or args.batch_size == args.n_rollout
+    assert args.n_rollout % args.batch_size == 0
     # load file.
     if rank == 0:
         request_list = []
@@ -95,11 +95,8 @@ def setup_dist_eval(args):
                 id = str(idx)
             idx += 1
 
-            if args.batch_size == args.n_rollout:
+            for n in range(0, args.n_rollout // args.batch_size):
                 request_list.append(Request(id = id, prompt = prompt, answer = ans))
-            else:
-                for n in range(0, args.n_rollout):
-                    request_list.append(Request(id = id, prompt = prompt, answer = ans))
 
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, True, capacity = len(request_list))
         RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, True, capacity = len(request_list))
@@ -143,7 +140,7 @@ def setup_dist_eval(args):
         print('eval length', RpcReplayBuffer.Length(result_buffer_name))
         
         eval_results = {}
-        for i in range(0, len(request_list)):
+        for i in range(0, len(request_list) * args.batch_size):
             result = RpcReplayBuffer.Pop(result_buffer_name)
             if result is None:
                 break
