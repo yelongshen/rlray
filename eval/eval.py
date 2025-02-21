@@ -77,7 +77,8 @@ def setup_dist_eval(args):
 
     result_buffer_name = 'result_buffer'
     result_buffer_worker = f"worker-{0}"
-    
+
+    assert args.batch_size == 1 or args.batch_size == args.n_rollout
     # load file.
     if rank == 0:
         request_list = []
@@ -93,8 +94,12 @@ def setup_dist_eval(args):
             else:
                 id = str(idx)
             idx += 1
-            for n in range(0, args.n_rollout):
+
+            if args.batch_size == args.n_rollout:
                 request_list.append(Request(id = id, prompt = prompt, answer = ans))
+            else:
+                for n in range(0, args.n_rollout):
+                    request_list.append(Request(id = id, prompt = prompt, answer = ans))
 
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, True, capacity = len(request_list))
         RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, True, capacity = len(request_list))
@@ -111,26 +116,27 @@ def setup_dist_eval(args):
         if req is None:
             break    
         prompt = process_math_prompt(req.prompt, prompt_type = args.prompt_type)
-        _tokens = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=False)
+        _tokens = tokenizer([prompt] * args.batch_size, add_special_tokens=False, max_length=1024, truncation=False)
         input_ids = _tokens['input_ids']
         #temperature: float = 0.7,
         #top_p: float = 0.95,
         outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p)
-        response = tokenizer.decode(outputs[0])
-        
-        mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer)
 
-        if args.debug:
-            print('######################\n\n')
-            print('prompt:\n', prompt)
-            print('response:\n', response)
-            print('filterd response:\n', mid_response)
-            print('extracted_answer:\n', extracted_answer)
-            print('gold answer:\n', req.answer)
-            print('reward:', reward)
+        for output in outputs:
+            response = tokenizer.decode(output)
+            mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer)
+
+            if args.debug:
+                print('######################\n\n')
+                print('prompt:\n', prompt)
+                print('response:\n', response)
+                print('filterd response:\n', mid_response)
+                print('extracted_answer:\n', extracted_answer)
+                print('gold answer:\n', req.answer)
+                print('reward:', reward)
         
-        result = Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward)
-        RpcReplayBuffer.Push(result_buffer_name, result)
+            result = Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward)
+            RpcReplayBuffer.Push(result_buffer_name, result)
 
     dist.barrier()
     if rank == 0:
@@ -167,6 +173,7 @@ def parse_args():
     parser.add_argument("--model_path", default="gpt-4", type=str)
     parser.add_argument("--model_type", type=str, default="samba", choices=["samba", "phi4"], help="choose model type.")
     parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9"], help="choose prompt type.")
+    parser.add_argument("--batch_size", default=1, type=int)
     
     #parser.add_argument("--output_dir", default="./output", type=str)
     #parser.add_argument("--prompt_type", default="tool-integrated", type=str)
