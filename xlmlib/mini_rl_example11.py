@@ -147,7 +147,9 @@ def main(args):
         elapsed_time_generation = 0
         elapsed_time_train = 0
         elapsed_time_reward = 0
-    
+        elapsed_time_update = 0
+        update_start_time = time.perf_counter()    
+        
     #rl_update = 0    
     for epoch in range(0, args.epoch):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
@@ -314,9 +316,12 @@ def main(args):
                 if local_rank == 0:
                     print('policy_loss_log: ', policy_loss_log, ', critic_loss_log: ', critic_loss_log, ', sft_loss_log: ', sft_loss_log, ', lr:', scheduler.get_last_lr() )
                     if args.profile:
+                        update_end_time = time.perf_counter()    
+                        elapsed_time_update = update_end_time - update_start_time
                         print('elapsed_time_generation:', elapsed_time_generation)
                         print('elapsed_time_train:', elapsed_time_train)
                         print('elapsed_time_reward:', elapsed_time_reward)
+                        print('elapsed_time_update:', elapsed_time_update)
                         
                 ## start the model training; 
                 
