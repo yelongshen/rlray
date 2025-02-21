@@ -50,7 +50,7 @@ from transformers.activations import ACT2FN
 
 from samba import _SambaForCausalLM
 from replaybuffer import ReplayBuffer, Sample
-from ppo import ppo_gradient
+from ppo import ppo_gradient, ppo_gradient_v2
 from sft import sft_gradient
 from math_util import compare_math_answers, process_math_prompt, process_math_answer
 
