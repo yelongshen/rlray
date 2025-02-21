@@ -118,13 +118,14 @@ def setup_dist_eval(args):
         #temperature: float = 0.7,
         #top_p: float = 0.95,
         outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p)
-
+        
         assert len(outputs) == args.batch_size
         
         for output in outputs:
             response = tokenizer.decode(output)
             mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer)
-
+            RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward))
+            
             if args.debug:
                 print('######################\n\n')
                 print('prompt:\n', prompt)
@@ -133,9 +134,6 @@ def setup_dist_eval(args):
                 print('extracted_answer:\n', extracted_answer)
                 print('gold answer:\n', req.answer)
                 print('reward:', reward)
-        
-            result = Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward)
-            RpcReplayBuffer.Push(result_buffer_name, result)
 
     dist.barrier()
     if rank == 0:
