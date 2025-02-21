@@ -122,7 +122,7 @@ def ppo_gradient_v2(llm, llm_config, buffer, buffer_size, device, critic_alpha=0
         # return: next_token_loss, logits, critics, next_decoder_cache 
         _, logits, critics, _ = llm(input_tokens)
     
-        logprobs = -F.cross_entropy(
+        logprobs = F.cross_entropy(
             input = logits.reshape(-1, vocab_size)[:-1,:], #.transpose(1, 2),
             target = input_tokens.reshape(-1)[1:], 
             reduction = "none",
