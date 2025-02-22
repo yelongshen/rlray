@@ -71,6 +71,19 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
+    def calculate_group_passk(self, group=8):
+        assert len(self.buffer) % group == 0 
+        rewards = [d.reward for d in self.buffer]
+        
+        passk = 0
+        for g in range(0, len(self.buffer) // group):
+            _rewards = rewards[g * group: (g+1) * group]
+            _all_reward = np.sum(_rewards)
+
+            if _all_reward > 0:
+                passk += 1
+        return passk, len(self.buffer) // group
+        
     def calculate_positive_advantage(self, gamma=0.995, group = 8):
         assert len(self.buffer) % group == 0 
         rewards = [d.reward for d in self.buffer]
