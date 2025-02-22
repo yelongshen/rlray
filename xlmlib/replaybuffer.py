@@ -206,13 +206,13 @@ class AsyncReplayBuffer(ReplayBuffer):
         with self.lock:
             super().push(data) 
 
-    def pop(self):
+    def pop(self, batchsize):
         with self.lock:
-            x = super().pop(1)
-            if len(x) == 0:
+            x = super().pop(batchsize)
+            if len(x) < batchsize:
                 return None
             else:
-                return x[0]
+                return x
 
     def __len__(self):
         with self.lock:
@@ -245,7 +245,7 @@ class RpcReplayBuffer(AsyncReplayBuffer):
     @staticmethod
     def Pop(buffer_name):
         if buffer_name in RpcReplayBuffer.RpcFactory:
-            return RpcReplayBuffer.RpcFactory[buffer_name].pop()
+            return RpcReplayBuffer.RpcFactory[buffer_name].pop(1)[0]
         else:
             main_worker = RpcReplayBuffer.RpcMain[buffer_name]
             return rpc.rpc_sync(main_worker, RpcReplayBuffer.Pop, args=(buffer_name, ), timeout=0)
