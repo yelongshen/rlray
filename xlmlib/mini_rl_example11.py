@@ -202,6 +202,7 @@ def main(args):
             #for input, output, prob, crit in zip(input_ids, outputs, probs, crits):
 
             def process_replaybuffer(input_output_prob_crit):
+                print('debug process start.')
                 input_id, output_id, prob, crit = input_output_prob_crit
                 response = tokenizer.decode(output_id)
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
@@ -221,8 +222,10 @@ def main(args):
                     
                 experience = Sample(prompt = prompt, response = response, reward = reward, probs = prob, crits = crit, seq_rewards = _rewards, tokens = _ids, masks = _masks)
                 buffer.push(experience)
+                print('debug process end.')
+                
 
-            with ThreadPoolExecutor(max_workers = 64) as executor:  # Adjust worker count based on your system
+            with ThreadPoolExecutor(max_workers = 16) as executor:  # Adjust worker count based on your system
                 executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
 
             if args.profile:
