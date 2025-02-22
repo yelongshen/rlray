@@ -77,7 +77,7 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     return prompt
 
-def process_math_answer(response, answers, tokenizer, prompt_type = "v8"):
+def process_math_answer(response, answers, tokenizer, prompt_type = "v8", last_row_answer = False):
         
     pattern = r'The answer is:\s*(.+)'
 
@@ -104,8 +104,10 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8"):
         return response, extracted_answer, box_match
     else:
         try:
-            #split_response = response.strip().split('\n')[-1]
-            if math_verify(answers[0], response):
+            split_response = response
+            if last_row_answer:
+                split_response = response.strip().split('\n')[-1]
+            if math_verify(answers[0], split_response):
                 return response, answers[0], 1.0
         except:
             print('error response:', response)
