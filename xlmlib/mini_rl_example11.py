@@ -175,7 +175,7 @@ def main(args):
             x1 = tokenizer([prompt] * args.n_rollout, add_special_tokens=False, max_length=1024, truncation=True)
             input_ids = x1['input_ids']
 
-            topk_hit = 0    
+            print(f'begin batch_idx:{batch_idx}, rank: {rank}, buffer_size: {len(buffer)}')
             if args.profile:
                 start_time = time.perf_counter()    
             output_ids, probs, crits = llm.module.generate(input_ids, max_gen_len = 4096, early_stop = not args.no_early_stop)
@@ -234,6 +234,8 @@ def main(args):
             if args.profile:
                 end_time = time.perf_counter()
                 elapsed_time_reward = elapsed_time_reward + end_time - start_time
+
+            print(f'end batch_idx:{batch_idx}, rank: {rank}, buffer_size: {len(buffer)}')
             
             if len(buffer) >= args.replay_size:    
                 avg_reward = buffer.mean_reward()
