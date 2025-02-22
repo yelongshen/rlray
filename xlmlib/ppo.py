@@ -89,7 +89,7 @@ def ppo_gradient(llm, llm_config, buffer, buffer_size, device, critic_alpha=0.01
     return mini_policy_loss, mini_critic_loss
 
 
-def gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, critic_alpha, mseLoss, loss_scalar):
+def gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, returns, critic_alpha, mseLoss, loss_scalar):
     
     _batch_size, _seq_len = input_tokens.shape
     
@@ -151,10 +151,10 @@ def ppo_gradient_v2(llm, llm_config, buffer, buffer_size, device, critic_alpha=0
         step = step + 1
         
         if step >= micro_training_steps:
-            _policy_loss, _critic_loss = gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, critic_alpha, mseLoss, loss_scalar)
+            _policy_loss, _critic_loss = gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, returns, critic_alpha, mseLoss, loss_scalar)
         else:
             with llm.no_sync():
-                _policy_loss, _critic_loss = gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, critic_alpha, mseLoss, loss_scalar)
+                _policy_loss, _critic_loss = gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, returns, critic_alpha, mseLoss, loss_scalar)
             
         # final loss of clipped objective PPO objective. 
         # take gradient step
