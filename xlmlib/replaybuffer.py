@@ -80,7 +80,7 @@ class ReplayBuffer:
             _rewards = rewards[g * group: (g+1) * group]
             _all_reward = np.sum(_rewards)
             
-            _norm_rewards = [ (_r * 1.0 / _all_reward) for _r in _rewards]  # _norm(_rewards)
+            _norm_rewards = [ (_r / (_all_reward + 1e-2)) for _r in _rewards]  # _norm(_rewards)
             norm_rewards = norm_rewards + _norm_rewards
             
         for idx, d in enumerate(self.buffer):
