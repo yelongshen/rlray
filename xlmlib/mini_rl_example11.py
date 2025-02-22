@@ -202,12 +202,12 @@ def main(args):
             #for input, output, prob, crit in zip(input_ids, outputs, probs, crits):
 
             def process_replaybuffer(input_output_prob_crit):
-                print('debug process start.')
+                #print('debug process start.')
                 input_id, output_id, prob, crit = input_output_prob_crit
                 response = tokenizer.decode(output_id)
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
                 #processed_response, extract_answer, reward
-                print('debug process step 1.')
+                #print('debug process step 1.')
                 mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, last_row_answer = True)
                 response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
                 # 5 token space. 
@@ -215,18 +215,18 @@ def main(args):
                     output_id = output_id[ : response_idx]
                     prob = prob[ : response_idx]
                     crit = crit[ : response_idx]
-                print('debug process step 2.')
+                #print('debug process step 2.')
 
                 response = tokenizer.decode(output_id)
                 
-                _ids = input + output 
-                _masks = [0] * len(input) + [1] * len(output) 
-                _rewards = [0] * (len(output)-1) + [reward] 
+                _ids = input_id + output_id 
+                _masks = [0] * len(input_id) + [1] * len(output_id) 
+                _rewards = [0] * (len(output_id)-1) + [reward] 
 
-                print('debug process step 3.')
+                #print('debug process step 3.')
                 experience = Sample(prompt = prompt, response = response, reward = reward, probs = prob, crits = crit, seq_rewards = _rewards, tokens = _ids, masks = _masks)
                 buffer.push(experience)
-                print('debug process end.')
+                #print('debug process end.')
                 
             with ThreadPoolExecutor(max_workers = 16) as executor:  # Adjust worker count based on your system
                 executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
