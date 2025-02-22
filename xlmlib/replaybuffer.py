@@ -209,8 +209,8 @@ class AsyncReplayBuffer(ReplayBuffer):
     def pop(self, batchsize):
         with self.lock:
             x = super().pop(batchsize)
-            if len(x) < batchsize:
-                return None
+            if len(x) == 0: #< batchsize:
+                return [None]
             else:
                 return x
 
