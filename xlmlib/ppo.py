@@ -73,17 +73,47 @@ def ppo_gradient(llm, llm_config, buffer, buffer_size, device, critic_alpha=0.01
         _critic_loss = mseLoss(critics, returns).mean() 
 
         _total_loss = (_policy_loss + critic_alpha * _critic_loss) / micro_training_steps 
-        _total_loss.backward()
 
+        
+        _total_loss.backward()
+            
         # final loss of clipped objective PPO objective. 
         # take gradient step
         mini_critic_loss = mini_critic_loss + _critic_loss.detach() / micro_training_steps 
         mini_policy_loss = mini_policy_loss + _policy_loss.detach() / micro_training_steps
-            
-        #print(' _policy_loss:', _policy_loss, ' , _critic_loss:', _critic_loss, ' , device:', device)
+
         step = step + 1
+
+        #print(' _policy_loss:', _policy_loss, ' , _critic_loss:', _critic_loss, ' , device:', device)
+        
     return mini_policy_loss, mini_critic_loss
 
+
+def gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, critic_alpha, mseloss, loss_scalar):
+    
+    _batch_size, _seq_len = input_tokens.shape
+    
+    _, logits, critics, _ = llm(input_tokens)
+    
+    logprobs = F.cross_entropy(
+        input = logits.reshape(-1, vocab_size)[:-1,:], #.transpose(1, 2),
+        target = input_tokens.reshape(-1)[1:], 
+        reduction = "none",
+            #ignore_index = pad_id,
+    ).reshape(1, -1)
+        
+    # critics align with the ground truth. 
+    critics = critics.reshape(_batch_size, _seq_len)
+    critics = critics[:, _response_idx-1:-1] 
+    logprobs = logprobs[:, _response_idx-1:]
+
+    _policy_loss = (advantages * logprobs).mean() #  -torch.min(surr1, surr2).sum() 
+    _critic_loss = mseLoss(critics, returns).mean() 
+
+    _total_loss = (_policy_loss + critic_alpha * _critic_loss) * loss_scalar 
+    _total_loss.backward()
+
+    return _policy_loss.detach(), _critic_loss.detach()
 
 # 1. dpo style objective function. 
 def ppo_gradient_v2(llm, llm_config, buffer, buffer_size, device, critic_alpha=0.01):
@@ -98,6 +128,8 @@ def ppo_gradient_v2(llm, llm_config, buffer, buffer_size, device, critic_alpha=0
     mseLoss = torch.nn.MSELoss(size_average=None, reduce=None, reduction='none')
     mini_policy_loss = 0
     mini_critic_loss = 0
+
+    loss_scalar = 1.0 / micro_training_steps
     # rl training steps;
     while step < micro_training_steps:
         mini_data = buffer.pop(batch_size)
@@ -114,48 +146,23 @@ def ppo_gradient_v2(llm, llm_config, buffer, buffer_size, device, critic_alpha=0
         advantages = torch.tensor(advantages).to(torch.bfloat16).to(device).detach()
         returns = torch.tensor(returns).to(torch.bfloat16).to(device).detach()
         
-        _batch_size, _seq_len = input_tokens.shape
-        # generation token index. 
         _response_idx = mini_data[0].masks.index(1)
 
-        # re-evaluate the policy.     
-        # return: next_token_loss, logits, critics, next_decoder_cache 
-        _, logits, critics, _ = llm(input_tokens)
-    
-        logprobs = F.cross_entropy(
-            input = logits.reshape(-1, vocab_size)[:-1,:], #.transpose(1, 2),
-            target = input_tokens.reshape(-1)[1:], 
-            reduction = "none",
-            #ignore_index = pad_id,
-        ).reshape(1, -1)
+        step = step + 1
         
-        # critics align with the ground truth. 
-        critics = critics.reshape(_batch_size, _seq_len)
-        critics = critics[:, _response_idx-1:-1] 
-        logprobs = logprobs[:, _response_idx-1:]
-
-        # we shall do advantage normalization. 
-        # let's try to stablizae the training. 
-        #ratios = torch.exp(logprobs - old_logprobs.detach() + 1e-10)
-        #if debug:
-        #    print('ratio:', ratios)
+        if step >= micro_training_steps:
+            with llm.no_sync():
+                _policy_loss, _critic_loss = gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, critic_alpha, mseloss, loss_scalar)
+        else:
+            gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, critic_alpha, mseloss, loss_scalar)
             
-        #eps_clip = 0.5
-        #surr1 = ratios * advantages       
-        #surr2 = torch.clamp(ratios, 1 - eps_clip, 1 + eps_clip) * advantages
-        _policy_loss = (advantages * logprobs).sum() #  -torch.min(surr1, surr2).sum() 
-        _critic_loss = mseLoss(critics, returns).mean() 
-
-        _total_loss = (_policy_loss + critic_alpha * _critic_loss) / micro_training_steps 
-        _total_loss.backward()
-
         # final loss of clipped objective PPO objective. 
         # take gradient step
-        mini_critic_loss = mini_critic_loss + _critic_loss.detach() / micro_training_steps 
-        mini_policy_loss = mini_policy_loss + _policy_loss.detach() / micro_training_steps
+        mini_critic_loss = mini_critic_loss + _critic_loss * loss_scalar # / micro_training_steps 
+        mini_policy_loss = mini_policy_loss + _policy_loss * loss_scalar # / micro_training_steps
             
         #print(' _policy_loss:', _policy_loss, ' , _critic_loss:', _critic_loss, ' , device:', device)
-        step = step + 1
+        
     return mini_policy_loss, mini_critic_loss
     
 
