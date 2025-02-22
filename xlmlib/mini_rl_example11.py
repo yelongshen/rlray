@@ -16,6 +16,7 @@ import multiprocessing
 import logging
 import json
 from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from queue import Queue
@@ -49,7 +50,7 @@ from transformers.activations import ACT2FN
 
 
 from samba import _SambaForCausalLM
-from replaybuffer import ReplayBuffer, Sample
+from replaybuffer import ReplayBuffer, Sample, AsyncReplayBuffer
 from ppo import ppo_gradient, ppo_gradient_v2
 from sft import sft_gradient
 from math_util import compare_math_answers, process_math_prompt, process_math_answer
@@ -127,7 +128,7 @@ def main(args):
 
     ### initialize replaybuffer.
     llm.eval()
-    buffer = ReplayBuffer(args.replay_size)
+    buffer = AsyncReplayBuffer(args.replay_size)
 
     ## load sft dataset.
     if args.sft_data is not None:
@@ -154,9 +155,11 @@ def main(args):
     for epoch in range(0, args.epoch):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         acc_reward = 0
+        acc_response_len = 0
         acc_num = 0
         topk_reward = 0
         topk_num = 0
+        
         for batch_idx, d in enumerate(dataloader):
             qwen_prompt = d['input']
             vanilla_prompts = d['question']    
@@ -174,7 +177,7 @@ def main(args):
             topk_hit = 0    
             if args.profile:
                 start_time = time.perf_counter()    
-            outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 4096, early_stop = not args.no_early_stop)
+            output_ids, probs, crits = llm.module.generate(input_ids, max_gen_len = 4096, early_stop = not args.no_early_stop)
             if args.profile:
                 end_time = time.perf_counter()
                 elapsed_time_generation = elapsed_time_generation + end_time - start_time
@@ -182,7 +185,7 @@ def main(args):
             if batch_idx == 0 and local_rank == 0: # and rollout == 0:
                 print('probs.shape', len(probs[0]))
                 print('crits.shape', len(crits[0]))
-                print('outputs.shape', len(outputs[0]))
+                print('outputs.shape', len(output_ids[0]))
 
             
             def getindex(char_pos, offset_mapping):
@@ -190,76 +193,54 @@ def main(args):
                     if start <= char_pos < end:
                         return token_idx
                 return None
-                    
-            for input, output, prob, crit in zip(input_ids, outputs, probs, crits):
-                response = tokenizer.decode(output)
-                response_mapping = tokenizer(response, return_offsets_mapping=True)
 
-                if args.profile:
-                    start_time = time.perf_counter()
+            if args.profile:
+                start_time = time.perf_counter()
+
+            #for input, output, prob, crit in zip(input_ids, outputs, probs, crits):
+
+            def process_replaybuffer(input_output_prob_crit):
+                input_id, output_id, prob, crit = input_output_prob_crit
+                response = tokenizer.decode(output_id)
+                response_mapping = tokenizer(response, return_offsets_mapping=True)
                 #processed_response, extract_answer, reward
-                mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer)
-                if args.profile:
-                    end_time = time.perf_counter()
-                    elapsed_time_reward = elapsed_time_reward + end_time - start_time
-                    
+                mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, last_row_answer = True)
                 response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
                 # 5 token space. 
-                if response_idx is not None and len(output) > response_idx + 5:
-                    output = output[ : response_idx]
+                if response_idx is not None and len(output_id) > response_idx + 5:
+                    output_id = output_id[ : response_idx]
                     prob = prob[ : response_idx]
                     crit = crit[ : response_idx]
-                response = tokenizer.decode(output)
-
-                if reward >= 0.5:
-                    topk_hit = 1
-                acc_reward = acc_reward + reward
-                acc_num = acc_num + 1
+                response = tokenizer.decode(output_id)
                 
-                if local_rank == 0:
-                    print('batch idx', batch_idx)
-                    print('\n\n\nquestion: ************\n')
-                    print(prompt)
-                    print('\n\n\nresponse: *************\n')
-                    print(response)
-                    print('\n\n\nextracted answer: ************\n')
-                    print(extracted_answer)
-                    print('\n\n\nground truth: *************\n')
-                    print(answers)
-                    print('\n\n\nreward: **********\n')
-                    print(reward)
-                    print('\n\ncrits: *******\n')
-                    print(np.mean(crit), crit[-1])
-                    print('\n\nprobs: *******\n')
-                    print(np.mean(prob))
-                    print('\n\n')
-                    
-                # prompt_tokens: List[List[int]],
-                #all_tokens = []
-                #all_masks = []
-                #output_rewards = []
-                
-                #for input_id, output_id in zip(input_ids, outputs):
                 _ids = input + output 
                 _masks = [0] * len(input) + [1] * len(output) 
                 _rewards = [0] * (len(output)-1) + [reward] 
                     
-                #all_tokens.append(_ids)
-                #all_masks.append(_masks)
-                #output_rewards.append(_rewards)
-    
-                #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>    
                 experience = Sample(prompt = prompt, response = response, reward = reward, probs = prob, crits = crit, seq_rewards = _rewards, tokens = _ids, masks = _masks)
                 buffer.push(experience)
+
+            with ThreadPoolExecutor(max_workers = 64) as executor:  # Adjust worker count based on your system
+                executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
+
+            if args.profile:
+                end_time = time.perf_counter()
+                elapsed_time_reward = elapsed_time_reward + end_time - start_time
             
-            topk_reward = topk_reward + topk_hit
-            topk_num = topk_num + 1
             if len(buffer) >= args.replay_size:    
                 avg_reward = buffer.mean_reward()
                 avg_response_len = buffer.avg_responselen()
-                print('progress: ', batch_idx, ', avg_reward: ', avg_reward, ', avg_response_len: ', avg_response_len , ', rank: ', rank)
-                print('topk_reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num,   ', rank: ', rank)
-                print('acc_reward: ',  acc_reward / acc_num, ', acc_num: ', acc_num, ', rank: ', rank)
+                hitk, groupk = buffer.calculate_group_passk(group = args.n_rollout)
+                
+                acc_reward = acc_reward + avg_reward * args.replay_size 
+                acc_response_len = acc_response_len + avg_response_len * args.replay_size
+                acc_num = acc_num + args.replay_size
+
+                topk_reward = topk_reward + hitk
+                topk_num = topk_num + groupk
+                
+                print(f'progress: {batch_idx} , avg_reward: {avg_reward} ({acc_reward / acc_num}), avg_response_len: {avg_response_len} ({acc_response_len/acc_num}) , rank: {rank}')
+                print(f'topk_reward: {hitk / groupk} ({topk_reward * 1.0 / topk_num}), topk_num: {topk_num},  rank: {rank}')
                 
                 dist.barrier()
                 if args.advantage == 'distgae':
@@ -329,7 +310,6 @@ def main(args):
                         print('elapsed_time_update:', elapsed_time_update)
                         
                 ## start the model training; 
-                
                 buffer.clear()    
                 if args.sft_replay_size > 0:
                     sft_buffer.clear()
