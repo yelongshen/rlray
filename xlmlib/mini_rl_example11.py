@@ -17,6 +17,7 @@ import logging
 import json
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
+import gc
 
 import numpy as np
 from queue import Queue
@@ -181,7 +182,8 @@ def main(args):
             if args.profile:
                 end_time = time.perf_counter()
                 elapsed_time_generation = elapsed_time_generation + end_time - start_time
-                
+
+            
             if batch_idx == 0 and local_rank == 0: # and rollout == 0:
                 print('probs.shape', len(probs[0]))
                 print('crits.shape', len(crits[0]))
@@ -273,13 +275,14 @@ def main(args):
                     experience = Sample(prompt = prompt, response = response, reward = 1.0, tokens = all_tokens, masks = masks)
                     sft_buffer.push(experience)
 
-                
                 if args.profile:
                     start_time = time.perf_counter()
                     
                 #optimizer, scheduler,
                 optimizer.zero_grad()
-
+                torch.cuda.empty_cache()
+                gc.collect()  # Clear Python garbage
+                
                 if args.rl_alg == 'ppo':
                     policy_loss_log, critic_loss_log = ppo_gradient(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)
                 elif args.rl_alg == 'ppov2':
@@ -315,6 +318,9 @@ def main(args):
                     sft_buffer.clear()
                 llm.eval()
 
+                torch.cuda.empty_cache()
+                gc.collect()  # Clear Python garbage
+    
                 # Save only on rank 0
                 if rank == 0 and scheduler._step_count % args.save_per_steps == 0:
                     checkpoint = {
