@@ -235,7 +235,7 @@ def main(args):
                 end_time = time.perf_counter()
                 elapsed_time_reward = elapsed_time_reward + end_time - start_time
 
-            print(f'end batch_idx:{batch_idx}, rank: {rank}, buffer_size: {len(buffer)}')
+            print(f'end batch_idx:{batch_idx}, rank: {rank}, buffer_size: {len(buffer)}, input_ids: {len(input_ids)}, output_ids: {len(output_ids)}')
             
             if len(buffer) >= args.replay_size:    
                 avg_reward = buffer.mean_reward()
