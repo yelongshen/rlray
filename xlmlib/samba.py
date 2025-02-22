@@ -775,6 +775,7 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
         max_gen_len: int = 4096,
         temperature: float = 0.7,
         top_p: float = 0.95,
+        early_stop = True,
     ):  
         bsz = len(prompt_tokens)
         min_prompt_len = min(len(t) for t in prompt_tokens)
@@ -829,7 +830,7 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
             )
             prev_pos = cur_pos
             # pos = torch.tensor([prev_pos+1] * bsz, dtype=torch.long, device='cuda')
-            if all(eos_reached):
+            if early_stop and all(eos_reached):
                 break
 
         token_logprobs = token_logprobs.tolist()
