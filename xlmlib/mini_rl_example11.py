@@ -304,6 +304,9 @@ def main(args):
                 elif args.rl_alg == 'ppov2':
                     policy_loss_log, critic_loss_log = ppo_gradient_v2(llm, llm_config, buffer, args.replay_size, device, critic_alpha = args.critic_alpha)        
 
+                with torch.no_grad():
+                    torch.distributed.all_reduce(policy_loss_log, op=dist.ReduceOp.SUM)
+        
                 sft_loss_log = 0.0
                 if args.sft_replay_size > 0:
                     sft_loss_log = sft_gradient(llm, llm_config, sft_buffer, args.sft_replay_size, device, weight = args.sft_weight)                    
