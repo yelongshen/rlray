@@ -174,7 +174,7 @@ def main(args):
             topk_hit = 0    
             if args.profile:
                 start_time = time.perf_counter()    
-            outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 4096)
+            outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 4096, early_stop = not args.no_early_stop)
             if args.profile:
                 end_time = time.perf_counter()
                 elapsed_time_generation = elapsed_time_generation + end_time - start_time
@@ -373,6 +373,8 @@ if __name__ == "__main__":
     parser.add_argument("--sft_replay_size", type=int, default=0, help="SFT update batch size.")
     parser.add_argument("--sft_weight", type=float, default=0.1, help="token weight of sft dataset.")
     parser.add_argument('--profile', action='store_true')
+    parser.add_argument('--no_early_stop', action='store_true')
+    
     args = parser.parse_args()
     
     assert args.replay_size % args.n_rollout == 0, 'pls make sure replay_size mod n_rollout == 0'
