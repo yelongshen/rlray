@@ -83,7 +83,7 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     return prompt
 
-def process_math_answer(response, answers, tokenizer, prompt_type = "v8", last_row_answer = False):
+def process_math_answer(response, answers, tokenizer, prompt_type = "v8", last_row_answer = False, fast_mode = False):
         
     pattern = r'The answer is:\s*(.+)'
 
@@ -108,7 +108,7 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", last_r
         response = response[:pos]
 
         return response, extracted_answer, box_match
-    else:
+    elif not fast_mode:
         try:
             split_response = response
             if last_row_answer:
