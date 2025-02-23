@@ -206,7 +206,14 @@ def main(args):
                 response = tokenizer.decode(output_id)
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
                 print('process step 1.')
-                mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, last_row_answer = True)
+                try:
+                    mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, last_row_answer = True)
+                except:
+                    print('exception happens')
+                    mid_response = response
+                    extracted_answer = 'none'
+                    reward = 0
+                
                 response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
                 if response_idx is not None and len(output_id) > response_idx + 5:
                     output_id = output_id[ : response_idx]
