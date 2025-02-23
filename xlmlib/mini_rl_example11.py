@@ -202,40 +202,32 @@ def main(args):
             #for input, output, prob, crit in zip(input_ids, outputs, probs, crits):
 
             def process_replaybuffer(input_output_prob_crit):
-                #print('debug process start.')
                 input_id, output_id, prob, crit = input_output_prob_crit
                 response = tokenizer.decode(output_id)
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
-                #processed_response, extract_answer, reward
-                #print('debug process step 1.')
                 mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, last_row_answer = True)
                 response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
-                # 5 token space. 
                 if response_idx is not None and len(output_id) > response_idx + 5:
                     output_id = output_id[ : response_idx]
                     prob = prob[ : response_idx]
                     crit = crit[ : response_idx]
-                #print('debug process step 2.')
-
                 response = tokenizer.decode(output_id)
-                
                 _ids = input_id + output_id 
                 _masks = [0] * len(input_id) + [1] * len(output_id) 
                 _rewards = [0] * (len(output_id)-1) + [reward] 
-
-                #print('debug process step 3.')
                 experience = Sample(prompt = prompt, response = response, reward = reward, probs = prob, crits = crit, seq_rewards = _rewards, tokens = _ids, masks = _masks)
                 buffer.push(experience)
-                #print('debug process end.')
+                return True
                 
             with ThreadPoolExecutor(max_workers = 16) as executor:  # Adjust worker count based on your system
-                executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
-
+                results = executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
+            
             if args.profile:
                 end_time = time.perf_counter()
                 elapsed_time_reward = elapsed_time_reward + end_time - start_time
-
-            print(f'end batch_idx:{batch_idx}, rank: {rank}, buffer_size: {len(buffer)}, input_ids: {len(input_ids)}, output_ids: {len(output_ids)}, probs: {len(probs)}, crits:{len(crits)}')
+            
+            print(results)
+            print(f'end batch_idx:{batch_idx}, rank: {rank}, buffer_size: {len(buffer)}, input_ids: {len(input_ids)}, output_ids: {len(output_ids)}, probs: {len(probs)}, crits:{len(crits)}, results:{len(results)}')
             
             if len(buffer) >= args.replay_size:    
                 avg_reward = buffer.mean_reward()
