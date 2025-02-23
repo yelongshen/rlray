@@ -205,7 +205,7 @@ def main(args):
                 input_id, output_id, prob, crit = input_output_prob_crit
                 response = tokenizer.decode(output_id)
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
-                print('process step 1.')
+                #print('process step 1.')
                 #try:
                 mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, last_row_answer = True)
                 #except:
@@ -219,22 +219,24 @@ def main(args):
                     output_id = output_id[ : response_idx]
                     prob = prob[ : response_idx]
                     crit = crit[ : response_idx]
-                print('process step 2.')
+                #print('process step 2.')
                 response = tokenizer.decode(output_id)
                 _ids = input_id + output_id 
                 _masks = [0] * len(input_id) + [1] * len(output_id) 
                 _rewards = [0] * (len(output_id)-1) + [reward] 
-                print('process step 3.')
+                #print('process step 3.')
                 experience = Sample(prompt = prompt, response = response, reward = reward, probs = prob, crits = crit, seq_rewards = _rewards, tokens = _ids, masks = _masks)
-                buffer.push(experience)
                 print('process end.')
+                
+                return experience
                 #return True
                 
             with ThreadPoolExecutor(max_workers = 16) as executor:  # Adjust worker count based on your system
                 futures = { executor.submit(process_replaybuffer, item): item for item in zip(input_ids, output_ids, probs, crits) }  # Submitting tasks
                 for future in as_completed(futures):
                     try:
-                        result = future.result()  # Retrieves result (or raises exception)
+                        experience = future.result()  # Retrieves result (or raises exception)
+                        buffer.push(experience)
                     except Exception as e:
                         print(f"Exception in task {futures[future]}: {e}")
                 #executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
