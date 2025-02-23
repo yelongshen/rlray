@@ -205,6 +205,7 @@ def main(args):
                 input_id, output_id, prob, crit = input_output_prob_crit
                 response = tokenizer.decode(output_id)
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
+                print('process step 1.')
                 mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, last_row_answer = True)
                 response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
                 if response_idx is not None and len(output_id) > response_idx + 5:
