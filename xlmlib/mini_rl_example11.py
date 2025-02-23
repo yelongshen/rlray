@@ -207,7 +207,7 @@ def main(args):
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
                 #print('process step 1.')
                 #try:
-                mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, last_row_answer = True, fast_mode = True)
+                mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, fast_mode = 2)
                 #except:
                 #    print('exception happens')
                 #    mid_response = response
