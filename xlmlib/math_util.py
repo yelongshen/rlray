@@ -83,15 +83,11 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     return prompt
 
-def process_math_answer(response, answers, tokenizer, prompt_type = "v8", last_row_answer = False, fast_mode = False):
-        
+def process_math_answer(response, answers, tokenizer, prompt_type = "v8", fast_mode = 0):
     pattern = r'The answer is:\s*(.+)'
-
     box_match = 0.0
     extracted_answer = 'none'
-        
     match = re.search(pattern, response, re.MULTILINE)
-        
     if match:
         extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
         # clean up special tokens.
@@ -99,7 +95,9 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", last_r
         extracted_answer = tokenizer.decode(answer_tokens['input_ids'][0], skip_special_tokens=True)
         #     print('verify', math_verify("${1,3} \\cup {2,4}$", "${1,2,3,4}$")) 
         for ans in answers:
-            is_match = compare_math_answers(ans, extracted_answer) or is_equiv(ans, extracted_answer) or math_verify(extracted_answer, ans)
+            is_match = compare_math_answers(ans, extracted_answer) or is_equiv(ans, extracted_answer) 
+            if fast_mode == 0 or fast_mode == 1: 
+                is_match = is_match or math_verify(ans, extracted_answer)
             if is_match:
                 box_match = 1.0
                 break
@@ -108,10 +106,10 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", last_r
         response = response[:pos]
 
         return response, extracted_answer, box_match
-    elif not fast_mode:
+    elif fast_mode == 0 or fast_mode == 1:
         try:
             split_response = response
-            if last_row_answer:
+            if fast_mode == 1:
                 split_response = response.strip().split('\n')[-1]
             if math_verify(answers[0], split_response):
                 return response, answers[0], 1.0
