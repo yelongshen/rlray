@@ -83,36 +83,36 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     return prompt
 
-def process_math_answer(response, answers, tokenizer, prompt_type = "v8", fast_mode = 0):
+def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['is_equiv', 'math_verify', 'lastline_math_verify', 'full_math_verify']):
     pattern = r'The answer is:\s*(.+)'
     box_match = 0.0
     extracted_answer = 'none'
     match = re.search(pattern, response, re.MULTILINE)
+    ans = answers[0]
+    
     if match:
         extracted_answer = match.group(1) #or match.group(2) or match.group(3) or match.group(4)
         # clean up special tokens.
         answer_tokens = tokenizer([extracted_answer], add_special_tokens=False, max_length=1024, truncation=True)
         extracted_answer = tokenizer.decode(answer_tokens['input_ids'][0], skip_special_tokens=True)
         #     print('verify', math_verify("${1,3} \\cup {2,4}$", "${1,2,3,4}$")) 
-        for ans in answers:
-            is_match = compare_math_answers(ans, extracted_answer) or is_equiv(ans, extracted_answer) 
-            if fast_mode == 0 or fast_mode == 1: 
-                is_match = is_match or math_verify(ans, extracted_answer)
-            if is_match:
-                box_match = 1.0
-                break
-                
+        #for ans in answers:
+        is_match = compare_math_answers(ans, extracted_answer) 
+        if not is_match and 'is_equiv' in alg:
+            is_match = is_match or is_equiv(ans, extracted_answer)
+        elif not is_match and 'math_verify' in alg: #  fast_mode == 0 or fast_mode == 1: 
+            is_match = is_match or math_verify(ans, extracted_answer)
+        if is_match:
+            box_match = 1.0
+            #break    
         pos = match.end() 
         response = response[:pos]
-
-        return response, extracted_answer, box_match
-    elif fast_mode == 0 or fast_mode == 1:
+        #return response, extracted_answer, box_match
+    elif 'lastline_math_verify' in alg or 'full_math_verify' in alg:
         try:
-            split_response = response
-            if fast_mode == 1:
-                split_response = response.strip().split('\n')[-1]
-            if math_verify(answers[0], split_response):
-                return response, answers[0], 1.0
+            split_response = response if 'full_math_verify' in alg else response.strip().split('\n')[-1]
+            if math_verify(ans, split_response):
+                return response, ans, 1.0
         except:
             print('error response:', response)
 
