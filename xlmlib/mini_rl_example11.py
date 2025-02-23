@@ -16,7 +16,7 @@ import multiprocessing
 import logging
 import json
 from types import SimpleNamespace
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import gc
 
 import numpy as np
@@ -206,13 +206,13 @@ def main(args):
                 response = tokenizer.decode(output_id)
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
                 print('process step 1.')
-                try:
-                    mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, last_row_answer = True)
-                except:
-                    print('exception happens')
-                    mid_response = response
-                    extracted_answer = 'none'
-                    reward = 0
+                #try:
+                mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, last_row_answer = True)
+                #except:
+                #    print('exception happens')
+                #    mid_response = response
+                #    extracted_answer = 'none'
+                #    reward = 0
                 
                 response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
                 if response_idx is not None and len(output_id) > response_idx + 5:
@@ -231,8 +231,15 @@ def main(args):
                 #return True
                 
             with ThreadPoolExecutor(max_workers = 16) as executor:  # Adjust worker count based on your system
-                executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
-            
+                futures = { executor.submit(process_replaybuffer, item): item for item in zip(input_ids, output_ids, probs, crits) }  # Submitting tasks
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()  # Retrieves result (or raises exception)
+                    except Exception as e:
+                        print(f"Exception in task {futures[future]}: {e}")
+                #executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
+                
+                
             if args.profile:
                 end_time = time.perf_counter()
                 elapsed_time_reward = elapsed_time_reward + end_time - start_time
