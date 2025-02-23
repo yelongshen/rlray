@@ -211,23 +211,26 @@ def main(args):
                     output_id = output_id[ : response_idx]
                     prob = prob[ : response_idx]
                     crit = crit[ : response_idx]
+                print('process step 2.')
                 response = tokenizer.decode(output_id)
                 _ids = input_id + output_id 
                 _masks = [0] * len(input_id) + [1] * len(output_id) 
                 _rewards = [0] * (len(output_id)-1) + [reward] 
+                print('process step 3.')
                 experience = Sample(prompt = prompt, response = response, reward = reward, probs = prob, crits = crit, seq_rewards = _rewards, tokens = _ids, masks = _masks)
                 buffer.push(experience)
-                return True
+                print('process end.')
+                #return True
                 
             with ThreadPoolExecutor(max_workers = 16) as executor:  # Adjust worker count based on your system
-                results = executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
+                executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
             
             if args.profile:
                 end_time = time.perf_counter()
                 elapsed_time_reward = elapsed_time_reward + end_time - start_time
             
-            print(results)
-            print(f'end batch_idx:{batch_idx}, rank: {rank}, buffer_size: {len(buffer)}, input_ids: {len(input_ids)}, output_ids: {len(output_ids)}, probs: {len(probs)}, crits:{len(crits)}, results:{len(results)}')
+            #print(results)
+            print(f'end batch_idx:{batch_idx}, rank: {rank}, buffer_size: {len(buffer)}, input_ids: {len(input_ids)}, output_ids: {len(output_ids)}, probs: {len(probs)}, crits:{len(crits)}')
             
             if len(buffer) >= args.replay_size:    
                 avg_reward = buffer.mean_reward()
