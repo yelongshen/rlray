@@ -206,8 +206,10 @@ def main(args):
                 response = tokenizer.decode(output_id)
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
                 #print('process step 1.')
-                #try:
-                mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, fast_mode = 2)
+                #try:  alg = ['is_equiv', 'math_verify', 'lastline_math_verify', 'full_math_verify']):
+                #if args.math_verify is None:
+                
+                mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, alg=args.math_verify.split('|'))
                 #except:
                 #    print('exception happens')
                 #    mid_response = response
@@ -371,6 +373,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--save_per_steps", type=int, default=40, help="save ckpt per steps.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
+    parser.add_argument("--math_verify", type=str, default='is_equiv|math_verify|lastline_math_verify|full_math_verify', help="math verify algorithm: is_equiv, math_verify, lastline_math_verify, full_math_verify")
     
     parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
