@@ -233,19 +233,19 @@ def main(args):
                 return experience
                 #return True
 
-            #for item in zip(input_ids, output_ids, probs, crits):
-            #    experience = process_replaybuffer(item)
-            #    buffer.push(experience)
+            for item in zip(input_ids, output_ids, probs, crits):
+                experience = process_replaybuffer(item)
+                buffer.push(experience)
                 
-            with ThreadPoolExecutor(max_workers = 16) as executor:  # Adjust worker count based on your system
-                futures = { executor.submit(process_replaybuffer, item): item for item in zip(input_ids, output_ids, probs, crits) }  # Submitting tasks
-                for future in as_completed(futures):
-                    try:
-                        experience = future.result()  # Retrieves result (or raises exception)
-                        buffer.push(experience)
-                    except Exception as e:
-                        print(f"Exception in task {futures[future]}: {e}")
-                #executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
+            #with ThreadPoolExecutor(max_workers = 16) as executor:  # Adjust worker count based on your system
+            #    futures = { executor.submit(process_replaybuffer, item): item for item in zip(input_ids, output_ids, probs, crits) }  # Submitting tasks
+            #    for future in as_completed(futures):
+            #        try:
+            #            experience = future.result()  # Retrieves result (or raises exception)
+            #            buffer.push(experience)
+            #        except Exception as e:
+            #            print(f"Exception in task {futures[future]}: {e}")
+            #    #executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
                 
             if args.profile:
                 end_time = time.perf_counter()
