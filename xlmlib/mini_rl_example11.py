@@ -172,7 +172,7 @@ def main(args):
             answers_3 = d['ground_truth_answer']
             answers_4 = d['target']
             # only keep the answer is fine. 
-            answers = answer_4 # answers_1 + answers_2 + answers_3 + answers_4
+            answers = answers_4 # answers_1 + answers_2 + answers_3 + answers_4
             # features: ['input', 'answer', 'gt_answer', 'subject', 'level', 'question', 'ground_truth_answer', 'target']
             prompts = [process_math_prompt(p) for p in vanilla_prompts] 
             # refill prompts.
