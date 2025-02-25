@@ -113,7 +113,10 @@ def main(args):
     dataset = load_dataset('json', data_files=datafile) 
     print(f"loaded {dataset} with data_files={datafile}") 
     sampler = torch.utils.data.distributed.DistributedSampler(dataset['train'], num_replicas=world_size, rank=rank, shuffle=True) 
-    dataloader = DataLoader(dataset['train'], batch_size=1, sampler=sampler) 
+
+    i_bsz  = args.n_inference // args.n_rollout
+    
+    dataloader = DataLoader(dataset['train'], batch_size = i_bsz, sampler = sampler, drop_last = True) 
 
     # setup optimization.
     optimizer = torch.optim.AdamW(llm.parameters(), lr=args.lr) # 1.0e-6) 
@@ -162,17 +165,22 @@ def main(args):
         topk_num = 0
         
         for batch_idx, d in enumerate(dataloader):
-            qwen_prompt = d['input']
+            qwen_prompts = d['input']
             vanilla_prompts = d['question']    
             answers_1 = d['answer']
             answers_2 = d['gt_answer']
             answers_3 = d['ground_truth_answer']
             answers_4 = d['target']
-            answers = answers_1 + answers_2 + answers_3 + answers_4
+            # only keep the answer is fine. 
+            answers = answer_4 # answers_1 + answers_2 + answers_3 + answers_4
             # features: ['input', 'answer', 'gt_answer', 'subject', 'level', 'question', 'ground_truth_answer', 'target']
-            prompt = process_math_prompt(vanilla_prompts[0])
+            prompts = [process_math_prompt(p) for p in vanilla_prompts] 
+            # refill prompts.
+            prompts = [_p for _p in prompts for _ in range(0, args.n_rollout)]
+            answers = [_ans for _ans in answers for _ in range(0, args.n_rollout)]
             
-            x1 = tokenizer([prompt] * args.n_rollout, add_special_tokens=False, max_length=1024, truncation=True)
+            # [prompt] * args.n_rollout
+            x1 = tokenizer(prompts, add_special_tokens=False, max_length=1024, truncation=True)
             input_ids = x1['input_ids']
 
             print(f'begin batch_idx:{batch_idx}, rank: {rank}, buffer_size: {len(buffer)}')
@@ -182,14 +190,12 @@ def main(args):
             if args.profile:
                 end_time = time.perf_counter()
                 elapsed_time_generation = elapsed_time_generation + end_time - start_time
-
             
             if batch_idx == 0 and local_rank == 0: # and rollout == 0:
                 print('probs.shape', len(probs[0]))
                 print('crits.shape', len(crits[0]))
                 print('outputs.shape', len(output_ids[0]))
 
-            
             def getindex(char_pos, offset_mapping):
                 for token_idx, (start, end) in enumerate(offset_mapping):
                     if start <= char_pos < end:
@@ -198,18 +204,15 @@ def main(args):
 
             if args.profile:
                 start_time = time.perf_counter()
-
             #for input, output, prob, crit in zip(input_ids, outputs, probs, crits):
-
-            def process_replaybuffer(input_output_prob_crit):
-                input_id, output_id, prob, crit = input_output_prob_crit
+            def process_replaybuffer(prompt_answer_input_output_prob_crit):
+                prompt, answer, input_id, output_id, prob, crit = prompt_answer_input_output_prob_crit
                 response = tokenizer.decode(output_id)
                 response_mapping = tokenizer(response, return_offsets_mapping=True)
                 #print('process step 1.')
                 #try:  alg = ['is_equiv', 'math_verify', 'lastline_math_verify', 'full_math_verify']):
                 #if args.math_verify is None:
-                
-                mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer, alg=args.math_verify.split('|'))
+                mid_response, extracted_answer, reward = process_math_answer(response, [answer], tokenizer, alg=args.math_verify.split('|'))
                 #except:
                 #    print('exception happens')
                 #    mid_response = response
@@ -229,24 +232,25 @@ def main(args):
                 #print('process step 3.')
                 experience = Sample(prompt = prompt, response = response, reward = reward, probs = prob, crits = crit, seq_rewards = _rewards, tokens = _ids, masks = _masks)
                 #print('process end.')
-                
                 return experience
                 #return True
 
-            for item in zip(input_ids, output_ids, probs, crits):
-                experience = process_replaybuffer(item)
-                buffer.push(experience)
-                
-            #with ThreadPoolExecutor(max_workers = 16) as executor:  # Adjust worker count based on your system
-            #    futures = { executor.submit(process_replaybuffer, item): item for item in zip(input_ids, output_ids, probs, crits) }  # Submitting tasks
-            #    for future in as_completed(futures):
-            #        try:
-            #            experience = future.result()  # Retrieves result (or raises exception)
-            #            buffer.push(experience)
-            #        except Exception as e:
-            #            print(f"Exception in task {futures[future]}: {e}")
-            #    #executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
-                
+            if args.pverify:
+                with ThreadPoolExecutor(max_workers = 16) as executor:  # Adjust worker count based on your system
+                    futures = { executor.submit(process_replaybuffer, item): item for item in zip(prompts, answers, input_ids, output_ids, probs, crits) }  # Submitting tasks
+                    for future in as_completed(futures):
+                        try:
+                            experience = future.result()  # Retrieves result (or raises exception)
+                            buffer.push(experience)
+                        except Exception as e:
+                            print(f"Exception in task {futures[future]}: {e}")
+                    #    #executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
+            
+            else:
+                for item in zip(prompts, answers, input_ids, output_ids, probs, crits):
+                    experience = process_replaybuffer(item)
+                    buffer.push(experience)
+
             if args.profile:
                 end_time = time.perf_counter()
                 elapsed_time_reward = elapsed_time_reward + end_time - start_time
@@ -373,6 +377,10 @@ if __name__ == "__main__":
     parser.add_argument("--save_per_steps", type=int, default=40, help="save ckpt per steps.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
     parser.add_argument("--math_verify", type=str, default='is_equiv|math_verify|lastline_math_verify|full_math_verify', help="math verify algorithm: is_equiv, math_verify, lastline_math_verify, full_math_verify")
+
+    # parallel math verify. 
+    parser.add_argument('--pverify', action='store_true')
+    parser.add_argument('--n_inference', type=int, default=128, help='batch size of inference') 
     
     parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
