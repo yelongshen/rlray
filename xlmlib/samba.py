@@ -823,9 +823,9 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
             ## check eot token and replace with force_wait_tokens
             if not early_stop and force_wait:
                 for bsz_idx, _token in enumerate(next_token.tolist()):
-                    if _token == pad_id:
+                    if _token == pad_id and cur_pos + force_wait_tokens.shape[0] < total_len:
                         tokens[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = force_wait_tokens
-                        input_text_mask[bsz_idx, cur_pos + force_wait_tokens.shape[0]] = True
+                        input_text_mask[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = True
             
             # only replace token if prompt has already been generated
             next_token = torch.where(
