@@ -106,7 +106,11 @@ def setup_dist_eval(args):
     else:
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, False)
         RpcReplayBuffer.Register(result_buffer_name, result_buffer_worker, False)
-        
+
+    force_reflection = '\nWait, please verify the answer again. \n'
+    force_tokens = tokenizer([force_reflection], add_special_tokens=False, max_length=1024)
+    force_tokens = force_tokens['input_ids'][0]
+    
     dist.barrier()
     while True: 
         req = RpcReplayBuffer.Pop(request_buffer_name)
@@ -117,7 +121,8 @@ def setup_dist_eval(args):
         input_ids = _tokens['input_ids']
         #temperature: float = 0.7,
         #top_p: float = 0.95,
-        outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p)
+        #early_stop = True,
+        outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p, early_stop=False, force_wait_tokens = force_tokens)
         
         assert len(outputs) == args.batch_size
         
