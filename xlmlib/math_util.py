@@ -104,8 +104,8 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
             is_match = is_match or math_verify(ans, extracted_answer)
         if is_match:
             box_match = 1.0
-        pos = matches.end() 
-        response = response[:pos]
+        #pos = matches.end() 
+        response = response[:answer_end]
         #return response, extracted_answer, box_match
     elif 'lastline_math_verify' in alg or 'full_math_verify' in alg:
         try:
