@@ -776,7 +776,7 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
         temperature: float = 0.7,
         top_p: float = 0.95,
         early_stop = True,
-        force_wait_tokens : List[int],
+        force_wait_tokens : List[int] = None,
     ):  
         bsz = len(prompt_tokens)
         min_prompt_len = min(len(t) for t in prompt_tokens)
