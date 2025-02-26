@@ -89,7 +89,7 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
     box_match = 0.0
     extracted_answer = 'none'
     ans = answers[0]
-    matches = list(re.finditer(pattern.lower(), doc.lower(), re.MULTILINE)) 
+    matches = list(re.finditer(pattern.lower(), response.lower(), re.MULTILINE)) 
     
     if matches:
         answer_start, answer_end = matches[-1].span() 
