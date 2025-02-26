@@ -776,6 +776,7 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
         temperature: float = 0.7,
         top_p: float = 0.95,
         early_stop = True,
+        force_wait_tokens : List[int],
     ):  
         bsz = len(prompt_tokens)
         min_prompt_len = min(len(t) for t in prompt_tokens)
@@ -796,8 +797,10 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
 
         prev_pos = 0
         eos_reached = torch.tensor([False] * bsz, device="cuda")
+        force_wait_tokens = torch.tensor(force_wait_tokens, device="cuda")
         
         input_text_mask = tokens != pad_id
+
         
         _caches = None
         for cur_pos in range(min_prompt_len, total_len):
@@ -812,10 +815,19 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             
             next_token = next_token.reshape(-1)
+            
+            ## check eot token and replace with force_wait_tokens
+            if not early_stop and force_wait_tokens:
+                for bsz_idx, _token in enumerate(next_token.tolist()):
+                    if _token == pad_id:
+                        tokens[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = force_wait_tokens
+                        input_text_mask[bsz_idx, cur_pos + force_wait_tokens.shape[0]] = True
+            
             # only replace token if prompt has already been generated
             next_token = torch.where(
                 input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
             )
+            
             tokens[:, cur_pos] = next_token
             
             token_logprobs[:, prev_pos: cur_pos] = -F.cross_entropy(
@@ -855,5 +867,5 @@ class _SambaForCausalLM(_SambaPreTrainedModel):
             out_tokens.append(toks)
             out_logprobs.append(probs)
             out_critics.append(critics)
-        
+
         return out_tokens, out_logprobs, out_critics
