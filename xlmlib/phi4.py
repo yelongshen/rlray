@@ -756,6 +756,8 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         max_gen_len: int,
         temperature: float = 0.7,
         top_p: float = 0.95,
+        early_stop = True,
+        force_wait_tokens : List[int] = None,
     ) -> Tuple[ List[List[int]], List[List[float]] ]: # these are the actions[token index, critic score, prob] 
         
         bsz = len(prompt_tokens)
@@ -782,22 +784,10 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         #token_critics = 
         prev_pos = 0
         eos_reached = torch.tensor([False] * bsz, device="cuda")
+        force_wait_tokens = torch.tensor(force_wait_tokens, device="cuda")
+
         input_text_mask = tokens != pad_id
         
-        # decode the last tokens
-        #if min_prompt_len == total_len:
-        #    _, logits, critics, _ = self.forward(tokens)
-        #    token_logprobs = -F.cross_entropy(
-        #        input=logits.transpose(1, 2),
-        #        target=tokens,
-        #        reduction="none",
-        #        ignore_index=pad_id,
-        #    )
-        #input_ids: torch.LongTensor = None,
-        #position_ids: Optional[torch.LongTensor] = None,
-        #past_key_values: Optional[List[torch.FloatTensor]] = None,
-        #labels: Optional[torch.LongTensor] = None,
-
         past_kv = None
         pos = None
         for cur_pos in range(min_prompt_len, total_len):
@@ -816,6 +806,14 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             #print('next_token.shape', next_token.shape)
             
             next_token = next_token.reshape(-1)
+
+            if not early_stop and force_wait_tokens:
+                for bsz_idx, _token in enumerate(next_token.tolist()):
+                    if _token == pad_id:
+                        tokens[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = force_wait_tokens
+                        input_text_mask[bsz_idx, cur_pos + force_wait_tokens.shape[0]] = True
+
+            
             # only replace token if prompt has already been generated
             next_token = torch.where(
                 input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
