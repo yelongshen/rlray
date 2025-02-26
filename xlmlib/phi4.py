@@ -784,7 +784,12 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         #token_critics = 
         prev_pos = 0
         eos_reached = torch.tensor([False] * bsz, device="cuda")
-        force_wait_tokens = torch.tensor(force_wait_tokens, device="cuda")
+
+        force_wait = False
+        if force_wait_tokens:
+            force_wait_tokens = torch.tensor(force_wait_tokens, device="cuda")
+            force_wait = True
+        #force_wait_tokens = torch.tensor(force_wait_tokens, device="cuda")
 
         input_text_mask = tokens != pad_id
         
@@ -807,7 +812,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             
             next_token = next_token.reshape(-1)
 
-            if not early_stop and force_wait_tokens:
+            if not early_stop and force_wait:
                 for bsz_idx, _token in enumerate(next_token.tolist()):
                     if _token == pad_id:
                         tokens[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = force_wait_tokens
