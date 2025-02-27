@@ -186,7 +186,7 @@ def main(args):
             # only keep the answer is fine. 
             answers = answers_4 # answers_1 + answers_2 + answers_3 + answers_4
             # features: ['input', 'answer', 'gt_answer', 'subject', 'level', 'question', 'ground_truth_answer', 'target']
-            prompts = [process_math_prompt(p) for p in vanilla_prompts] 
+            prompts = [process_math_prompt(p, prompt_type = args.prompt_type) for p in vanilla_prompts] 
             # refill prompts.
             prompts = [_p for _p in prompts for _ in range(0, args.n_rollout)]
             answers = [_ans for _ans in answers for _ in range(0, args.n_rollout)]
@@ -224,7 +224,7 @@ def main(args):
                 #print('process step 1.')
                 #try:  alg = ['is_equiv', 'math_verify', 'lastline_math_verify', 'full_math_verify']):
                 #if args.math_verify is None:
-                mid_response, extracted_answer, reward = process_math_answer(response, [answer], tokenizer, alg=args.math_verify.split('|'))
+                mid_response, extracted_answer, reward = process_math_answer(response, [answer], tokenizer, alg=args.math_verify.split('|'), prompt_type = args.prompt_type)
                 #except:
                 #    print('exception happens')
                 #    mid_response = response
@@ -257,7 +257,6 @@ def main(args):
                         except Exception as e:
                             print(f"Exception in task {futures[future]}: {e}")
                     #    #executor.map(process_replaybuffer, zip(input_ids, output_ids, probs, crits))
-            
             else:
                 for item in zip(prompts, answers, input_ids, output_ids, probs, crits):
                     experience = process_replaybuffer(item)
@@ -409,7 +408,7 @@ if __name__ == "__main__":
 
     # rl with model type. 
     parser.add_argument("--model_type", type=str, default="samba", choices=["samba", "phi4"], help="choose model type.")
-
+    parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9", "v10"], help="choose prompt type.")
     
     args = parser.parse_args()
     
