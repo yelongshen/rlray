@@ -814,7 +814,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
 
             if not early_stop and force_wait:
                 for bsz_idx, _token in enumerate(next_token.tolist()):
-                    if _token == pad_id and cur_pos + force_wait_tokens.shape[0] < total_len:
+                    if _token == eos_id and cur_pos + force_wait_tokens.shape[0] < total_len:
                         tokens[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = force_wait_tokens
                         input_text_mask[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = True
                         
@@ -830,6 +830,8 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             #if logprobs:
             #print('logits.shape', logits.shape)
             #print('target.shape', tokens[:, prev_pos + 1 : cur_pos + 1].shape)
+
+            print('prev_pos', prev_pos, 'cur_pos', cur_pos, 'logits.shape', logits.shape)
             
             token_logprobs[:, prev_pos: cur_pos] = -F.cross_entropy(
                 input=logits.reshape(-1, self.vocab_size), #.transpose(1, 2),
@@ -846,7 +848,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             )
             prev_pos = cur_pos
             pos = torch.tensor([prev_pos+1] * bsz, dtype=torch.long, device='cuda')
-            if all(eos_reached):
+            if early_stop and all(eos_reached):
                 break
 
         #print('generation done...................')
