@@ -128,7 +128,7 @@ def setup_dist_eval(args):
         
         for output in outputs:
             response = tokenizer.decode(output)
-            mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer)
+            mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer, prompt_type = args.prompt_type)
             RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward))
             
             if args.debug:
@@ -174,7 +174,7 @@ def parse_args():
     parser.add_argument("--data_path", default="aime24", type=str)
     parser.add_argument("--model_path", default="gpt-4", type=str)
     parser.add_argument("--model_type", type=str, default="samba", choices=["samba", "phi4"], help="choose model type.")
-    parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9"], help="choose prompt type.")
+    parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9", "v10"], help="choose prompt type.")
     parser.add_argument("--batch_size", default=1, type=int)
     
     #parser.add_argument("--output_dir", default="./output", type=str)
