@@ -89,10 +89,10 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'lastline_math_verify', 'full_math_verify']):
     if prompt_type == 'v8':
         pattern_prefix = 'The answer is:'
-        pattern = f'{pattern_prefix}\s*(.+)'
+        pattern = r'The answer is: \s*(.+)'
     elif prompt_type == 'v9' or prompt_type == 'v10':
         pattern_prefix = 'answer is:'
-        pattern = f'{pattern_prefix}\\boxed\{(.*?)\}'
+        pattern = r'answer is: \\boxed\{(.*?)\}'
 
     box_match = 0.0
     extracted_answer = 'none'
