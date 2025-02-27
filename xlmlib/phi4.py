@@ -837,7 +837,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                 input=logits.reshape(-1, self.vocab_size), #.transpose(1, 2),
                 target=tokens[:, prev_pos + 1 : cur_pos + 1].reshape(-1),
                 reduction="none"
-            )
+            ).view(bsz, -1)
             #print('critics.shape', critics.shape)
             #print('token_critics[:, prev_pos: cur_pos].shape', token_critics[:, prev_pos: cur_pos].shape)
             
