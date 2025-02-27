@@ -51,6 +51,7 @@ from transformers.activations import ACT2FN
 
 
 from samba import _SambaForCausalLM
+from phi4 import _Phi4ForCausalLM
 from replaybuffer import ReplayBuffer, Sample, AsyncReplayBuffer
 from ppo import ppo_gradient, ppo_gradient_v2
 from sft import sft_gradient
@@ -81,10 +82,21 @@ def main(args):
     dist.barrier()
 
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    if args.weight_path is None:
-        llm_model, llm_config, tokenizer = _SambaForCausalLM.load_hfckpt(args.pretrained_model)
-    else:
-        llm_model, llm_config, tokenizer = _SambaForCausalLM.load_customckpt(args.pretrained_model, args.weight_path)
+
+    
+    if args.model_type == 'samba':
+        if args.weight_path is None:
+            llm_model, llm_config, tokenizer = _SambaForCausalLM.load_hfckpt(args.pretrained_model)
+        else:
+            llm_model, llm_config, tokenizer = _SambaForCausalLM.load_customckpt(args.pretrained_model, args.weight_path)
+    elif args.model_type == 'phi4':
+        if args.weight_path is None:
+            llm_model, llm_config, tokenizer = _Phi4ForCausalLM.load_hfckpt(args.pretrained_model)
+
+    #if args.weight_path is None:
+    #    llm_model, llm_config, tokenizer = _SambaForCausalLM.load_hfckpt(args.pretrained_model)
+    #else:
+    #    llm_model, llm_config, tokenizer = _SambaForCausalLM.load_customckpt(args.pretrained_model, args.weight_path)
         
     # Load tokenizer from local path 
     #tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
@@ -394,6 +406,10 @@ if __name__ == "__main__":
     parser.add_argument("--sft_weight", type=float, default=0.1, help="token weight of sft dataset.")
     parser.add_argument('--profile', action='store_true')
     parser.add_argument('--no_early_stop', action='store_true')
+
+    # rl with model type. 
+    parser.add_argument("--model_type", type=str, default="samba", choices=["samba", "phi4"], help="choose model type.")
+
     
     args = parser.parse_args()
     
