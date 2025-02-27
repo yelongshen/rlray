@@ -83,7 +83,7 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     return prompt
 
-def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['is_equiv', 'math_verify', 'lastline_math_verify', 'full_math_verify']):
+def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'lastline_math_verify', 'full_math_verify']):
     pattern_prefix = 'The answer is:'
     pattern = f'{pattern_prefix}\s*(.+)'
     box_match = 0.0
