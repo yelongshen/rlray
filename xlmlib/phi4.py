@@ -670,9 +670,14 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
         print('missing_keys: ', missing_keys)
         print('unexpected_keys: ', unexpected_keys)    
+        if 'lm_head.weight' in missing_keys:
+            llm_model.lm_head.weight = llm_model.model.embed_tokens.weight
+            #self.lm_head.weight = self.embed_tokens.weight  # Share the weights
+            #   self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+
 
         tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
-        
+
         return llm_model, llm_config, tokenizer
         
     def __init__(self, config):
