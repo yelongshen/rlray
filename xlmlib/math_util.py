@@ -71,21 +71,29 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     candidate_prompt_9 = "You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
     #pattern = r'The answer is:\s*(.+)'
-
+    candidate_prompt_10 = "You will be given a problem. Please reason step by step, and put your final answer within \boxed{}:\n"
+    
     postfix_instruct = ''
     
     if prompt_type == 'v8':
         prefix_instruct = candidate_prompt_8 #if prompt_type == 'v8' else candidate_prompt_4    
     elif prompt_type == 'v9':
         prefix_instruct = candidate_prompt_9
+    elif prompt_type == 'v10':
+        prefix_instruct = candidate_prompt_10
         
     prompt = prefix_instruct + original_question + postfix_instruct
 
     return prompt
 
 def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'lastline_math_verify', 'full_math_verify']):
-    pattern_prefix = 'The answer is:'
-    pattern = f'{pattern_prefix}\s*(.+)'
+    if prompt_type == 'v8':
+        pattern_prefix = 'answer is:'
+        pattern = f'{pattern_prefix}\s*(.+)'
+    elif prompt_type == 'v9' or prompt_type == 'v10':
+        pattern_prefix = 'answer is:'
+        pattern = f'{pattern_prefix}\\boxed\{(.*?)\}'
+
     box_match = 0.0
     extracted_answer = 'none'
     ans = answers[0]
