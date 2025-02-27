@@ -69,7 +69,7 @@ def ppo_gradient(llm, llm_config, buffer, buffer_size, device, critic_alpha=0.01
         eps_clip = 0.5
         surr1 = ratios * advantages       
         surr2 = torch.clamp(ratios, 1 - eps_clip, 1 + eps_clip) * advantages
-        _policy_loss = -torch.min(surr1, surr2).sum() 
+        _policy_loss = -torch.min(surr1, surr2).mean() 
         _critic_loss = mseLoss(critics, returns).mean() 
 
         _total_loss = (_policy_loss + critic_alpha * _critic_loss) / micro_training_steps 
@@ -107,7 +107,7 @@ def gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, r
     critics = critics[:, _response_idx-1:-1] 
     logprobs = logprobs[:, _response_idx-1:]
 
-    _policy_loss = (advantages * logprobs).sum() #  -torch.min(surr1, surr2).sum() 
+    _policy_loss = (advantages * logprobs).mean() #  -torch.min(surr1, surr2).sum() 
     _critic_loss = mseLoss(critics, returns).mean() 
 
     _total_loss = (_policy_loss + critic_alpha * _critic_loss) * loss_scalar 
