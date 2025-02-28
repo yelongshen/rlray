@@ -129,7 +129,6 @@ def setup_dist_eval(args):
         for output in outputs:
             response = tokenizer.decode(output)
             mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer, prompt_type = args.prompt_type)
-            RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward))
             
             if args.debug:
                 print('######################\n\n')
@@ -139,6 +138,8 @@ def setup_dist_eval(args):
                 print('extracted_answer:\n', extracted_answer)
                 print('gold answer:\n', req.answer)
                 print('reward:', reward)
+            
+            RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward))
 
     dist.barrier()
     if rank == 0:
