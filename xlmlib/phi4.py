@@ -341,8 +341,8 @@ class _Phi4FlashAttention2(_Phi4Attention):
             value_cache = value_states
             
         # repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(key_cache, self.num_key_value_groups)
-        value_states = repeat_kv(value_cache, self.num_key_value_groups)
+        key_states = key_cache # repeat_kv(key_cache, self.num_key_value_groups)
+        value_states = value_cache # repeat_kv(value_cache, self.num_key_value_groups)
 
         attn_dropout = self.attention_dropout if self.training else 0.0
 
