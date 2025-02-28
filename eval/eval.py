@@ -138,7 +138,8 @@ def setup_dist_eval(args):
                 print('extracted_answer:\n', extracted_answer)
                 print('gold answer:\n', req.answer)
                 print('reward:', reward)
-            
+
+            print('process cases.....')
             RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward))
 
     dist.barrier()
