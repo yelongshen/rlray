@@ -34,10 +34,20 @@ a_key = torch.randn(bs, n_head, window, head_dim, dtype = torch.bfloat16, device
 a_value = torch.randn(bs, n_head, window, head_dim, dtype = torch.bfloat16, device = device)
 
 # consider full attention first. 
-a_query = torch.randn(bs, n_head, 1,  head_dim, dtype = torch.bfloat16, device = device)
 query = torch.randn(bs, n_head, seq_len,  head_dim, dtype = torch.bfloat16, device = device)
 key = torch.randn(bs, n_kv_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
 value = torch.randn(bs, n_kv_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
+
+a_query = torch.randn(bs, n_head, 1,  head_dim, dtype = torch.bfloat16, device = device)
+a_key = key
+a_value = value
+
+max_seq_len = 100
+
+query = torch.randn(bs, n_head, seq_len,  head_dim, dtype = torch.bfloat16, device = device)
+key = torch.randn(bs, n_kv_head, max_seq_len, head_dim, dtype = torch.bfloat16, device = device)
+value = torch.randn(bs, n_kv_head, max_seq_len, head_dim, dtype = torch.bfloat16, device = device)
+a_query = torch.randn(bs, n_head, 1, head_dim, dtype = torch.bfloat16, device = device)
 a_key = key
 a_value = value
 
@@ -61,6 +71,36 @@ def vanilla_gqa():
     print(attn_output.shape)
     return attn_output
 
+def vanilla_gqa_cache():
+    _key_states = repeat_kv(key[:,:, :seq_len, :], kv_group)
+    _value_states = repeat_kv(value[:, :, :seq_len, :], kv_group)
+    
+    attn_weights = torch.matmul(query, _key_states.transpose(2, 3)) / math.sqrt(head_dim)
+    attention_mask = torch.tril(torch.ones((seq_len, seq_len), device=device))
+    attn_weights = attn_weights.masked_fill(attention_mask < 0.1, float('-inf'))
+
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value.dtype)
+    attn_output = torch.matmul(attn_weights, _value_states)
+    print(attn_output.shape)
+    return attn_output
+
+def flash_attention_cache():
+    f_query = query.transpose(1, 2) #.contiguous()
+    f_key = key[:, :, :seq_len, :].transpose(1, 2) #.contiguous()
+    f_value = value[:, :, :seq_len, :].transpose(1, 2) #.contiguous()
+
+    attn_output = flash_attn_func(
+            f_query,
+            f_key,
+            f_value,
+            0,
+            softmax_scale=None,
+            causal=True)
+    
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    print(attn_output.shape)
+    return attn_output
+    
 
 def vanilla_gqa_step():
     _key_states = repeat_kv(key, kv_group)
@@ -188,8 +228,12 @@ def flash_step_attention():
 #o1 = vanilla_gqa()
 #o2 = flash_attention()
 
-o1 = vanilla_gqa_step()
-o2 = flash_step_attention()
+#o1 = vanilla_gqa_step()
+#o2 = flash_step_attention()
+
+o1 = vanilla_gqa_cache()
+o2 = flash_attention_cache()
+
 print(o1)
 print(o2)
 assert torch.allclose(o1, o2, atol=1e-1)
