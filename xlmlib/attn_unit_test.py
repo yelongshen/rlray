@@ -38,6 +38,8 @@ a_query = torch.randn(bs, n_head, 1,  head_dim, dtype = torch.bfloat16, device =
 query = torch.randn(bs, n_head, seq_len,  head_dim, dtype = torch.bfloat16, device = device)
 key = torch.randn(bs, n_kv_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
 value = torch.randn(bs, n_kv_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
+a_key = key
+a_value = value
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     _bs, _n_head, _len, _head_dim = hidden_states.shape
