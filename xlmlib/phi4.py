@@ -22,17 +22,12 @@ from transformers.utils import (
     logging,
 )
 
-#import .checkpoint as user_checkpoint
 from transformers import AutoTokenizer 
-#import checkpoint as user_checkpoint
 logger = logging.get_logger(__name__)
 
-# Transformers scans dependencies in the modeling file, causing issues on conditional loading. The regex only ignores try/catch blocks, but not if statements
-# if is_flash_attn_2_available():
 _flash_supports_window_size = False
 try:
-    from flash_attn import flash_attn_func #, flash_attn_varlen_func
-    #from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
+    from flash_attn import flash_attn_func 
     _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
 except ImportError as error:
     logger.warning(
@@ -57,7 +52,6 @@ class _Phi4RMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
 
-# Copied from transformers.models.gemma.modeling_gemma.GemmaRotaryEmbedding with gemma->phi3, Gemma->Phi3
 class _Phi4RotaryEmbedding(nn.Module):
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
         super().__init__()
@@ -69,15 +63,12 @@ class _Phi4RotaryEmbedding(nn.Module):
 
     @torch.no_grad()
     def forward(self, x, position_ids):
-        # x: [bs, num_attention_heads, seq_len, head_size]
         if self.inv_freq is None:
             self.inv_freq = 1.0 / (
                 self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64, device=x.device).float() / self.dim)
             )
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
-        # Force float32 since bfloat16 loses precision on long contexts
-        # See https://github.com/huggingface/transformers/pull/29285
         device_type = x.device.type
         device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
         with torch.autocast(device_type=device_type, enabled=False):
@@ -90,7 +81,6 @@ class _Phi4RotaryEmbedding(nn.Module):
 class _Phi4LongRoPEScaledRotaryEmbedding(_Phi4RotaryEmbedding):
     def __init__(self, dim, config, device=None):
         super().__init__(int(dim * config.partial_rotary_factor), config.max_position_embeddings, config.rope_theta, device)
-
         self.short_factor = config.rope_scaling.short_factor
         self.long_factor = config.rope_scaling.long_factor
         self.original_max_position_embeddings = config.original_max_position_embeddings
@@ -110,8 +100,6 @@ class _Phi4LongRoPEScaledRotaryEmbedding(_Phi4RotaryEmbedding):
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
 
-        # Force float32 since bfloat16 loses precision on long contexts
-        # See https://github.com/huggingface/transformers/pull/29285
         device_type = x.device.type
         device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
         with torch.autocast(device_type=device_type, enabled=False):
@@ -126,7 +114,6 @@ class _Phi4LongRoPEScaledRotaryEmbedding(_Phi4RotaryEmbedding):
             sin = emb.sin() * scaling_factor
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
-# Copied from transformers.models.llama.modeling_llama.rotate_half
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
@@ -241,15 +228,7 @@ class _Phi4Attention(nn.Module):
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        #kv_seq_len = key_states.shape[-2]
-        #if past_key_value is not None:
-        #    if self.layer_idx is None:
-        #        raise ValueError(
-        #            f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-        #            "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-        #            "with a layer index."
-        #        )
-        #    kv_seq_len +=  past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        
         cos, sin = self.rotary_emb(value_states, position_ids) #, seq_len=kv_seq_len)
 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
@@ -290,13 +269,8 @@ class _Phi4Attention(nn.Module):
 
 
 class _Phi4FlashAttention2(_Phi4Attention):
-    # Copied from transformers.models.llama.modeling_llama.LlamaFlashAttention2.__init__
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        # TODO: Should be removed once Flash Attention for RoCm is bumped to 2.1.
-        # flash_attn<2.1 generates top-left aligned causal mask, while what is needed here is bottom-right alignement, that was made default for flash_attn>=2.1. This attribute is used to handle this difference. Reference: https://github.com/Dao-AILab/flash-attention/releases/tag/v2.1.0.
-        # Beware that with flash_attn<2.1, using q_seqlen != k_seqlen (except for the case q_seqlen == 1) produces a wrong mask (top-left).
         self._flash_attn_uses_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
 
     def forward(
@@ -304,7 +278,10 @@ class _Phi4FlashAttention2(_Phi4Attention):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        inference_mode = False,
+        max_generation = 0,
+        cur_pos = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         bsz, q_len, _ = hidden_states.size()
 
@@ -314,107 +291,68 @@ class _Phi4FlashAttention2(_Phi4Attention):
         key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
         value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
 
-        # Flash attention requires the input to have the shape
-        # batch_size x seq_length x head_dim x hidden_dim
-        # therefore we just need to keep the original shape
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim)#.transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim)#.transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim)#.transpose(1, 2)
 
-        # Because the input can be padded, the absolute sequence length depends on the max position id.
-        #rotary_seq_len = max(kv_seq_len, position_ids[:, -1].max().item() + 1)
-        cos, sin = self.rotary_emb(value_states, position_ids) #, seq_len=rotary_seq_len)
-
+        cos, sin = self.rotary_emb(value_states, position_ids) 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
-        # sliding_window by default is False.
-        #use_sliding_windows = (
-        #    _flash_supports_window_size
-        #    and getattr(self.config, "sliding_window", None) is not None
-        #    and kv_seq_len > self.config.sliding_window
-        #)
-        if past_key_value is not None:
-            key_cache = torch.cat([past_key_value[0], key_states], dim=-2)
-            value_cache = torch.cat([past_key_value[1], value_states], dim=-2)
-        else:
+        if not inference_mode:
             key_cache = key_states
             value_cache = value_states
+        elif inference_mode and past_key_value is None: 
+            key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim) 
+            value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim)
+            key_cache[:, :q_len] = key_states
+            value_cache[:, :q_len] = value_states
+        else:
+            key_cache, value_cache = past_key_value
+            key_cache[:, cur_pos:cur_pos + q_len] = key_states
+            value_cache[:, cur_pos:cur_pos + q_len] = value_states
+        
+        #if past_key_value is not None:
+        #    key_cache = torch.cat([past_key_value[0], key_states], dim=-2)
+        #    value_cache = torch.cat([past_key_value[1], value_states], dim=-2)
+        #else:
+        #    key_cache = key_states
+        #    value_cache = value_states
             
-        # repeat k/v heads if n_kv_heads < n_heads
-        key_states = key_cache # repeat_kv(key_cache, self.num_key_value_groups)
-        value_states = value_cache # repeat_kv(value_cache, self.num_key_value_groups)
-
+        key_states = key_cache[:, :cur_pos + q_len]
+        value_states = value_cache[:, :cur_pos + q_len]
         attn_dropout = self.attention_dropout if self.training else 0.0
 
-        # In PEFT, usually we cast the layer norms in float32 for training stability reasons
-        # therefore the input hidden states gets silently casted in float32. Hence, we need
-        # cast them back in the correct dtype just to be sure everything works as expected.
-        # This might slowdown training & inference so it is recommended to not cast the LayerNorms
-        # in fp32.
         if query_states.dtype == torch.float32:
             target_dtype = torch.float16
-            
             logger.warning_once(
                 f"The input hidden states seems to be silently casted in float32, this might be related to"
                 f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
                 f" {target_dtype}."
             )
-
             query_states = query_states.to(target_dtype)
             key_states = key_states.to(target_dtype)
             value_states = value_states.to(target_dtype)
-
-        # Reashape to the expected shape for Flash Attention
-        query_states = query_states.transpose(1, 2)
-        key_states = key_states.transpose(1, 2)
-        value_states = value_states.transpose(1, 2)
 
         attn_output = self._flash_attention_forward(
             query_states,
             key_states,
             value_states,
             attention_mask,
-            q_len,
             dropout=attn_dropout,
         )
-
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
-
         return attn_output, key_cache, value_cache
 
-    # Copied from transformers.models.mistral.modeling_mistral.MistralFlashAttention2._flash_attention_forward
     def _flash_attention_forward(
         self,
         query_states,
         key_states,
         value_states,
         attention_mask,
-        query_length,
         dropout=0.0,
         softmax_scale=None,
     ):
-        """
-        Calls the forward method of Flash Attention - if the input hidden states contain at least one padding token
-        first unpad the input, then computes the attention scores and pad the final attention scores.
-
-        Args:
-            query_states (`torch.Tensor`):
-                Input query states to be passed to Flash Attention API
-            key_states (`torch.Tensor`):
-                Input key states to be passed to Flash Attention API
-            value_states (`torch.Tensor`):
-                Input value states to be passed to Flash Attention API
-            attention_mask (`torch.Tensor`):
-                The padding mask - corresponds to a tensor of size `(batch_size, seq_len)` where 0 stands for the
-                position of padding tokens and 1 for the position of non-padding tokens.
-            dropout (`float`):
-                Attention dropout
-            softmax_scale (`float`, *optional*):
-                The scaling of QK^T before applying softmax. Default to 1 / sqrt(head_dim)
-            use_sliding_windows (`bool`, *optional*):
-                Whether to activate sliding window attention.
-        """
         attn_output = flash_attn_func(
             query_states,
             key_states,
@@ -449,45 +387,25 @@ class _Phi4DecoderLayer(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        #output_attentions: Optional[bool] = False,
-        #use_cache: Optional[bool] = False,
-        #**kwargs,
+        inference_mode = False,
+        max_generation = 0,
+        cur_pos = 0
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        #if "padding_mask" in kwargs:
-        #    warnings.warn(
-        #        "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
-        #    )
-        """
-        Args:
-            hidden_states (`torch.FloatTensor`):
-                input to the layer of shape `(batch, seq_len, embed_dim)`
-            attention_mask (`torch.FloatTensor`, *optional*): attention mask of size
-                `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
-            position_ids (`torch.LongTensor` of shape `({0})`, *optional*):
-                Indices of positions of each input sequence tokens in the position embeddings. Selected in the range
-                `[0, config.n_positions - 1]`. [What are position IDs?](../glossary#position-ids)
-            output_attentions (`bool`, *optional*):
-                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
-                returned tensors for more detail.
-            use_cache (`bool`, *optional*):
-                If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
-                (see `past_key_values`).
-            past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
-        """
         residual = hidden_states
-
         hidden_states = self.input_layernorm(hidden_states)
-
         # Self Attention
         attn_outputs, key_cache, value_cache = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_value=past_key_value,
-            #output_attentions=output_attentions,
-            #use_cache=use_cache,
+            inference_mode = inference_mode,
+            max_generation = max_generation,
+            cur_pos = cur_pos
         )
-
+        #inference_mode = False,
+        #max_generation = 0,
+        #cur_pos = 0,
         hidden_states = residual + self.resid_attn_dropout(attn_outputs)
 
         residual = hidden_states
@@ -495,9 +413,6 @@ class _Phi4DecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + self.resid_mlp_dropout(hidden_states)
 
-        #outputs = (hidden_states,)
-        #if use_cache:
-        #    outputs += (present_key_value,)
         return hidden_states, key_cache, value_cache
 
 
@@ -552,6 +467,9 @@ class _Phi4Model(_Phi4PreTrainedModel):
         input_ids: torch.LongTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[Tuple[torch.FloatTensor, torch.FloatTensor]]] = None,
+        inference_mode = False,
+        max_generation = 0,
+        cur_pos = 0,
     ):  
         batch_size, seq_length = input_ids.shape[:2]
         past_key_values_length = 0 if past_key_values is None else past_key_values[0][0].shape[-2]
@@ -567,6 +485,7 @@ class _Phi4Model(_Phi4PreTrainedModel):
             position_ids = position_ids.view(-1, seq_length).long()
         #if inputs_embeds is None:
         inputs_embeds = self.embed_tokens(input_ids)
+        
         if self._attn_implementation == "flash_attention_2":
             # 2d mask is passed through the layers
             attention_mask = None # attention_mask if (attention_mask is not None and 0 in attention_mask) else None
@@ -593,7 +512,10 @@ class _Phi4Model(_Phi4PreTrainedModel):
                     hidden_states,
                     attention_mask,
                     position_ids,
-                    kv_cache
+                    kv_cache,
+                    inference_mode,
+                    max_generation,
+                    cur_pos
                 )
             else:
                 layer_outputs, nk_cache, nv_cache = decoder_layer(
@@ -601,6 +523,9 @@ class _Phi4Model(_Phi4PreTrainedModel):
                     attention_mask=attention_mask,
                     position_ids=position_ids,
                     past_key_value=kv_cache,
+                    inference_mode=inference_mode,
+                    max_generation=max_generation,
+                    cur_pos=cur_pos
                 )
 
             hidden_states = layer_outputs
@@ -801,7 +726,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         past_kv = None
         pos = None
         for cur_pos in range(min_prompt_len, total_len):
-            _, logits, critics, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], position_ids = pos, past_key_values=past_kv)
+            _, logits, critics, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], position_ids = pos, past_key_values=past_kv, inference_mode=True, max_generation=max_gen_len, cur_pos = prev_pos)
 
             #print('logits.shape', logits.shape)
             #print('past_kv len', len(past_kv))
