@@ -57,7 +57,7 @@ def setup_dist_eval(args):
     os.environ["NCCL_TIMEOUT"] = "600000"  # 600 seconds (10 minutes)
 
     # Initialize distributed process group
-    dist.init_process_group(backend="nccl",  rank = rank, world_size = world_size, timeout = torch.distributed.timedelta(seconds=600000))
+    dist.init_process_group(backend="nccl",  rank = rank, world_size = world_size, timeout = datetime.timedelta(seconds=600000))
 
     # init distributed process group.
     #dist.init_process_group(backend="nccl")    
