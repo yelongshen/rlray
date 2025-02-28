@@ -122,8 +122,9 @@ def setup_dist_eval(args):
         #temperature: float = 0.7,
         #top_p: float = 0.95,
         #early_stop = True,
+        print('start to generate.....')
         outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p, early_stop=False, force_wait_tokens = force_tokens)
-        
+        print('end to generate .....')
         assert len(outputs) == args.batch_size
         
         for output in outputs:
@@ -139,9 +140,10 @@ def setup_dist_eval(args):
                 print('gold answer:\n', req.answer)
                 print('reward:', reward)
 
-            print('process cases.....')
+            
             RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward))
-
+        print('push to replaybuffer')
+        
     dist.barrier()
     if rank == 0:
         print('eval length', RpcReplayBuffer.Length(result_buffer_name))
