@@ -298,16 +298,16 @@ class _Phi4FlashAttention2(_Phi4Attention):
         cos, sin = self.rotary_emb(value_states, position_ids) 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
-        query_states = query_states.transpose(1,2)
-        key_states = key_states.transpose(1,2)
+        query_states = query_states.transpose(1,2).to(hidden_states.dtype)
+        key_states = key_states.transpose(1,2).to(hidden_states.dtype)
         #value_states = value_states.transpose(1,2)
         
         if not inference_mode:
             key_cache = key_states
             value_cache = value_states
         elif inference_mode and past_key_value is None: 
-            key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim) 
-            value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim)
+            key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, dtype=hidden_states.dtype) 
+            value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, dtype=hidden_states.dtype)
             key_cache[:, :q_len] = key_states
             value_cache[:, :q_len] = value_states
         else:
