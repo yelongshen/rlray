@@ -12,10 +12,16 @@ import math
 
 # query size
 bs = 2
-seq_len = 4
+seq_len = 16
 n_head = 6
 head_dim = 8
 window = 8
+n_kv_head = 2
+
+kv_group = n_head // n_kv_head
+
+#self.num_heads = 8  # More query heads
+#self.num_kv_heads = 2  # Fewer key-value heads (GQA)
 
 device = 'cuda:0'
 
@@ -26,6 +32,31 @@ value = torch.randn(bs, n_head, seq_len, head_dim, dtype = torch.bfloat16, devic
 a_query = torch.randn(bs, n_head, 1, head_dim, dtype = torch.bfloat16, device = device)
 a_key = torch.randn(bs, n_head, window, head_dim, dtype = torch.bfloat16, device = device)
 a_value = torch.randn(bs, n_head, window, head_dim, dtype = torch.bfloat16, device = device)
+
+# consider full attention first. 
+query = torch.randn(bs, n_head, seq_len,  head_dim, dtype = torch.bfloat16, device = device)
+key = torch.randn(bs, n_kv_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
+value = torch.randn(bs, n_kv_head, seq_len, head_dim, dtype = torch.bfloat16, device = device)
+
+def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    _bs, _n_head, _len, _head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, None, :, :].expand(_bs, _h_head, n_rep, _len, _head_dim)
+    return hidden_states.reshape(_bs, _h_head * n_rep, _len, _head_dim)
+
+def vanilla_gqa():
+    _key_states = repeat_kv(key, kv_group)
+    _value_states = repeat_kv(value, kv_group)
+    
+    attn_weights = torch.matmul(query, _key_states.transpose(2, 3)) / math.sqrt(head_dim)
+    attention_mask = torch.tril(torch.ones((seq_len, seq_len), device=device))
+    attn_weights = attn_weights.masked_fill(attention_mask < 0.1, float('-inf'))
+
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value.dtype)
+    attn_output = torch.matmul(attn_weights, _value_states)
+    print(attn_output.shape)
+    return attn_output
 
 def vanilla_attention():
     attn_weights = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(head_dim)
@@ -128,20 +159,20 @@ def flash_step_attention():
     print(attn_output.shape)
     return attn_output
     
-    
-
-
 #torch.Size([2, 6, 16, 8])
 #torch.Size([2, 16, 6, 8])
 
 #o1 = vanilla_attention()
 #o2 = flash_attention()
 
-o1 = vanilla_sliding_attention()
-o2 = flash_sliding_attention()
+#o1 = vanilla_sliding_attention()
+#o2 = flash_sliding_attention()
 
 #o1 = vanilla_step_attention()
 #o2 = flash_step_attention()
+
+o1 = vanilla_gqa()
+o2 = flash_attention()
 
 print(o1)
 print(o2)
