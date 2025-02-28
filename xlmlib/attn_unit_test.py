@@ -42,8 +42,8 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     _bs, _n_head, _len, _head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(_bs, _h_head, n_rep, _len, _head_dim)
-    return hidden_states.reshape(_bs, _h_head * n_rep, _len, _head_dim)
+    hidden_states = hidden_states[:, :, None, :, :].expand(_bs, _n_head, n_rep, _len, _head_dim)
+    return hidden_states.reshape(_bs, _n_head * n_rep, _len, _head_dim)
 
 def vanilla_gqa():
     _key_states = repeat_kv(key, kv_group)
