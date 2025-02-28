@@ -163,10 +163,10 @@ def flash_step_attention():
             0,
             softmax_scale=None,
             causal=True, 
-            window_size=(
-                window-1,
-                window-1,
-            )
+            #window_size=(
+            #    window-1,
+            #    window-1,
+            #)
     )
     
     attn_output = attn_output.transpose(1, 2) #.contiguous()
