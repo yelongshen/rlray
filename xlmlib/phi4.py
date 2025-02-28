@@ -654,11 +654,17 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         past_key_values: Optional[List[Tuple[torch.FloatTensor, torch.FloatTensor]]] = None,
         labels: Optional[torch.LongTensor] = None,
         num_logits_to_keep: int = 0,
+        inference_mode = False,
+        max_generation = 0,
+        cur_pos = 0,
     ):
         hidden_states, next_decoder_cache = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
-            past_key_values=past_key_values
+            past_key_values=past_key_values,
+            inference_mode = inference_mode,
+            max_generation = max_generation,
+            cur_pos = cur_pos,
         )
 
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
