@@ -51,10 +51,16 @@ def setup_dist_eval(args):
     node_idx = rank // gpus_per_node 
     torch.cuda.set_device(local_rank) 
     device = torch.device(f"cuda:{local_rank}") 
-    
-    # init distributed process group.
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)    
 
+    os.environ["NCCL_BLOCKING_WAIT"] = "1"
+    os.environ["NCCL_ASYNC_ERROR_HANDLING"] = "1"
+    os.environ["NCCL_TIMEOUT"] = "600000"  # 600 seconds (10 minutes)
+
+    # Initialize distributed process group
+    dist.init_process_group(backend="nccl",  rank = rank, world_size = world_size, timeout = torch.distributed.timedelta(seconds=600000))
+
+    # init distributed process group.
+    #dist.init_process_group(backend="nccl")    
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     if args.model_type == 'samba':
