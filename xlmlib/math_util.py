@@ -15,15 +15,23 @@ def math_verify(gold, answer):
     escaped_gold = gold.replace("\n","\\n").replace("\r","\\r").replace("\\", "\\\\").replace('"', '\\"')
     command = ['python3.12', '-c', f'''from math_verify import parse, verify; import pickle; import sys; pickle.dump(verify(parse("{escaped_answer}"), parse("{escaped_gold}")), sys.stdout.buffer)''']
     o = False
-    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as proc:
-        #o = pickle.load(proc.stdout)
-        try:
-            o, _ = proc.communicate(timeout=5)  # Wait for output with timeout
-            return pickle.loads(o)
-        except subprocess.TimeoutExpired:
-            proc.kill()  # Kill process if it times out
-            print("Process timed out!")
-    return o
+
+    try:
+        with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as proc:
+            try:
+                o, _ = proc.communicate(timeout=5)  # Wait for output with timeout
+                return pickle.loads(o)
+            except subprocess.TimeoutExpired:
+                proc.kill()  # Kill process if it times out
+                print("Process timed out!")
+            except pickle.UnpicklingError:
+                print("Failed to unpickle the output.")
+            except Exception as e:
+                print(f"An error occurred during subprocess communication: {e}")
+    except Exception as e:
+        print(f"An error occurred while executing the subprocess: {e}")
+
+    return False
         
 def is_numeric(s):
     """Check if a string is a valid numeric value (integer or float)."""
