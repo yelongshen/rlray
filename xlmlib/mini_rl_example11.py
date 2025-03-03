@@ -92,12 +92,9 @@ def main(args):
     elif args.model_type == 'phi4':
         if args.weight_path is None:
             llm_model, llm_config, tokenizer = _Phi4ForCausalLM.load_hfckpt(args.pretrained_model)
-
-    #if args.weight_path is None:
-    #    llm_model, llm_config, tokenizer = _SambaForCausalLM.load_hfckpt(args.pretrained_model)
-    #else:
-    #    llm_model, llm_config, tokenizer = _SambaForCausalLM.load_customckpt(args.pretrained_model, args.weight_path)
-        
+        else:
+            llm_model, llm_config, tokenizer = _Phi4ForCausalLM.load_customckpt(args.pretrained_model, args.weight_path)
+            
     # Load tokenizer from local path 
     #tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
     #tokenizer.model_max_length = 4096 
@@ -121,8 +118,12 @@ def main(args):
     print('distributed language model creation.') 
 
     # load dataset....
-    datafile = 'math_level3to5_data_processed_with_qwen_prompt.json' 
-    dataset = load_dataset('json', data_files=datafile) 
+    if args.train_file is None:
+        datafile = 'math_level3to5_data_processed_with_qwen_prompt.json' 
+    else:
+        datafile = args.train_file
+        
+    dataset = load_dataset('json', data_files=datafile)
     print(f"loaded {dataset} with data_files={datafile}") 
     sampler = torch.utils.data.distributed.DistributedSampler(dataset['train'], num_replicas=world_size, rank=rank, shuffle=True) 
 
@@ -409,6 +410,7 @@ if __name__ == "__main__":
     # rl with model type. 
     parser.add_argument("--model_type", type=str, default="samba", choices=["samba", "phi4"], help="choose model type.")
     parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9", "v10"], help="choose prompt type.")
+    parser.add_argument("--train_file", type=str, default=None, help='training data.')
     
     args = parser.parse_args()
     
