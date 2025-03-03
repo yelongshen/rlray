@@ -579,34 +579,37 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
     def load_hfckpt(local_model_path):
         with open(f'{local_model_path}/config.json', 'r') as file:
             llm_config = json.load(file, object_hook=lambda d: SimpleNamespace(**d))
-        #vocab_size = llm_config.vocab_size 
-        #eos_token_id = llm_config.eos_token_id #": 32000,
-
         # check for the ckpt. 
         safetensor_files = [
             f"{local_model_path}/model-00001-of-00002.safetensors",
             f"{local_model_path}/model-00002-of-00002.safetensors"
-        ]
-        
+        ]        
         model_state_dict = {}
         for file in safetensor_files:
             part_state_dict = load_file(file, device="cpu")  # Load each part
             model_state_dict.update(part_state_dict)  # Merge into one dictionary
-
         llm_model = _Phi4ForCausalLM(llm_config) 
-    
         # Step 4: Apply the merged state_dict to the model
         missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
         print('missing_keys: ', missing_keys)
         print('unexpected_keys: ', unexpected_keys)    
         if 'lm_head.weight' in missing_keys:
             llm_model.lm_head.weight = llm_model.model.embed_tokens.weight
-            #self.lm_head.weight = self.embed_tokens.weight  # Share the weights
-            #   self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-
-
         tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
+        return llm_model, llm_config, tokenizer
 
+    @staticmethod
+    def load_customckpt(hf_model_path, custom_weight_path):
+        with open(f'{hf_model_path}/config.json', 'r') as file:
+            llm_config = json.load(file, object_hook=lambda d: SimpleNamespace(**d))
+        ckpt = torch.load(custom_weight_path, map_location=torch.device('cpu'))
+        model_state_dict = ckpt['model_state_dict']        
+        
+        llm_model = _Phi4ForCausalLM(llm_config) 
+        missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
+        print('missing_keys: ', missing_keys)
+        print('unexpected_keys: ', unexpected_keys)    
+        tokenizer = AutoTokenizer.from_pretrained(hf_model_path, local_files_only=True) 
         return llm_model, llm_config, tokenizer
         
     def __init__(self, config):
