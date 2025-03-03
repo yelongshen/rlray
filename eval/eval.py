@@ -71,6 +71,8 @@ def setup_dist_eval(args):
     elif args.model_type == 'phi4':
         if args.weight_path is None:
             model, config, tokenizer = _Phi4ForCausalLM.load_hfckpt(args.model_path)
+        else:
+            model, config, tokenizer = _Phi4ForCausalLM.load_customckpt(args.model_path, args.weight_path)
             
     model = model.to(torch.bfloat16).to(device) 
     model.eval()
@@ -187,10 +189,7 @@ def parse_args():
     parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9", "v10"], help="choose prompt type.")
     parser.add_argument("--batch_size", default=1, type=int)
     
-    #parser.add_argument("--output_dir", default="./output", type=str)
-    #parser.add_argument("--prompt_type", default="tool-integrated", type=str)
     parser.add_argument("--weight_path", default=None, type=str)
-    #parser.add_argument("--ckpt_type", type=str, default="hf", choices=["distgae", "group"], help="Choose the advantage function.")
     parser.add_argument("--temperature", default=0.7, type=float)
     parser.add_argument("--n_rollout", default=1, type=int)
     parser.add_argument("--top_p", default=0.95, type=float)
