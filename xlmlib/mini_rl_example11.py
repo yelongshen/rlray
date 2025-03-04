@@ -409,7 +409,7 @@ if __name__ == "__main__":
 
     # rl with model type. 
     parser.add_argument("--model_type", type=str, default="samba", choices=["samba", "phi4"], help="choose model type.")
-    parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9", "v10"], help="choose prompt type.")
+    parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9", "v10", "v11"], help="choose prompt type.")
     parser.add_argument("--train_file", type=str, default=None, help='training data.')
     
     args = parser.parse_args()
