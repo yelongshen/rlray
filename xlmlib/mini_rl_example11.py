@@ -199,7 +199,7 @@ def main(args):
             print(f'begin batch_idx:{batch_idx}, rank: {rank}, buffer_size: {len(buffer)}')
             if args.profile:
                 start_time = time.perf_counter()    
-            output_ids, probs, crits = llm.module.generate(input_ids, max_gen_len = 4096, early_stop = not args.no_early_stop)
+            output_ids, probs, crits = llm.module.generate(input_ids, max_gen_len = args.max_generation, early_stop = not args.no_early_stop)
             if args.profile:
                 end_time = time.perf_counter()
                 elapsed_time_generation = elapsed_time_generation + end_time - start_time
@@ -233,7 +233,7 @@ def main(args):
                 #    reward = 0
                 
                 response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
-                if response_idx is not None and len(output_id) > response_idx + 5:
+                if response_idx is not None and len(output_id) > response_idx + 15:
                     output_id = output_id[ : response_idx]
                     prob = prob[ : response_idx]
                     crit = crit[ : response_idx]
@@ -306,7 +306,7 @@ def main(args):
                     response = sft_data['messages'][1]['content'][0]
 
                     prompt_tokens =  tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=True)
-                    response_tokens = tokenizer(['\n\n' + response], add_special_tokens=False, max_length=7168, truncation=True)
+                    response_tokens = tokenizer(['\n\n' + response], add_special_tokens=False, max_length=args.max_generation-1024, truncation=True)
 
                     prompt_tokens = prompt_tokens['input_ids'][0] 
                     response_tokens = response_tokens['input_ids'][0] + [tokenizer.eos_token_id]
@@ -411,6 +411,9 @@ if __name__ == "__main__":
     parser.add_argument("--model_type", type=str, default="samba", choices=["samba", "phi4"], help="choose model type.")
     parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9", "v10", "v11"], help="choose prompt type.")
     parser.add_argument("--train_file", type=str, default=None, help='training data.')
+    
+    parser.add_argument("--max_generation", type=int, default=4096, help="max generation length.")
+
     
     args = parser.parse_args()
     
