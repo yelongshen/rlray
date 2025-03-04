@@ -80,7 +80,8 @@ def process_math_prompt(original_question, prompt_type = "v8"):
     candidate_prompt_9 = "You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
     #pattern = r'The answer is:\s*(.+)'
     candidate_prompt_10 = "You will be given a problem. Please reason step by step, and put your final answer within \boxed{}:\n"
-    
+
+    candidate_prompt_11 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
     postfix_instruct = ''
     
     if prompt_type == 'v8':
@@ -89,6 +90,8 @@ def process_math_prompt(original_question, prompt_type = "v8"):
         prefix_instruct = candidate_prompt_9
     elif prompt_type == 'v10':
         prefix_instruct = candidate_prompt_10
+    elif prompt_type == 'v11':
+        prefix_instruct = candidate_prompt_11
         
     prompt = prefix_instruct + original_question + postfix_instruct
 
@@ -101,6 +104,9 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
     elif prompt_type == 'v9' or prompt_type == 'v10':
         pattern_prefix = 'answer is:'
         pattern = r'answer is: \\boxed\{(.*?)\}'
+    elif prompt_type == 'v11':
+        pattern_prefix = ''
+        pattern = r'\\boxed{([^}]*)}'
 
     box_match = 0.0
     extracted_answer = 'none'
@@ -109,9 +115,12 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
     
     if matches:
         answer_start, answer_end = matches[-1].span() 
-        extracted_answer = response[answer_start + len(pattern_prefix) : answer_end]
-        answer_tokens = tokenizer([extracted_answer], add_special_tokens=False, max_length=1024, truncation=True)
-        extracted_answer = tokenizer.decode(answer_tokens['input_ids'][0], skip_special_tokens=True)
+        if prompt_type == 'v8':
+            extracted_answer = response[answer_start + len(pattern_prefix) : answer_end]
+            answer_tokens = tokenizer([extracted_answer], add_special_tokens=False, max_length=1024, truncation=True)
+            extracted_answer = tokenizer.decode(answer_tokens['input_ids'][0], skip_special_tokens=True)
+        else:
+            extracted_answer = matches[-1].group(1)
         #for ans in answers:
         is_match = compare_math_answers(ans, extracted_answer) 
         if not is_match and 'is_equiv' in alg:
