@@ -25,8 +25,9 @@ label = torch.zeros(bsz, seqlen, dtype = torch.long, device = device)
 
 def vanilla_linear_softmax():
     global lm_head
-    global data
-
+    global states
+    global label
+    
     logits = lm_head(states)
 
     loss = criterion(logits.reshape(-1, vocab_size), label.reshape(-1)) 
@@ -43,6 +44,8 @@ def vanilla_linear_softmax():
 def fused_linear_softmax():
     global lm_head
     global states
+    global label
+    
     loss = FusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), lm_head.weight, label.reshape(-1), reduction='none')
 
     print('loss2:', loss)
