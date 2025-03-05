@@ -6,6 +6,8 @@ import torch.nn as nn
 
 import math
 
+from .fused_linear_cross_entropy import FusedLinearCrossEntropyFunction
+
 hidden_size = 16
 vocab_size = 32
 bsz = 3
@@ -19,7 +21,7 @@ lm_head = nn.Linear(hidden_size, vocab_size, bias=False, dtype = torch.bfloat16,
 criterion = nn.CrossEntropyLoss(ignore_index=-1)
 
 states = torch.randn(bsz, seqlen, hidden_size, dtype = torch.bfloat16, device = device)
-label = torch.zero(bsz, seqlen, dtype = torch.long, device = device)
+label = torch.zeros(bsz, seqlen, dtype = torch.long, device = device)
 
 def vanilla_linear_softmax():
     global lm_head
@@ -31,6 +33,13 @@ def vanilla_linear_softmax():
 
     print('loss:', loss)
     return loss
-  
-loss = vanilla_linear_softmax()
+
+def fused_linear_softmax():
+    global lm_head
+    global data
+    return 0
+    #loss = FusedLinearCrossEntropyFunction.apply(input_.view(-1, input_.size(-1)), weight, labels.view(-1), bias , -100, self.label_smoothing,)
+
+
+loss1 = vanilla_linear_softmax()
 
