@@ -8,7 +8,7 @@ import math
 
 from fused_linear_cross_entropy import FusedLinearCrossEntropyFunction
 hidden_size = 16
-vocab_size = 32
+vocab_size = 24
 bsz = 3
 seqlen = 8
 
@@ -30,6 +30,12 @@ def vanilla_linear_softmax():
 
     loss = criterion(logits.reshape(-1, vocab_size), label.reshape(-1)) 
 
+    loss = -F.cross_entropy(
+                input=logits.reshape(-1, vocab_size), #.transpose(1, 2),
+                target=label.reshape(-1),
+                reduction="none"
+            ).view(bsz, seqlen)
+    
     print('loss:', loss)
     return loss
 
