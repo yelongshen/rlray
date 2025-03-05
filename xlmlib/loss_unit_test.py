@@ -7,7 +7,10 @@ import torch.nn as nn
 import math
 import torch.nn.functional as F
 
-from fused_linear_cross_entropy import FusedLinearCrossEntropyFunction
+#from fused_linear_cross_entropy import FusedLinearCrossEntropyFunction
+
+from liger_kernel.ops.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction
+
 hidden_size = 16
 vocab_size = 24
 bsz = 3
@@ -46,7 +49,7 @@ def fused_linear_softmax():
     global states
     global label
     
-    loss = FusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), lm_head.weight, label.reshape(-1), None, -100, 0.0, 'none')
+    loss = LigerFusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), lm_head.weight, label.reshape(-1), None, None, -100, 0.0, 0.0, 'none', None, False)
 
     print('loss2:', loss)
     return loss
