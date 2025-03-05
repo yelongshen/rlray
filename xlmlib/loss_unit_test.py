@@ -36,7 +36,7 @@ def vanilla_linear_softmax():
                 reduction="none"
             ).view(bsz, seqlen)
     
-    print('loss:', loss)
+    print('loss1:', loss)
     return loss
 
 def fused_linear_softmax():
@@ -45,7 +45,7 @@ def fused_linear_softmax():
     return 0
     loss = FusedLinearCrossEntropyFunction.apply(data.view(-1, data.size(-1)), lm_head.weight, label.reshape(-1), reduction='none')
 
-    print('loss:', loss)
+    print('loss2:', loss)
     return loss
 loss1 = vanilla_linear_softmax()
 loss2 = fused_linear_softmax()
