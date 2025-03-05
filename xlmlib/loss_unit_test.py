@@ -7,7 +7,6 @@ import torch.nn as nn
 import math
 
 from .fused_linear_cross_entropy import FusedLinearCrossEntropyFunction
-
 hidden_size = 16
 vocab_size = 32
 bsz = 3
