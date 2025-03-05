@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 
 import math
+import torch.nn.functional as F
 
 from fused_linear_cross_entropy import FusedLinearCrossEntropyFunction
 hidden_size = 16
