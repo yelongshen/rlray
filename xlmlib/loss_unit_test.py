@@ -38,7 +38,7 @@ def vanilla_linear_softmax():
                 reduction="none"
             ).view(bsz, seqlen)
     
-    print('loss1:', loss)
+    print('loss1:', loss, loss.sum(), loss.mean())
     return loss
 
 def fused_linear_softmax():
@@ -46,7 +46,7 @@ def fused_linear_softmax():
     global states
     global label
     
-    loss = FusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), lm_head.weight, label.reshape(-1), reduction='none')
+    loss = FusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), lm_head.weight, label.reshape(-1), None, -100, 0.0, 'none')
 
     print('loss2:', loss)
     return loss
