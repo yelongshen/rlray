@@ -93,14 +93,14 @@ def gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, r
     
     _batch_size, _seq_len = input_tokens.shape
     
-    _, logits, critics, _ = llm(input_tokens)
+    logprobs, _, critics, _ = llm(input_tokens[:, :-1], labels=input_tokens[:, 1:], fuse_loss = True)
     
-    logprobs = F.cross_entropy(
-        input = logits.reshape(-1, vocab_size)[:-1,:], #.transpose(1, 2),
-        target = input_tokens.reshape(-1)[1:], 
-        reduction = "none",
-            #ignore_index = pad_id,
-    ).reshape(1, -1)
+    #logprobs = F.cross_entropy(
+    #    input = logits.reshape(-1, vocab_size)[:-1,:], #.transpose(1, 2),
+    #    target = input_tokens.reshape(-1)[1:], 
+    #    reduction = "none",
+    #        #ignore_index = pad_id,
+    #).reshape(1, -1)
         
     # critics align with the ground truth. 
     critics = critics.reshape(_batch_size, _seq_len)
