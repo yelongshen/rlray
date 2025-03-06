@@ -103,8 +103,8 @@ def gradient_v2_pass(llm, input_tokens, advantages, _response_idx, vocab_size, r
     #).reshape(1, -1)
         
     # critics align with the ground truth. 
-    critics = critics.reshape(_batch_size, _seq_len)
-    critics = critics[:, _response_idx-1:-1] 
+    critics = critics.reshape(_batch_size, _seq_len-1)
+    critics = critics[:, _response_idx-1:] 
     logprobs = logprobs[:, _response_idx-1:]
 
     _policy_loss = (advantages * logprobs).mean() #  -torch.min(surr1, surr2).sum() 
