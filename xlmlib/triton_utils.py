@@ -22,9 +22,21 @@ import triton.language as tl
 
 from packaging.version import Version
 
-from liger_kernel.utils import infer_device
+#from liger_kernel.utils import infer_device
 
-
+def infer_device():
+    """
+    Get current device name based on available devices
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    elif torch.xpu.is_available():
+        return "xpu"
+    elif torch.hip.is_available():
+        return "hip"
+    else:
+        return "cpu"
+        
 def is_hip() -> bool:
     return torch.version.hip is not None
 
