@@ -21,6 +21,7 @@ from transformers.utils import (
     is_flash_attn_greater_or_equal_2_10,
     logging,
 )
+from liger_kernel.ops.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction
 
 from transformers import AutoTokenizer 
 logger = logging.get_logger(__name__)
@@ -664,6 +665,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         inference_mode = False,
         max_generation = 0,
         cur_pos = 0,
+        fuse_loss = False
     ):
         hidden_states, next_decoder_cache = self.model(
             input_ids=input_ids,
@@ -674,8 +676,6 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             cur_pos = cur_pos,
         )
 
-        # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-        logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
 
         # suppose it is next token's Q value. 
         critics = self.critic_head(hidden_states[:, -num_logits_to_keep:, :])
@@ -684,12 +684,22 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         critics = torch.sigmoid(critics)
 
         loss = None
-        if labels is not None:
-            #loss = self.loss_function(logits, labels, self.vocab_size, **loss_kwargs)
-            logits_flat = logits.reshape(-1, self.vocab_size)    # Shape: (batch_size * seq_len, vocab_size)
-            target_flat = labels.reshape(-1)            # Shape: (batch_size * seq_len)
-            loss = criterion(logits, target_flat)
+        logits = None
         
+        if not fuse_loss:
+            # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+            logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
+    
+            if labels is not None:
+                #loss = self.loss_function(logits, labels, self.vocab_size, **loss_kwargs)
+                logits_flat = logits.reshape(-1, self.vocab_size)    # Shape: (batch_size * seq_len, vocab_size)
+                target_flat = labels.reshape(-1)            # Shape: (batch_size * seq_len)
+                loss = criterion(logits, target_flat)
+        else:
+            states = hidden_states[:, -num_logits_to_keep:, :]
+            
+            loss = LigerFusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), self.lm_head.weight, labels.reshape(-1), None, None, -100, 0.0, 0.0, 'none', None, False)
+
         return loss, logits, critics, next_decoder_cache 
     
     @torch.inference_mode()
