@@ -50,7 +50,7 @@ def fused_linear_softmax():
     global label
     
     loss = LigerFusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), lm_head.weight, label.reshape(-1), None, None, -100, 0.0, 0.0, 'none', None, False)
-
+    loss = loss[0]
     print('loss2:', loss.sum(), loss.mean())
     return loss
 loss1 = vanilla_linear_softmax()
