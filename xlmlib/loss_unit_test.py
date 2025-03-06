@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 #from fused_linear_cross_entropy import FusedLinearCrossEntropyFunction
 
-from liger_kernel.ops.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction
+from fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction
 
 hidden_size = 16
 vocab_size = 200064
