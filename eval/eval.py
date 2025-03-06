@@ -26,6 +26,7 @@ class Request:
 
 @dataclass
 class Result(Request):
+    responselen : int
     reward : float
     
 def load_jsonl(file) -> Iterable[Any]:
@@ -149,13 +150,14 @@ def setup_dist_eval(args):
                 print('reward:', reward)
 
             
-            RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, reward = reward))
+            RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, responselen = len(output), reward = reward))
         print('push to replaybuffer')
         
     dist.barrier()
     if rank == 0:
         print('eval length', RpcReplayBuffer.Length(result_buffer_name))
-        
+
+        avg_response = 0
         eval_results = {}
         for i in range(0, len(request_list) * args.batch_size):
             result = RpcReplayBuffer.Pop(result_buffer_name)
@@ -164,7 +166,10 @@ def setup_dist_eval(args):
             if not result.id in eval_results:
                 eval_results[result.id] = []
             eval_results[result.id].append(result.reward)
-            
+
+            avg_response = avg_response + result.responselen
+
+        avg_response = avg_response / (len(request_list) * args.batch_size)
         #total_reward = 0
         pass_1 = 0
         pass_n = 0
@@ -177,7 +182,7 @@ def setup_dist_eval(args):
             
         print(f'average pass@1:', pass_1 * 1.0 / total_count, len(eval_results))
         print(f'average pass@{args.n_rollout}:', pass_n * 1.0 / total_count)
-        
+        print(f'average response len:{avg_response}')
     rpc.shutdown(graceful=True)
 
         
