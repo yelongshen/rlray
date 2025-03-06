@@ -50,8 +50,6 @@ from transformers import get_linear_schedule_with_warmup
 from transformers.activations import ACT2FN
 
 
-from samba import _SambaForCausalLM
-from phi4 import _Phi4ForCausalLM
 from replaybuffer import ReplayBuffer, Sample, AsyncReplayBuffer
 from ppo import ppo_gradient, ppo_gradient_v2
 from sft import sft_gradient
@@ -83,13 +81,14 @@ def main(args):
 
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-    
     if args.model_type == 'samba':
+        from samba import _SambaForCausalLM
         if args.weight_path is None:
             llm_model, llm_config, tokenizer = _SambaForCausalLM.load_hfckpt(args.pretrained_model)
         else:
             llm_model, llm_config, tokenizer = _SambaForCausalLM.load_customckpt(args.pretrained_model, args.weight_path)
     elif args.model_type == 'phi4':
+        from phi4 import _Phi4ForCausalLM
         if args.weight_path is None:
             llm_model, llm_config, tokenizer = _Phi4ForCausalLM.load_hfckpt(args.pretrained_model)
         else:
