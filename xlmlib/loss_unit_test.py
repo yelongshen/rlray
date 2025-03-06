@@ -12,9 +12,9 @@ import torch.nn.functional as F
 from liger_kernel.ops.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction
 
 hidden_size = 16
-vocab_size = 24
+vocab_size = 200064
 bsz = 3
-seqlen = 8
+seqlen = 16384
 
 device = 'cuda:0'
 
@@ -35,13 +35,13 @@ def vanilla_linear_softmax():
 
     loss = criterion(logits.reshape(-1, vocab_size), label.reshape(-1)) 
 
-    loss = -F.cross_entropy(
+    loss = F.cross_entropy(
                 input=logits.reshape(-1, vocab_size), #.transpose(1, 2),
                 target=label.reshape(-1),
                 reduction="none"
             ).view(bsz, seqlen)
     
-    print('loss1:', loss, loss.sum(), loss.mean())
+    print('loss1:', loss.sum(), loss.mean())
     return loss
 
 def fused_linear_softmax():
@@ -51,7 +51,7 @@ def fused_linear_softmax():
     
     loss = LigerFusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), lm_head.weight, label.reshape(-1), None, None, -100, 0.0, 0.0, 'none', None, False)
 
-    print('loss2:', loss)
+    print('loss2:', loss.sum(), loss.mean())
     return loss
 loss1 = vanilla_linear_softmax()
 loss2 = fused_linear_softmax()
