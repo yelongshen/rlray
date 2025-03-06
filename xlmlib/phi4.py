@@ -21,7 +21,7 @@ from transformers.utils import (
     is_flash_attn_greater_or_equal_2_10,
     logging,
 )
-from fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction
+from .fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction
 
 from transformers import AutoTokenizer 
 logger = logging.get_logger(__name__)
