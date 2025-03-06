@@ -697,9 +697,8 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                 loss = criterion(logits, target_flat)
         else:
             states = hidden_states[:, -num_logits_to_keep:, :]
-            
             loss = LigerFusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), self.lm_head.weight, labels.reshape(-1), None, None, -100, 0.0, 0.0, 'none', None, False)
-            loss = loss[0]
+            loss = loss[0].reshape(input_ids.shape)
         return loss, logits, critics, next_decoder_cache 
     
     @torch.inference_mode()
