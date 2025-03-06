@@ -56,7 +56,7 @@ from sft import sft_gradient
 from math_util import compare_math_answers, process_math_prompt, process_math_answer
 
 
-def initmodel_sync(model:_SambaForCausalLM):
+def initmodel_sync(model):
     with torch.no_grad():
         torch.distributed.broadcast(model.critic_head.weight, 0, async_op=False)
         torch.distributed.broadcast(model.critic_head.bias, 0, async_op=False)
