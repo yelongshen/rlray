@@ -1,11 +1,11 @@
 import torch
 import triton
 
-from triton_cross_entropy import liger_cross_entropy_kernel
-from triton_utils import amp_custom_bwd
-from triton_utils import amp_custom_fwd
-from triton_utils import element_mul_kernel
-from triton_utils import is_hip
+from xlmlib.triton_cross_entropy import liger_cross_entropy_kernel
+from xlmlib.triton_utils import amp_custom_bwd
+from xlmlib.triton_utils import amp_custom_fwd
+from xlmlib.triton_utils import element_mul_kernel
+from xlmlib.triton_utils import is_hip
 
 # The hard limit of TRITON_MAX_TENSOR_NUMEL is 1048576 https://github.com/triton-lang/triton/blob/ba42a5c68fd0505f8c42f4202d53be0f8d9a5fe0/python/triton/language/core.py#L19
 # However, setting limit as 65536 as in LayerNorm tutorial is faster because of less register spilling
