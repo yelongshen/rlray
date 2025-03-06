@@ -6,9 +6,9 @@ import torch
 import triton
 import triton.language as tl
 
-from triton_utils import compare_version
-from triton_utils import element_mul_kernel
-from triton_utils import is_hip
+from xlmlib.triton_utils import compare_version
+from xlmlib.triton_utils import element_mul_kernel
+from xlmlib.triton_utils import is_hip
 
 if compare_version("triton", operator.ge, "3.0.0"):
     try:
