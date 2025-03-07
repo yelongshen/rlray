@@ -57,6 +57,7 @@ def setup_dist_eval(args):
     os.environ["NCCL_ASYNC_ERROR_HANDLING"] = "1"
     os.environ["NCCL_TIMEOUT"] = "600000"  # 600 seconds (10 minutes)
 
+
     # Initialize distributed process group
     dist.init_process_group(backend="nccl",  rank = rank, world_size = world_size, timeout = datetime.timedelta(seconds=600000))
 
@@ -79,7 +80,21 @@ def setup_dist_eval(args):
     model.eval()
     
     rpc_worker_name = f"worker-{rank}"
-    rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size) #, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
+    
+    options = rpc.TensorPipeRpcBackendOptions(
+        init_method='env://',
+        rpc_timeout=30,
+        num_worker_threads=16,
+        channels=["cuda_ipc", "cuda_basic"]
+    )
+    rpc.init_rpc(
+        name=rpc_worker_name,
+        rank=rank,
+        world_size=world_size,
+        rpc_backend_options=options
+    )
+    
+    #rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size) #, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
 
     request_buffer_name = 'request_buffer'
     request_buffer_worker = f"worker-{0}"
