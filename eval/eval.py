@@ -83,13 +83,12 @@ def setup_dist_eval(args):
     
     options = rpc.TensorPipeRpcBackendOptions(
         num_worker_threads=16,
-        channels=["cuda_ipc", "cuda_basic"]
+        _channels=["cuda_ipc", "cuda_basic"]
     )
     rpc.init_rpc(
         name=rpc_worker_name,
         rank=rank,
         world_size=world_size,
-        rpc_backend_options=rpc.TensorPipeRpcBackendOptions(),
         rpc_backend_options=options,
     )
     
