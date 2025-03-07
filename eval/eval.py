@@ -92,7 +92,7 @@ def setup_dist_eval(args):
         rpc_backend_options=options,
     )
     
-    rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size) #, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
+    #rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size) #, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
 
     request_buffer_name = 'request_buffer'
     request_buffer_worker = f"worker-{0}"
