@@ -87,6 +87,8 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     candidate_prompt_14 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n <|user|>: "
 
+    candidate_prompt_16 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n <|user|>"
+
     postfix_instruct = ''
     
     if prompt_type == 'v8':
@@ -109,7 +111,9 @@ def process_math_prompt(original_question, prompt_type = "v8"):
     elif prompt_type == 'v15':
         prefix_instruct = candidate_prompt_14
         postfix_instruct = '\n <|end|> <|assistant|>: '
-        
+    elif prompt_type == 'v16':
+        prefix_instruct = candidate_prompt_16
+        postfix_instruct = '<|end|><|assistant|>'
     prompt = prefix_instruct + original_question + postfix_instruct
 
     return prompt
@@ -121,7 +125,7 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
     elif prompt_type == 'v9' or prompt_type == 'v10':
         pattern_prefix = 'answer is:'
         pattern = r'answer is: \\boxed\{(.*?)\}'
-    elif prompt_type == 'v11' or prompt_type == 'v12' or prompt_type == 'v13' or prompt_type == 'v14' or prompt_type == 'v15':
+    elif prompt_type == 'v11' or prompt_type == 'v12' or prompt_type == 'v13' or prompt_type == 'v14' or prompt_type == 'v15' or prompt_type == 'v16':
         pattern_prefix = ''
         pattern = r'\\boxed{([^}]*)}'
         
