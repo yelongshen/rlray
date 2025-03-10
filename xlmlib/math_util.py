@@ -92,7 +92,9 @@ def process_math_prompt(original_question, prompt_type = "v8"):
         prefix_instruct = candidate_prompt_10
     elif prompt_type == 'v11':
         prefix_instruct = candidate_prompt_11
-        
+    elif prompt_type == 'v12':
+        prefix_instruct = candidate_prompt_11
+        postfix_instrct = '\n'
     prompt = prefix_instruct + original_question + postfix_instruct
 
     return prompt
