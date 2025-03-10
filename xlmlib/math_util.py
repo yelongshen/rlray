@@ -109,7 +109,10 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
     elif prompt_type == 'v11':
         pattern_prefix = ''
         pattern = r'\\boxed{([^}]*)}'
-
+    elif prompt_type == 'v12':
+        pattern_prefix = ''
+        pattern = r'\\boxed{([^}]*)}'
+        
     box_match = 0.0
     extracted_answer = 'none'
     ans = answers[0]
