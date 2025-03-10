@@ -83,7 +83,7 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     candidate_prompt_11 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
 
-    candidate_prompt_13 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n QUESTION: "
+    candidate_prompt_13 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n USER: "
 
     postfix_instruct = ''
     
@@ -100,7 +100,7 @@ def process_math_prompt(original_question, prompt_type = "v8"):
         postfix_instrct = '\n'
     elif prompt_type == 'v13':
         prefix_instruct = candidate_prompt_13 
-        postfix_instrct = '\n ANSWER: '
+        postfix_instrct = '\n ASSISTANT: '
 
     prompt = prefix_instruct + original_question + postfix_instruct
 
