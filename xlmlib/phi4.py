@@ -721,7 +721,8 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         total_len = max_gen_len #+ max_prompt_len)
 
         pad_id = self.config.eos_token_id # self.config.pad_token_id
-        eos_id = self.config.eos_token_id # eos_token_id
+        eos_id1 = self.config.eos_token_id
+        eos_id2 = 200020 # eos_token_id
         bos_id = self.config.bos_token_id
         
         tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cuda")
@@ -766,7 +767,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
 
             if not early_stop and force_wait:
                 for bsz_idx, _token in enumerate(next_token.tolist()):
-                    if _token == eos_id and cur_pos + force_wait_tokens.shape[0] < total_len:
+                    if (_token == eos_id1 or _token == eos_id2) and cur_pos + force_wait_tokens.shape[0] < total_len:
                         tokens[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = force_wait_tokens
                         input_text_mask[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = True
                         
@@ -796,7 +797,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             token_critics[:, prev_pos: cur_pos] = critics.squeeze(-1) #[: -1]
             
             eos_reached |= (~input_text_mask[:, cur_pos]) & (
-                next_token == eos_id
+                (next_token == eos_id1) | (next_token == eos_id2)
             )
             prev_pos = cur_pos
             pos = torch.tensor([prev_pos+1] * bsz, dtype=torch.long, device='cuda')
@@ -819,8 +820,12 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             # cut to eos tok if any
             critics = token_critics[i][start-1: -1]
             
-            if eos_id in toks:
-                eos_idx = toks.index(eos_id)
+            if eos_id1 in toks or eos_id2 in toks:
+                eos_idx1 = toks.index(eos_id1) if eos_id1 in toks else len(toks)
+                eos_idx2 = toks.index(eos_id2) if eos_id2 in toks else len(toks)
+                
+                eos_idx = min(eos_idx1, eos_idx2)
+                
                 toks = toks[:eos_idx+1] # include the last eos token. 
                 probs = probs[:eos_idx+1] # if logprobs else None
                 critics = critics[:eos_idx+1]
