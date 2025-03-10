@@ -204,7 +204,7 @@ def parse_args():
     parser.add_argument("--data_path", default="aime24", type=str)
     parser.add_argument("--model_path", default="gpt-4", type=str)
     parser.add_argument("--model_type", type=str, default="samba", choices=["samba", "phi4"], help="choose model type.")
-    parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9", "v10", "v11", "v12", "v13", "v14"], help="choose prompt type.")
+    parser.add_argument("--prompt_type", type=str, default="v8", choices=["v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"], help="choose prompt type.")
     parser.add_argument("--batch_size", default=1, type=int)
     
     parser.add_argument("--weight_path", default=None, type=str)
