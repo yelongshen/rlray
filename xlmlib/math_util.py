@@ -89,9 +89,9 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     candidate_prompt_14 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n <|user|>: "
 
-    candidate_prompt_16 = "You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n<|user|>"
+    candidate_prompt_16 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n<|user|>"
 
-    candidate_prompt_17 = "You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
+    candidate_prompt_17 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
 
     postfix_instruct = ''
     
@@ -144,7 +144,7 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
     elif prompt_type == 'v11' or prompt_type == 'v12' or prompt_type == 'v13' or prompt_type == 'v14' or prompt_type == 'v15' or prompt_type == 'v16' or prompt_type == 'v17':
         pattern_prefix = ''
         #pattern = r'\\boxed{([^}]*)}'
-        pattern = r'\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}'
+        pattern = r'\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}'
 
     box_match = 0.0
     extracted_answer = 'none'
@@ -167,7 +167,7 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
             is_match = is_match or math_verify(ans, extracted_answer)
         elif not is_match and 'text' in alg:
             if ans.startswith('\\text{'):
-                text_match = re.search(r'\text{(.*?)}', ans)
+                text_match = re.search(r'\\text{(.*?)}', ans)
                 new_ans = text_match.group(1)
                 is_match = is_match or call_with_timeout(is_equiv, new_ans, extracted_answer, timeout=5)  #is_equiv(new_ans, extracted_answer)
         if is_match:
