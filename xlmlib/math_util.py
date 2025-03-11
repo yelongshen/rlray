@@ -162,14 +162,14 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
         #for ans in answers:
         is_match = compare_math_answers(ans, extracted_answer) 
         if not is_match and 'is_equiv' in alg:
-            is_match = is_match or call_with_timeout(is_equiv, ans, extracted_answer, timeout=5) # is_equiv(ans, extracted_answer)
+            is_match = is_match or is_equiv(ans, extracted_answer) # call_with_timeout(is_equiv, ans, extracted_answer, timeout=5) # is_equiv(ans, extracted_answer)
         elif not is_match and 'math_verify' in alg: #  fast_mode == 0 or fast_mode == 1: 
             is_match = is_match or math_verify(ans, extracted_answer)
         elif not is_match and 'text' in alg:
             if ans.startswith('\\text{'):
                 text_match = re.search(r'\\text{(.*?)}', ans)
                 new_ans = text_match.group(1)
-                is_match = is_match or call_with_timeout(is_equiv, new_ans, extracted_answer, timeout=5)  #is_equiv(new_ans, extracted_answer)
+                is_match = is_match or is_equiv(new_ans, extracted_answer) # call_with_timeout(is_equiv, new_ans, extracted_answer, timeout=5)  #is_equiv(new_ans, extracted_answer)
         if is_match:
             box_match = 1.0
         #pos = matches.end() 
