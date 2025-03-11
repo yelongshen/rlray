@@ -5,6 +5,8 @@ import re
 import sys
 import subprocess
 import pickle
+import concurrent.futures
+import time
 
 from latex2sympy.latex2sympy2 import latex2sympy
 from math_evaluation import is_equiv
@@ -87,9 +89,9 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     candidate_prompt_14 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n <|user|>: "
 
-    candidate_prompt_16 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n <|user|>"
+    candidate_prompt_16 = "You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n<|user|>"
 
-    candidate_prompt_17 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
+    candidate_prompt_17 = "You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
 
     postfix_instruct = ''
     
@@ -123,7 +125,16 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     return prompt
 
-def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'lastline_math_verify', 'full_math_verify']):
+def call_with_timeout(func, *args, timeout=5):
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(func, *args)
+        try:
+            return future.result(timeout=timeout)  # This will raise TimeoutError if the function takes longer than timeout
+        except concurrent.futures.TimeoutError:
+            print("Function call timed out")
+            return False
+            
+def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'is_equiv', 'text', 'lastline_math_verify', 'full_math_verify']):
     if prompt_type == 'v8':
         pattern_prefix = 'The answer is:'
         pattern = r'The answer is: \s*(.+)'
@@ -133,12 +144,12 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
     elif prompt_type == 'v11' or prompt_type == 'v12' or prompt_type == 'v13' or prompt_type == 'v14' or prompt_type == 'v15' or prompt_type == 'v16' or prompt_type == 'v17':
         pattern_prefix = ''
         #pattern = r'\\boxed{([^}]*)}'
-        pattern = r'\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}'
+        pattern = r'\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}'
 
     box_match = 0.0
     extracted_answer = 'none'
     ans = answers[0]
-    matches = list(re.finditer(pattern.lower(), response.lower(), re.MULTILINE)) 
+    matches = list(re.finditer(pattern, response, re.MULTILINE)) 
     
     if matches:
         answer_start, answer_end = matches[-1].span() 
@@ -151,9 +162,14 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
         #for ans in answers:
         is_match = compare_math_answers(ans, extracted_answer) 
         if not is_match and 'is_equiv' in alg:
-            is_match = is_match or is_equiv(ans, extracted_answer)
+            is_match = is_match or call_with_timeout(is_equiv, ans, extracted_answer, timeout=5) # is_equiv(ans, extracted_answer)
         elif not is_match and 'math_verify' in alg: #  fast_mode == 0 or fast_mode == 1: 
             is_match = is_match or math_verify(ans, extracted_answer)
+        elif not is_match and 'text' in alg:
+            if ans.startswith('\\text{'):
+                text_match = re.search(r'\\text{(.*?)}', ans)
+                new_ans = text_match.group(1)
+                is_match = is_match or call_with_timeout(is_equiv, new_ans, extracted_answer, timeout=5)  #is_equiv(new_ans, extracted_answer)
         if is_match:
             box_match = 1.0
         #pos = matches.end() 
