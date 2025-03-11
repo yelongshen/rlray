@@ -167,7 +167,7 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
             is_match = is_match or math_verify(ans, extracted_answer)
         elif not is_match and 'text' in alg:
             if ans.startswith('\\text{'):
-                text_match = re.search(r'\\text{(.*?)}', ans)
+                text_match = re.search(r'\text{(.*?)}', ans)
                 new_ans = text_match.group(1)
                 is_match = is_match or call_with_timeout(is_equiv, new_ans, extracted_answer, timeout=5)  #is_equiv(new_ans, extracted_answer)
         if is_match:
