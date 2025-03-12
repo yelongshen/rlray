@@ -163,13 +163,32 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
         is_match = compare_math_answers(ans, extracted_answer) 
         if not is_match and 'is_equiv' in alg:
             is_match = is_match or call_with_timeout(is_equiv, ans, extracted_answer, timeout=5) # is_equiv(ans, extracted_answer) is_equiv(ans, extracted_answer) # 
-        elif not is_match and 'math_verify' in alg: #  fast_mode == 0 or fast_mode == 1: 
+        
+        if not is_match and 'math_verify' in alg: #  fast_mode == 0 or fast_mode == 1: 
             is_match = is_match or math_verify(ans, extracted_answer)
-        elif not is_match and 'text' in alg:
+        
+        if not is_match and 'text' in alg:
             if ans.startswith('\\text{'):
-                text_match = re.search(r'\\text{(.*?)}', ans)
-                new_ans = text_match.group(1)
-                is_match = is_match or call_with_timeout(is_equiv, new_ans, extracted_answer, timeout=5)  # is_equiv(new_ans, extracted_answer) #  #is_equiv(new_ans, extracted_answer)
+                text_match = re.search(r'\\text\{(.*?)\}', ans)
+                ans = text_match.group(1)
+                is_match = is_match or call_with_timeout(is_equiv, ans, extracted_answer, timeout=5)  # is_equiv(new_ans, extracted_answer) #  #is_equiv(new_ans, extracted_answer)
+
+        if not is_match and ',' in ans:
+            multiple_ans = ans.split(',')
+            if len(matches) >= multiple_ans:
+                ans_number = len(multiple_ans)
+                succ = 0
+                for t_a in range(0, ans_number):
+                    sub_match = 0
+                    for m in range(0, ans_number):
+                        if call_with_timeout(is_equiv, multiple_ans[t_a], matches[-1-m].group(1), timeout=1):
+                            sub_match = 1    
+                            break
+                    if sub_match == 0:
+                        break
+                    succ = succ + sub_match
+                if succ >= ans_number:
+                    is_match = True
         if is_match:
             box_match = 1.0
         #pos = matches.end() 
