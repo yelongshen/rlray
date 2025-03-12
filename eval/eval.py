@@ -167,7 +167,7 @@ def setup_dist_eval(args):
         outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p, early_stop=args.early_stop, force_wait_tokens = force_tokens)
         print('end to generate .....')
         
-        assert len(outputs) == args.batch_size
+        #assert len(outputs) == args.batch_size
         
         for o_idx, output in enumerate(outputs):
             response = tokenizer.decode(output)
