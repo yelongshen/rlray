@@ -194,7 +194,7 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
         #pos = matches.end() 
         response = response[:answer_end]
         #return response, extracted_answer, box_match
-    if not is_match and ('lastline_math_verify' in alg or 'full_math_verify' in alg):
+    if box_match < 0.5 and ('lastline_math_verify' in alg or 'full_math_verify' in alg):
         try:
             split_response = response if 'full_math_verify' in alg else response.strip().split('\n')[-1]
             if math_verify(ans, split_response):
