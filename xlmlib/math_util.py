@@ -175,8 +175,9 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
 
         if not is_match and ',' in ans:
             multiple_ans = ans.split(',')
-            if len(matches) >= multiple_ans:
-                ans_number = len(multiple_ans)
+            ans_number = len(multiple_ans)
+                
+            if len(matches) >= ans_number:
                 succ = 0
                 for t_a in range(0, ans_number):
                     sub_match = 0
