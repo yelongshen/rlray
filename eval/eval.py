@@ -81,18 +81,18 @@ def setup_dist_eval(args):
     
     rpc_worker_name = f"worker-{rank}"
     
-    options = rpc.TensorPipeRpcBackendOptions(
-        num_worker_threads=16,
-        _channels=["cuda_ipc", "cuda_basic"]
-    )
-    rpc.init_rpc(
-        name=rpc_worker_name,
-        rank=rank,
-        world_size=world_size,
-        rpc_backend_options=options,
-    )
+    #options = rpc.TensorPipeRpcBackendOptions(
+    #    num_worker_threads=16,
+    #    _channels=["cuda_ipc", "cuda_basic"]
+    #)
+    #rpc.init_rpc(
+    #    name=rpc_worker_name,
+    #    rank=rank,
+    #    world_size=world_size,
+    #    rpc_backend_options=options,
+    #)
     
-    #rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size) #, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
+    rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
 
     request_buffer_name = 'request_buffer'
     request_buffer_worker = f"worker-{0}"
@@ -100,7 +100,7 @@ def setup_dist_eval(args):
     result_buffer_name = 'result_buffer'
     result_buffer_worker = f"worker-{0}"
 
-    assert args.n_rollout % args.batch_size == 0
+    #assert args.n_rollout % args.batch_size == 0
     # load file.
     if rank == 0:
         request_list = []
@@ -117,7 +117,11 @@ def setup_dist_eval(args):
                 id = str(idx)
             idx += 1
 
-            for n in range(0, args.n_rollout // args.batch_size):
+            n_repeat = 1
+            if args.n_rollout > args.batch_size:
+                n_repeat = args.n_rollout // args.batch_size
+            
+            for n in range(0, n_repeat):
                 request_list.append(Request(id = id, prompt = prompt, answer = ans))
 
         RpcReplayBuffer.Register(request_buffer_name, request_buffer_worker, True, capacity = len(request_list))
@@ -135,11 +139,26 @@ def setup_dist_eval(args):
     
     dist.barrier()
     while True: 
-        req = RpcReplayBuffer.Pop(request_buffer_name)
-        if req is None:
-            break    
-        prompt = process_math_prompt(req.prompt, prompt_type = args.prompt_type)
-        _tokens = tokenizer([prompt] * args.batch_size, add_special_tokens=False, max_length=1024, truncation=False)
+        k_repeat = 1
+        r_repeat = args.batch_size
+        if args.batch_size > args.n_rollout:
+            k_repeat = args.batch_size // args.n_rollout
+            r_repeat = args.n_rollout
+            
+        req_list = []
+        prompt_list = []
+        for _ in range(0, k_repeat):
+            req = RpcReplayBuffer.Pop(request_buffer_name)
+            if req is None:
+                break    
+            req_list.append(req)
+            prompt = process_math_prompt(req.prompt, prompt_type = args.prompt_type)
+            prompt_list = prompt_list + [prompt] * r_repeat
+        
+        if len(req_list) == 0:
+            break
+            
+        _tokens = tokenizer(prompt_list, add_special_tokens=False, max_length=1024, truncation=False)
         input_ids = _tokens['input_ids']
         #temperature: float = 0.7,
         #top_p: float = 0.95,
@@ -147,10 +166,12 @@ def setup_dist_eval(args):
         print('start to generate.....')
         outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p, early_stop=args.early_stop, force_wait_tokens = force_tokens)
         print('end to generate .....')
+        
         assert len(outputs) == args.batch_size
         
-        for output in outputs:
+        for o_idx, output in enumerate(outputs):
             response = tokenizer.decode(output)
+            req = req_list[o_idx // r_repeat]
             mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer, prompt_type = args.prompt_type)
             
             if args.debug:
