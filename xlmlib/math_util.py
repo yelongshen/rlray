@@ -144,8 +144,8 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
     elif prompt_type == 'v11' or prompt_type == 'v12' or prompt_type == 'v13' or prompt_type == 'v14' or prompt_type == 'v15' or prompt_type == 'v16' or prompt_type == 'v17':
         pattern_prefix = ''
         #pattern = r'\\boxed{([^}]*)}'
-        pattern = r'\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}'
-
+        #pattern = r'\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}'
+        pattern = r'\\boxed\{((?:[^{}]+|{(?:[^{}]+|{[^{}]*})*})*)\}'
     box_match = 0.0
     extracted_answer = 'none'
     ans = answers[0]
