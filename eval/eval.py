@@ -136,6 +136,7 @@ def setup_dist_eval(args):
     force_tokens = force_tokens['input_ids'][0]
     
     dist.barrier()
+    no_data_cnt = 0
     while True: 
         k_repeat = 1
         r_repeat = args.batch_size
@@ -155,8 +156,12 @@ def setup_dist_eval(args):
             prompt_list = prompt_list + [prompt] * r_repeat
         
         if len(req_list) == 0:
-            print('all finished....' ,rank)
-            break
+            no_data_cnt = no_data_cnt + 1
+            if no_data_cnt < 10:
+                continue
+            else:
+                print('all finished....' ,rank)
+                break
             
         _tokens = tokenizer(prompt_list, add_special_tokens=False, max_length=1024, truncation=False)
         input_ids = _tokens['input_ids']
