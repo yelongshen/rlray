@@ -146,6 +146,7 @@ def setup_dist_eval(args):
         req_list = []
         prompt_list = []
         for _ in range(0, k_repeat):
+            print('pop data......')
             req = RpcReplayBuffer.Pop(request_buffer_name)
             if req is None:
                 break    
@@ -154,6 +155,7 @@ def setup_dist_eval(args):
             prompt_list = prompt_list + [prompt] * r_repeat
         
         if len(req_list) == 0:
+            print('all finished....' ,rank)
             break
             
         _tokens = tokenizer(prompt_list, add_special_tokens=False, max_length=1024, truncation=False)
