@@ -251,7 +251,7 @@ class RpcReplayBuffer(AsyncReplayBuffer):
 
             future = rpc.rpc_async(main_worker, RpcReplayBuffer.Pop, args=(buffer_name,))
             try:
-                return future.wait(timeout=5)  # Wait at most 2 seconds
+                return future.wait(timeout=60)  # Wait at most 2 seconds
             except: # RuntimeError:  # Handle timeout
                 return None
             
