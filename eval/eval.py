@@ -186,7 +186,9 @@ def setup_dist_eval(args):
             
             RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, responselen = len(output), reward = reward))
         print('push to replaybuffer')
-        
+
+    print('end of all processes....', rank)
+    
     dist.barrier()
     if rank == 0:
         print('eval length', RpcReplayBuffer.Length(result_buffer_name))
