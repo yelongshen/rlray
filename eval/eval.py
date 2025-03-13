@@ -81,16 +81,16 @@ def setup_dist_eval(args):
     
     rpc_worker_name = f"worker-{rank}"
     
-    options = rpc.TensorPipeRpcBackendOptions(
-        num_worker_threads=16,
-    )
-    rpc.init_rpc(
-        name=rpc_worker_name,
-        rank=rank,
-        world_size=world_size,
-        rpc_backend_options=options,
-    )
-    #rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
+    #options = rpc.TensorPipeRpcBackendOptions(
+    #    num_worker_threads=16,
+    #)
+    #rpc.init_rpc(
+    #    name=rpc_worker_name,
+    #    rank=rank,
+    #    world_size=world_size,
+    #    rpc_backend_options=options,
+    #)
+    rpc.init_rpc(rpc_worker_name, rank=rank, world_size=world_size, rpc_backend_options=rpc.TensorPipeRpcBackendOptions()) 
 
     request_buffer_name = 'request_buffer'
     request_buffer_worker = f"worker-{0}"
@@ -136,7 +136,7 @@ def setup_dist_eval(args):
     force_tokens = force_tokens['input_ids'][0]
     
     dist.barrier()
-    no_data_cnt = 0
+    #no_data_cnt = 0
     while True: 
         k_repeat = 1
         r_repeat = args.batch_size
@@ -147,7 +147,7 @@ def setup_dist_eval(args):
         req_list = []
         prompt_list = []
         for _ in range(0, k_repeat):
-            print('pop data......')
+            print('pop data......', rank)
             req = RpcReplayBuffer.Pop(request_buffer_name)
             if req is None:
                 break    
@@ -156,12 +156,12 @@ def setup_dist_eval(args):
             prompt_list = prompt_list + [prompt] * r_repeat
         
         if len(req_list) == 0:
-            no_data_cnt = no_data_cnt + 1
-            if no_data_cnt < 10:
-                continue
-            else:
-                print('all finished....' ,rank)
-                break
+            #no_data_cnt = no_data_cnt + 1
+            #if no_data_cnt < 10:
+            #    continue
+            #else:
+            print('all finished....' ,rank)
+            break
             
         _tokens = tokenizer(prompt_list, add_special_tokens=False, max_length=1024, truncation=False)
         input_ids = _tokens['input_ids']
@@ -188,7 +188,7 @@ def setup_dist_eval(args):
                 print('gold answer:\n', req.answer)
                 print('reward:', reward)
 
-            
+            print('push data......', rank)
             RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, responselen = len(output), reward = reward))
         print('push to replaybuffer')
 
