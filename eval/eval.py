@@ -195,7 +195,8 @@ def setup_dist_eval(args):
             print('push data......', rank)
             RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, responselen = len(output), reward = reward))
         print('push to replaybuffer')
-
+        if args.debug2:
+            break
     print('end of all processes....', rank)
     if rank == 0:
         def wait_for_barrier():
@@ -258,6 +259,7 @@ def parse_args():
     parser.add_argument("--max_generation", default=4096, type=int)    
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--early_stop', action='store_true')
+    parser.add_argument('--debug2', action='store_true')
     
     args = parser.parse_args()
     args.top_p = (
