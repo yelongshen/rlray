@@ -240,7 +240,7 @@ class RpcReplayBuffer(AsyncReplayBuffer):
             RpcReplayBuffer.RpcFactory[buffer_name].push(data)
         else:
             main_worker = RpcReplayBuffer.RpcMain[buffer_name]
-            rpc.rpc_sync(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data), timeout=0)
+            rpc.rpc_async(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data), timeout=0)
 
     @staticmethod
     def Pop(buffer_name):
