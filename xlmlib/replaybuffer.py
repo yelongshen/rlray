@@ -240,7 +240,7 @@ class RpcReplayBuffer(AsyncReplayBuffer):
             RpcReplayBuffer.RpcFactory[buffer_name].push(data)
         else:
             main_worker = RpcReplayBuffer.RpcMain[buffer_name]
-            rpc.rpc_async(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data), timeout=0)
+            rpc.rpc_sync(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data), timeout=0)
 
     @staticmethod
     def Pop(buffer_name):
@@ -249,13 +249,12 @@ class RpcReplayBuffer(AsyncReplayBuffer):
         else:
             main_worker = RpcReplayBuffer.RpcMain[buffer_name]
 
-            future = rpc.rpc_async(main_worker, RpcReplayBuffer.Pop, args=(buffer_name,))
-            try:
-                return future.wait(timeout=10)  # Wait at most 2 seconds
-            except: # RuntimeError:  # Handle timeout
-                return None
-            
-            #return rpc.rpc_sync(main_worker, RpcReplayBuffer.Pop, args=(buffer_name, ), timeout=0)
+            #future = rpc.rpc_async(main_worker, RpcReplayBuffer.Pop, args=(buffer_name,))
+            #try:
+            #    return future.wait(timeout=10)  # Wait at most 2 seconds
+            #except: # RuntimeError:  # Handle timeout
+            #    return None
+            return rpc.rpc_sync(main_worker, RpcReplayBuffer.Pop, args=(buffer_name, ), timeout=0)
             #try:
             #    return rpc.rpc_sync(main_worker, RpcReplayBuffer.Pop, args=(buffer_name,), timeout=5)  # Set timeout to 2s
             #except:  # Catch timeout exception
