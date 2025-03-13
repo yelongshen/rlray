@@ -12,6 +12,10 @@ from dataclasses import dataclass
 import numpy
 import datetime
 
+import threading
+import time
+
+
 import xlmlib
 from xlmlib import _SambaForCausalLM, _Phi4ForCausalLM
 from xlmlib import RpcReplayBuffer
@@ -193,8 +197,20 @@ def setup_dist_eval(args):
         print('push to replaybuffer')
 
     print('end of all processes....', rank)
-    
-    dist.barrier()
+    if rank == 0:
+        def wait_for_barrier():
+            """Run dist.barrier() in a separate thread so it doesn’t block RPC processing."""
+            print("Waiting at barrier...")
+            dist.barrier()  # This will block in a separate thread, allowing RPC to continue
+            print("Barrier passed!")
+        # Start `dist.barrier()` in a separate thread
+        barrier_thread = threading.Thread(target=wait_for_barrier, daemon=True)
+        barrier_thread.start()
+        while barrier_thread.is_alive():
+            time.sleep(5)  # Prevent CPU overuse while waiting
+            print("Main thread still running and accepting RPC calls...")
+    else:
+        dist.barrier()
     if rank == 0:
         print('eval length', RpcReplayBuffer.Length(result_buffer_name))
 
