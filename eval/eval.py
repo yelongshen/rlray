@@ -175,8 +175,8 @@ def setup_dist_eval(args):
             if args.debug:
                 print('######################\n\n')
                 print('prompt:\n', prompt)
+                print('response_ids:\n', output)
                 print('response:\n', response)
-                print('filterd response:\n', mid_response)
                 print('extracted_answer:\n', extracted_answer)
                 print('gold answer:\n', req.answer)
                 print('reward:', reward)
