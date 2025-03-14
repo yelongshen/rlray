@@ -7,11 +7,13 @@ import subprocess
 import pickle
 import concurrent.futures
 import time
+import multiprocessing
 
 from latex2sympy.latex2sympy2 import latex2sympy
 from math_evaluation import is_equiv
 #from .math_verify_util import math_verify
 
+            
 def math_verify(gold, answer):
     escaped_answer = answer.replace("\n","\\n").replace("\r","\\r").replace("\\", "\\\\").replace('"', '\\"')
     escaped_gold = gold.replace("\n","\\n").replace("\r","\\r").replace("\\", "\\\\").replace('"', '\\"')
@@ -140,7 +142,27 @@ def safe_math_answer_timeout(response, answers, tokenizer, prompt_type = "v8", a
         return r
     else:
         return response, "none", 0.0
-        
+
+def run_with_timeout_v2(func, args=(), timeout=2):
+    """Runs a function with a timeout. If it exceeds, terminates the process."""
+    with multiprocessing.Pool(processes=1) as pool:
+        result = pool.apply_async(func, args)
+        try:
+            return result.get(timeout=timeout)  # Get result with timeout
+        except multiprocessing.TimeoutError:
+            print("Function call timed out")
+            return False  # Or any fallback value
+
+def run_with_timeout(func, args=(), timeout=2):
+    """Runs a function with a timeout. If it exceeds, terminates the process."""
+    with multiprocessing.Pool(processes=1) as pool:
+        result = pool.apply_async(func, args)
+        try:
+            return result.get(timeout=timeout)  # Get result with timeout
+        except multiprocessing.TimeoutError:
+            print("Function call timed out")
+            return False  # Or any fallback value
+            
 def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'is_equiv', 'text', 'lastline_math_verify', 'full_math_verify']):
     if prompt_type == 'v8':
         pattern_prefix = 'The answer is:'
