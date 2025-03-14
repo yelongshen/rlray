@@ -172,9 +172,9 @@ def setup_dist_eval(args):
         #temperature: float = 0.7,
         #top_p: float = 0.95,
         #early_stop = True,
-        print('start to generate.....')
+        print('start to generate.....', rank)
         outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p, early_stop=args.early_stop, force_wait_tokens = force_tokens)
-        print('end to generate .....')
+        print('end to generate .....', rank)
         
         #assert len(outputs) == args.batch_size
         
@@ -190,7 +190,7 @@ def setup_dist_eval(args):
                 print('response:\n', response)
                 print('extracted_answer:\n', extracted_answer)
                 print('gold answer:\n', req.answer)
-                print('reward:', reward)
+                print('reward:', reward, rank)
 
             print('push data......', rank)
             RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, responselen = len(output), reward = reward))
@@ -208,7 +208,7 @@ def setup_dist_eval(args):
         barrier_thread = threading.Thread(target=wait_for_barrier, daemon=True)
         barrier_thread.start()
         while barrier_thread.is_alive():
-            time.sleep(5)  # Prevent CPU overuse while waiting
+            time.sleep(10)  # Prevent CPU overuse while waiting
             print("Main thread still running and accepting RPC calls...")
     else:
         dist.barrier()
