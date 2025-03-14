@@ -194,7 +194,7 @@ def setup_dist_eval(args):
 
             print('push data......', rank)
             RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, responselen = len(output), reward = reward))
-        print('push to replaybuffer')
+        print('push to replaybuffer', rank)
         if args.debug2:
             break
     print('end of all processes....', rank)
