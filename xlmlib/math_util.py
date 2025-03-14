@@ -127,14 +127,14 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     return prompt
 
-def call_with_timeout(func, *args, timeout=5):
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        future = executor.submit(func, *args)
-        try:
-            return future.result(timeout=timeout)  # This will raise TimeoutError if the function takes longer than timeout
-        except concurrent.futures.TimeoutError:
-            print("Function call timed out")
-            return False
+#def call_with_timeout_v2(func, *args, timeout=5):
+#    with concurrent.futures.ThreadPoolExecutor() as executor:
+#        future = executor.submit(func, *args)
+#        try:
+#            return future.result(timeout=timeout)  # This will raise TimeoutError if the function takes longer than timeout
+#        except concurrent.futures.TimeoutError:
+#            print("Function call timed out")
+#            return False
 
 def safe_math_answer_timeout(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'is_equiv', 'text', 'lastline_math_verify', 'full_math_verify'], timeout=30):
     r = call_with_timeout(process_math_answer, response, answers, tokenizer, prompt_type, alg, timeout=timeout)
@@ -143,7 +143,7 @@ def safe_math_answer_timeout(response, answers, tokenizer, prompt_type = "v8", a
     else:
         return response, "none", 0.0
 
-def run_with_timeout_v2(func, args=(), timeout=2):
+def call_with_timeout(func, *args, timeout=2):
     """Runs a function with a timeout. If it exceeds, terminates the process."""
     with multiprocessing.Pool(processes=1) as pool:
         result = pool.apply_async(func, args)
@@ -153,16 +153,6 @@ def run_with_timeout_v2(func, args=(), timeout=2):
             print("Function call timed out")
             return False  # Or any fallback value
 
-def run_with_timeout(func, args=(), timeout=2):
-    """Runs a function with a timeout. If it exceeds, terminates the process."""
-    with multiprocessing.Pool(processes=1) as pool:
-        result = pool.apply_async(func, args)
-        try:
-            return result.get(timeout=timeout)  # Get result with timeout
-        except multiprocessing.TimeoutError:
-            print("Function call timed out")
-            return False  # Or any fallback value
-            
 def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'is_equiv', 'text', 'lastline_math_verify', 'full_math_verify']):
     if prompt_type == 'v8':
         pattern_prefix = 'The answer is:'
