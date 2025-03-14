@@ -138,7 +138,8 @@ def setup_dist_eval(args):
     force_reflection = '\nWait, please verify the answer again. \n'
     force_tokens = tokenizer([force_reflection], add_special_tokens=False, max_length=1024)
     force_tokens = force_tokens['input_ids'][0]
-    
+
+    local_list = []
     dist.barrier()
     #no_data_cnt = 0
     while True: 
@@ -193,11 +194,17 @@ def setup_dist_eval(args):
                 print('reward:', reward, rank)
 
             print('push data......', rank)
-            RpcReplayBuffer.Push(result_buffer_name, Result(id = req.id, prompt = req.prompt, answer = req.answer, responselen = len(output), reward = reward))
+            local_list.append(Result(id = req.id, prompt = req.prompt, answer = req.answer, responselen = len(output), reward = reward))
+            #
         print('push to replaybuffer', rank)
         if args.debug2:
             break
     print('end of all processes....', rank)
+    
+    for r in local_list:
+        RpcReplayBuffer.Push(result_buffer_name, r)
+
+    print('done with sync data....', rank)    
     if rank == 0:
         def wait_for_barrier():
             """Run dist.barrier() in a separate thread so it doesn’t block RPC processing."""
@@ -212,6 +219,7 @@ def setup_dist_eval(args):
             print("Main thread still running and accepting RPC calls...")
     else:
         dist.barrier()
+        
     if rank == 0:
         print('eval length', RpcReplayBuffer.Length(result_buffer_name))
 
