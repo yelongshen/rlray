@@ -153,6 +153,18 @@ def call_with_timeout(func, *args, timeout=2):
             print("Function call timed out")
             return False  # Or any fallback value
 
+#def call_with_timeout(func, *args, timeout=2):
+#    """Runs a function with a hard timeout using multiprocessing."""
+#    p = multiprocessing.Process(target=func, args=args)
+#    p.start()
+#    p.join(timeout)  # Wait for timeout seconds
+#    if p.is_alive():
+#        print("Function call exceeded timeout. Terminating...")
+#        p.terminate()  # Forcefully terminate
+#        p.join()
+#        return False  # Or any fallback value
+#    return True
+            
 def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'is_equiv', 'text', 'lastline_math_verify', 'full_math_verify']):
     if prompt_type == 'v8':
         pattern_prefix = 'The answer is:'
