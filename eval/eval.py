@@ -19,7 +19,7 @@ import time
 import xlmlib
 from xlmlib import _SambaForCausalLM, _Phi4ForCausalLM
 from xlmlib import RpcReplayBuffer
-from xlmlib import process_math_prompt, process_math_answer
+from xlmlib import process_math_prompt, process_math_answer, safe_math_answer_timeout
 
 
 @dataclass
