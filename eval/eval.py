@@ -152,7 +152,7 @@ def setup_dist_eval(args):
         req_list = []
         prompt_list = []
         for _ in range(0, k_repeat):
-            print('pop data......', rank)
+            #print('pop data......', rank)
             req = RpcReplayBuffer.Pop(request_buffer_name)
             if req is None:
                 break    
@@ -165,7 +165,7 @@ def setup_dist_eval(args):
             #if no_data_cnt < 10:
             #    continue
             #else:
-            print('all finished....' ,rank)
+            #print('all finished....' ,rank)
             break
             
         _tokens = tokenizer(prompt_list, add_special_tokens=False, max_length=1024, truncation=False)
@@ -182,8 +182,17 @@ def setup_dist_eval(args):
         for o_idx, output in enumerate(outputs):
             response = tokenizer.decode(output)
             req = req_list[o_idx // r_repeat]
-            mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer, prompt_type = args.prompt_type)
             
+            if args.debug2:
+                print('######################\n\n')
+                print('processing reward:', response, req.answer, '.....', rank)
+                
+            mid_response, extracted_answer, reward = safe_math_answer_timeout(response, [req.answer], tokenizer, prompt_type = args.prompt_type, timeout=30)
+            if args.debug2:
+                print('extracted_answer:\n', extracted_answer)
+                print('gold answer:\n', req.answer)
+                print('reward:', reward, rank)
+
             if args.debug:
                 print('######################\n\n')
                 print('prompt:\n', prompt)
@@ -193,12 +202,12 @@ def setup_dist_eval(args):
                 print('gold answer:\n', req.answer)
                 print('reward:', reward, rank)
 
-            print('push data......', rank)
+            #print('push data......', rank)
             local_list.append(Result(id = req.id, prompt = req.prompt, answer = req.answer, responselen = len(output), reward = reward))
             #
         print('push to replaybuffer', rank)
-        if args.debug2:
-            break
+        #if args.debug2:
+        #    break
     print('end of all processes....', rank)
     
     for r in local_list:
