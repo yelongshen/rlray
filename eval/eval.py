@@ -187,7 +187,7 @@ def setup_dist_eval(args):
                 print('######################\n\n')
                 print('processing reward:', response, req.answer, '.....', rank)
                 
-            mid_response, extracted_answer, reward = safe_math_answer_timeout(response, [req.answer], tokenizer, prompt_type = args.prompt_type, timeout=30)
+            mid_response, extracted_answer, reward = process_math_answer(response, [req.answer], tokenizer, prompt_type = args.prompt_type) #, timeout=30)
             if args.debug2:
                 print('extracted_answer:\n', extracted_answer)
                 print('gold answer:\n', req.answer)
