@@ -133,7 +133,14 @@ def call_with_timeout(func, *args, timeout=5):
         except concurrent.futures.TimeoutError:
             print("Function call timed out")
             return False
-            
+
+def safe_math_answer_timeout(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'is_equiv', 'text', 'lastline_math_verify', 'full_math_verify'], timeout=30):
+    r = call_with_timeout(process_math_answer, response, answers, tokenizer, prompt_type, alg, timeout=timeout)
+    if r:
+        return r
+    else:
+        return response, "none", 0.0
+        
 def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = ['math_verify', 'is_equiv', 'text', 'lastline_math_verify', 'full_math_verify']):
     if prompt_type == 'v8':
         pattern_prefix = 'The answer is:'
