@@ -218,6 +218,16 @@ class AsyncReplayBuffer(ReplayBuffer):
         with self.lock:
             return super().__len__()
 
+def safe_rpc(worker, func, args, max_retries=100, timeout=10):
+    for attempt in range(max_retries):
+        try:
+            return rpc.rpc_sync(worker, func, args=args, timeout=timeout)
+        except RuntimeError:
+            print(f"RPC attempt {attempt + 1} failed, retrying...")
+            time.sleep(1)  # Wait before retrying
+    print("All RPC attempts failed....")
+    return None
+    
 # the class is served as Rpc factory.
 class RpcReplayBuffer(AsyncReplayBuffer):
     RpcFactory = {}
@@ -240,7 +250,8 @@ class RpcReplayBuffer(AsyncReplayBuffer):
             RpcReplayBuffer.RpcFactory[buffer_name].push(data)
         else:
             main_worker = RpcReplayBuffer.RpcMain[buffer_name]
-            rpc.rpc_sync(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data), timeout=0)
+            safe_rpc(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data))
+            #rpc.rpc_sync(main_worker, RpcReplayBuffer.Push, args=(buffer_name, data), timeout=0)
 
     @staticmethod
     def Pop(buffer_name):
