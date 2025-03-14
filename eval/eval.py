@@ -139,16 +139,16 @@ def setup_dist_eval(args):
     force_tokens = tokenizer([force_reflection], add_special_tokens=False, max_length=1024)
     force_tokens = force_tokens['input_ids'][0]
 
+    k_repeat = 1
+    r_repeat = args.batch_size
+    if args.batch_size > args.n_rollout:
+        k_repeat = args.batch_size // args.n_rollout
+        r_repeat = args.n_rollout
+            
     local_list = []
     dist.barrier()
     #no_data_cnt = 0
-    while True: 
-        k_repeat = 1
-        r_repeat = args.batch_size
-        if args.batch_size > args.n_rollout:
-            k_repeat = args.batch_size // args.n_rollout
-            r_repeat = args.n_rollout
-            
+    while True:     
         req_list = []
         prompt_list = []
         for _ in range(0, k_repeat):
@@ -225,7 +225,7 @@ def setup_dist_eval(args):
 
         avg_response = 0
         eval_results = {}
-        for i in range(0, len(request_list) * args.batch_size):
+        for i in range(0, len(request_list) * r_repeat):
             result = RpcReplayBuffer.Pop(result_buffer_name)
             if result is None:
                 break
@@ -235,7 +235,7 @@ def setup_dist_eval(args):
 
             avg_response = avg_response + result.responselen
 
-        avg_response = avg_response / (len(request_list) * args.batch_size)
+        avg_response = avg_response / (len(request_list) * r_repeat)
         #total_reward = 0
         pass_1 = 0
         pass_n = 0
