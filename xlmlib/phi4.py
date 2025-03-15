@@ -543,7 +543,7 @@ class _Phi4Model(_Phi4PreTrainedModel):
 
 import torch.nn.functional as F
 
-def sample_top_p(probs, top_p=0.9):
+def normalize_probs(probs, top_p=0.9):
     """
     Perform Top-p (Nucleus) Sampling.
     Args:
@@ -569,25 +569,8 @@ def sample_top_p(probs, top_p=0.9):
 
     normalized_probs = probs / probs.sum(dim=-1, keepdim=True)
     # Sample from the filtered distribution
-    sampled_token = torch.multinomial(normalized_probs, num_samples=1)
-    return sampled_token
-
-def embed_top_p(probs, embed, top_p=0.9):
-    # get the embedding of top_p tokens.
-    # Sort tokens by probability
-    sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
-    # Compute cumulative probabilities
-    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-    # Mask tokens where cumulative probability > top_p
-    sorted_indices_to_remove = cumulative_probs > top_p
-    # Keep at least one token
-    #sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-    sorted_indices_to_remove[..., 0] = False    
-    # Set logits of removed tokens to -inf
-    for i in range(probs.size(0)):
-        probs[i, sorted_indices[i, sorted_indices_to_remove[i]]] = 0.0
-    
-    normalized_probs = probs / probs.sum(dim=-1, keepdim=True)
+    # sampled_token = torch.multinomial(normalized_probs, num_samples=1)
+    return normalized_probs #sampled_token
 
 
 # PP, TP, DP
@@ -763,6 +746,10 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             force_wait = True
         #force_wait_tokens = torch.tensor(force_wait_tokens, device="cuda")
 
+        if soft_think:
+            soft_think_start = [33313, 881]
+            soft_think_end = [808, 49631]
+        
         input_text_mask = tokens != pad_id
         
         past_kv = None
@@ -777,10 +764,18 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             
             if temperature > 0:
                 probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
-                next_token = sample_top_p(probs, top_p)
+                norm_probs = normalize_probs(probs, top_p)
+                next_token = torch.multinomial(norm_probs, num_samples=1)
+                #next_token
+                if soft_think:
+                    sampled_tokens = torch.multinomial(norm_probs, num_samples=8, replacement=True)
+                    next_embed = self.model.embed_tokens(sampled_tokens)
+                    next_embed = next_embed.mean(dim = 1)
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             #print('next_token.shape', next_token.shape)
+
+                
             
             next_token = next_token.reshape(-1)
 
