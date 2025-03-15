@@ -571,7 +571,25 @@ def sample_top_p(probs, top_p=0.9):
     # Sample from the filtered distribution
     sampled_token = torch.multinomial(normalized_probs, num_samples=1)
     return sampled_token
+
+def embed_top_p(probs, embed, top_p=0.9):
+    # get the embedding of top_p tokens.
+    # Sort tokens by probability
+    sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+    # Compute cumulative probabilities
+    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+    # Mask tokens where cumulative probability > top_p
+    sorted_indices_to_remove = cumulative_probs > top_p
+    # Keep at least one token
+    #sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+    sorted_indices_to_remove[..., 0] = False    
+    # Set logits of removed tokens to -inf
+    for i in range(probs.size(0)):
+        probs[i, sorted_indices[i, sorted_indices_to_remove[i]]] = 0.0
     
+    normalized_probs = probs / probs.sum(dim=-1, keepdim=True)
+
+
 # PP, TP, DP
 # Causal Large Language Model 
 class _Phi4ForCausalLM(_Phi4PreTrainedModel):
@@ -710,6 +728,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         top_p: float = 0.95,
         early_stop = True,
         force_wait_tokens : List[int] = None,
+        soft_think = False
     ) -> Tuple[ List[List[int]], List[List[float]] ]: # these are the actions[token index, critic score, prob] 
         
         bsz = len(prompt_tokens)
