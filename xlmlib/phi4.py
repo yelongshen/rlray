@@ -772,7 +772,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             #print('past_kv[0][1].shape', past_kv[0][1].shape)
             
             if temperature > 0:
-                probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
+                probs = torch.softmax( (logits[:, -1] / temperature).to(torch.float32), dim=-1)
                 norm_probs = normalize_probs(probs, top_p)
                 next_token = torch.multinomial(norm_probs, num_samples=1)
                 #next_token
