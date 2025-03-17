@@ -717,7 +717,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         top_p: float = 0.95,
         early_stop = True,
         force_wait_tokens : List[int] = None,
-        soft_think = False
+        soft_topk = 0,
     ) -> Tuple[ List[List[int]], List[List[float]] ]: # these are the actions[token index, critic score, prob] 
         
         bsz = len(prompt_tokens)
@@ -752,13 +752,13 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             force_wait = True
         #force_wait_tokens = torch.tensor(force_wait_tokens, device="cuda")
 
-        if soft_think:
-            soft_think_start = [33313, 881]
-            soft_think_end = [808, 49631]
-        
+        soft_think = True if soft_topk > 0 else False
+        soft_think_start = [33313, 881]
+        soft_think_end = [808, 49631]
+        soft_think_status = torch.tensor([False] * bsz, device="cuda")
+
         input_text_mask = tokens != pad_id
         #if soft_think:
-        soft_think_status = torch.tensor([False] * bsz, device="cuda")
 
         next_embed = None
         past_kv = None
@@ -778,7 +778,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                 #next_token
                 if soft_think:
                     next_hard_embed = self.model.embed_tokens(next_token)
-                    sampled_tokens = torch.multinomial(norm_probs, num_samples=16, replacement=True)
+                    sampled_tokens = torch.multinomial(norm_probs, num_samples = soft_topk, replacement=True)
                     next_soft_embed = self.model.embed_tokens(sampled_tokens)
                     next_soft_embed = next_soft_embed.mean(dim = 1).unsqueeze(dim = 1)
             else:
