@@ -470,6 +470,7 @@ class _Phi4Model(_Phi4PreTrainedModel):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
+        input_embed : torch.FloatTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[Tuple[torch.FloatTensor, torch.FloatTensor]]] = None,
         inference_mode = False,
@@ -489,7 +490,10 @@ class _Phi4Model(_Phi4PreTrainedModel):
         else:
             position_ids = position_ids.view(-1, seq_length).long()
         #if inputs_embeds is None:
-        inputs_embeds = self.embed_tokens(input_ids)
+        if input_embed is not None:
+            inputs_embeds = input_embed
+        else:
+            inputs_embeds = self.embed_tokens(input_ids)
         
         if self._attn_implementation == "flash_attention_2":
             # 2d mask is passed through the layers
@@ -659,6 +663,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
+        input_embed: torch.FloatTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[Tuple[torch.FloatTensor, torch.FloatTensor]]] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -670,11 +675,12 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
     ):
         hidden_states, next_decoder_cache = self.model(
             input_ids=input_ids,
+            input_embed=input_embed,
             position_ids=position_ids,
             past_key_values=past_key_values,
-            inference_mode = inference_mode,
-            max_generation = max_generation,
-            cur_pos = cur_pos,
+            inference_mode=inference_mode,
+            max_generation=max_generation,
+            cur_pos=cur_pos,
         )
 
 
@@ -751,12 +757,14 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             soft_think_end = [808, 49631]
         
         input_text_mask = tokens != pad_id
-        soft_think_status = [False] * bsz
-        
+        #if soft_think:
+        soft_think_status = torch.tensor([False] * bsz, device="cuda")
+
+        next_embed = None
         past_kv = None
         pos = None
         for cur_pos in range(min_prompt_len, total_len):
-            _, logits, critics, past_kv  = self.forward(tokens[:, prev_pos:cur_pos], position_ids = pos, past_key_values=past_kv, inference_mode=True, max_generation=max_gen_len, cur_pos = prev_pos)
+            _, logits, critics, past_kv  = self.forward(input_ids = tokens[:, prev_pos:cur_pos], input_embed = next_embed, position_ids = pos, past_key_values=past_kv, inference_mode=True, max_generation=max_gen_len, cur_pos = prev_pos)
 
             #print('logits.shape', logits.shape)
             #print('past_kv len', len(past_kv))
@@ -769,15 +777,14 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                 next_token = torch.multinomial(norm_probs, num_samples=1)
                 #next_token
                 if soft_think:
-                    sampled_tokens = torch.multinomial(norm_probs, num_samples=8, replacement=True)
+                    next_hard_embed = self.model.embed_tokens(next_token)
+                    sampled_tokens = torch.multinomial(norm_probs, num_samples=16, replacement=True)
                     next_soft_embed = self.model.embed_tokens(sampled_tokens)
-                    next_soft_embed = next_soft_embed.mean(dim = 1)
+                    next_soft_embed = next_soft_embed.mean(dim = 1).unsqueeze(dim = 1)
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             #print('next_token.shape', next_token.shape)
-
-                
-            
+    
             next_token = next_token.reshape(-1)
 
             if not early_stop and force_wait:
@@ -787,14 +794,17 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                         input_text_mask[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = True
 
             if soft_think:
+                next_embed = torch.where(
+                    soft_think_status.unsqueeze(dim=1), next_hard_embed.squeeze(dim=1), next_soft_embed.squeeze(dim=1)).unsqueeze(dim=1)
+            
                 for bsz_idx in range(0, bsz):
                     # switch mode. 
-                    
-                    #if not soft_think_status[bsz_idx]:
-                        if tokens[bsz_idx, cur_pos-1] ==
-                    #else:
-                     
-                if tokens[
+                    if tokens[bsz_idx, cur_pos-1] == soft_think_start[0] and tokens[bsz_idx, cur_pos] == soft_think_start[1]:
+                        soft_think_status[bsz_idx] = True
+
+                    if tokens[bsz_idx, cur_pos-1] == soft_think_end[0] and tokens[bsz_idx, cur_pos] == soft_think_end[1]:
+                        soft_think_status[bsz_idx] = False
+            
             # only replace token if prompt has already been generated
             next_token = torch.where(
                 input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
