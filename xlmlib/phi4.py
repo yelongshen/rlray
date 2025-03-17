@@ -776,14 +776,6 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                 norm_probs = normalize_probs(probs, top_p)
                 next_token = torch.multinomial(norm_probs, num_samples=1)
                 #next_token
-                if soft_think:
-                    next_hard_embed = self.model.embed_tokens(next_token)
-                    if soft_topk == 1:
-                        next_soft_embed = next_hard_embed
-                    else:    
-                        sampled_tokens = torch.multinomial(norm_probs, num_samples = soft_topk, replacement=True)
-                        next_soft_embed = self.model.embed_tokens(sampled_tokens)
-                        next_soft_embed = next_soft_embed.mean(dim = 1).unsqueeze(dim = 1)
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             #print('next_token.shape', next_token.shape)
@@ -803,7 +795,15 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             tokens[:, cur_pos] = next_token
 
 
-            if soft_think:
+            if soft_think:                
+                next_hard_embed = self.model.embed_tokens(next_token.unsqueeze(dim=1))
+                if soft_topk == 1:
+                    next_soft_embed = next_hard_embed
+                else:    
+                    sampled_tokens = torch.multinomial(norm_probs, num_samples = soft_topk, replacement=True)
+                    next_soft_embed = self.model.embed_tokens(sampled_tokens)
+                    next_soft_embed = next_soft_embed.mean(dim = 1).unsqueeze(dim = 1)
+
                 next_embed = next_hard_embed
                 #torch.where(
                 #    soft_think_status.unsqueeze(dim=1), next_soft_embed.squeeze(dim=1), next_hard_embed.squeeze(dim=1)).unsqueeze(dim=1)
