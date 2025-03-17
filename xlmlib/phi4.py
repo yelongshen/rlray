@@ -452,7 +452,7 @@ class _Phi4Model(_Phi4PreTrainedModel):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size) #, self.padding_idx)
         self.embed_dropout = nn.Dropout(config.embd_pdrop)
         self.layers = nn.ModuleList(
             [_Phi4DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
@@ -490,11 +490,11 @@ class _Phi4Model(_Phi4PreTrainedModel):
         else:
             position_ids = position_ids.view(-1, seq_length).long()
         #if inputs_embeds is None:
-        if input_embed is not None:
-            inputs_embeds = input_embed
-        else:
+        if input_embed is None:
             inputs_embeds = self.embed_tokens(input_ids)
-        
+        else:
+            inputs_embeds = input_embed
+        #else:
         if self._attn_implementation == "flash_attention_2":
             # 2d mask is passed through the layers
             attention_mask = None # attention_mask if (attention_mask is not None and 0 in attention_mask) else None
@@ -804,16 +804,15 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
 
 
             if soft_think:
-                next_embed = torch.where(
-                    soft_think_status.unsqueeze(dim=1), next_soft_embed.squeeze(dim=1), next_hard_embed.squeeze(dim=1)).unsqueeze(dim=1)
-            
-                for bsz_idx in range(0, bsz):
-                    # switch mode. 
-                    if tokens[bsz_idx, cur_pos-1] == soft_think_start[0] and tokens[bsz_idx, cur_pos] == soft_think_start[1]:
-                        soft_think_status[bsz_idx] = True
-
-                    if tokens[bsz_idx, cur_pos-1] == soft_think_end[0] and tokens[bsz_idx, cur_pos] == soft_think_end[1]:
-                        soft_think_status[bsz_idx] = False
+                next_embed = next_hard_embed
+                #torch.where(
+                #    soft_think_status.unsqueeze(dim=1), next_soft_embed.squeeze(dim=1), next_hard_embed.squeeze(dim=1)).unsqueeze(dim=1)
+                #for bsz_idx in range(0, bsz):
+                #    # switch mode. 
+                #    if tokens[bsz_idx, cur_pos-1] == soft_think_start[0] and tokens[bsz_idx, cur_pos] == soft_think_start[1]:
+                #        soft_think_status[bsz_idx] = True
+                #    if tokens[bsz_idx, cur_pos-1] == soft_think_end[0] and tokens[bsz_idx, cur_pos] == soft_think_end[1]:
+                #        soft_think_status[bsz_idx] = False
                         
             #print('tokens', tokens)
             #print(logits.shape)
