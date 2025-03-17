@@ -91,9 +91,9 @@ def process_math_prompt(original_question, prompt_type = "v8"):
 
     candidate_prompt_14 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n <|user|>: "
 
-    candidate_prompt_16 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n<|user|>"
+    candidate_prompt_16 = "You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n<|user|>"
 
-    candidate_prompt_17 = r"You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
+    candidate_prompt_17 = "You will be given a problem. Please reason step by step, and put your final answer within \\boxed{}:\n"
 
     postfix_instruct = ''
     
