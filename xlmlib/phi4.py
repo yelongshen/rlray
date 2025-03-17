@@ -778,9 +778,12 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                 #next_token
                 if soft_think:
                     next_hard_embed = self.model.embed_tokens(next_token)
-                    sampled_tokens = torch.multinomial(norm_probs, num_samples = soft_topk, replacement=True)
-                    next_soft_embed = self.model.embed_tokens(sampled_tokens)
-                    next_soft_embed = next_soft_embed.mean(dim = 1).unsqueeze(dim = 1)
+                    if soft_topk == 1:
+                        next_soft_embed = next_hard_embed
+                    else:    
+                        sampled_tokens = torch.multinomial(norm_probs, num_samples = soft_topk, replacement=True)
+                        next_soft_embed = self.model.embed_tokens(sampled_tokens)
+                        next_soft_embed = next_soft_embed.mean(dim = 1).unsqueeze(dim = 1)
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             #print('next_token.shape', next_token.shape)
