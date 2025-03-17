@@ -795,7 +795,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
 
             if soft_think:
                 next_embed = torch.where(
-                    soft_think_status.unsqueeze(dim=1), next_hard_embed.squeeze(dim=1), next_soft_embed.squeeze(dim=1)).unsqueeze(dim=1)
+                    soft_think_status.unsqueeze(dim=1), next_soft_embed.squeeze(dim=1), next_hard_embed.squeeze(dim=1)).unsqueeze(dim=1)
             
                 for bsz_idx in range(0, bsz):
                     # switch mode. 
