@@ -770,7 +770,6 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             #print('past_kv len', len(past_kv))
             #print('past_kv[0][0].shape', past_kv[0][0].shape)
             #print('past_kv[0][1].shape', past_kv[0][1].shape)
-            
             if temperature > 0:
                 probs = torch.softmax( (logits[:, -1] / temperature).to(torch.float32), dim=-1)
                 norm_probs = normalize_probs(probs, top_p)
@@ -804,15 +803,15 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                     next_soft_embed = self.model.embed_tokens(sampled_tokens)
                     next_soft_embed = next_soft_embed.mean(dim = 1).unsqueeze(dim = 1)
 
-                next_embed = next_hard_embed
-                #torch.where(
-                #    soft_think_status.unsqueeze(dim=1), next_soft_embed.squeeze(dim=1), next_hard_embed.squeeze(dim=1)).unsqueeze(dim=1)
-                #for bsz_idx in range(0, bsz):
-                #    # switch mode. 
-                #    if tokens[bsz_idx, cur_pos-1] == soft_think_start[0] and tokens[bsz_idx, cur_pos] == soft_think_start[1]:
-                #        soft_think_status[bsz_idx] = True
-                #    if tokens[bsz_idx, cur_pos-1] == soft_think_end[0] and tokens[bsz_idx, cur_pos] == soft_think_end[1]:
-                #        soft_think_status[bsz_idx] = False
+                #next_hard_embed
+                next_embed = torch.where(
+                        soft_think_status.unsqueeze(dim=1), next_soft_embed.squeeze(dim=1), next_hard_embed.squeeze(dim=1)).unsqueeze(dim=1)
+                for bsz_idx in range(0, bsz):
+                    # switch mode. 
+                    if tokens[bsz_idx, cur_pos-1] == soft_think_start[0] and tokens[bsz_idx, cur_pos] == soft_think_start[1]:
+                        soft_think_status[bsz_idx] = True
+                    if tokens[bsz_idx, cur_pos-1] == soft_think_end[0] and tokens[bsz_idx, cur_pos] == soft_think_end[1]:
+                        soft_think_status[bsz_idx] = False
                         
             #print('tokens', tokens)
             #print(logits.shape)
