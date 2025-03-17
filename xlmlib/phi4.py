@@ -751,6 +751,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             soft_think_end = [808, 49631]
         
         input_text_mask = tokens != pad_id
+        soft_think_status = [False] * bsz
         
         past_kv = None
         pos = None
@@ -769,8 +770,8 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                 #next_token
                 if soft_think:
                     sampled_tokens = torch.multinomial(norm_probs, num_samples=8, replacement=True)
-                    next_embed = self.model.embed_tokens(sampled_tokens)
-                    next_embed = next_embed.mean(dim = 1)
+                    next_soft_embed = self.model.embed_tokens(sampled_tokens)
+                    next_soft_embed = next_soft_embed.mean(dim = 1)
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             #print('next_token.shape', next_token.shape)
@@ -784,7 +785,16 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                     if (_token == eos_id1 or _token == eos_id2) and cur_pos + force_wait_tokens.shape[0] < total_len:
                         tokens[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = force_wait_tokens
                         input_text_mask[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = True
-                        
+
+            if soft_think:
+                for bsz_idx in range(0, bsz):
+                    # switch mode. 
+                    
+                    #if not soft_think_status[bsz_idx]:
+                        if tokens[bsz_idx, cur_pos-1] ==
+                    #else:
+                     
+                if tokens[
             # only replace token if prompt has already been generated
             next_token = torch.where(
                 input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
