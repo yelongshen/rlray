@@ -795,6 +795,13 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                     if (_token == eos_id1 or _token == eos_id2) and cur_pos + force_wait_tokens.shape[0] < total_len:
                         tokens[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = force_wait_tokens
                         input_text_mask[bsz_idx, cur_pos: cur_pos + force_wait_tokens.shape[0]] = True
+            
+            # only replace token if prompt has already been generated
+            next_token = torch.where(
+                input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
+            )
+            tokens[:, cur_pos] = next_token
+
 
             if soft_think:
                 next_embed = torch.where(
@@ -807,13 +814,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
 
                     if tokens[bsz_idx, cur_pos-1] == soft_think_end[0] and tokens[bsz_idx, cur_pos] == soft_think_end[1]:
                         soft_think_status[bsz_idx] = False
-            
-            # only replace token if prompt has already been generated
-            next_token = torch.where(
-                input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
-            )
-            tokens[:, cur_pos] = next_token
-            
+                        
             #print('tokens', tokens)
             #print(logits.shape)
             
