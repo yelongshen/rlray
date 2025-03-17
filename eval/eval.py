@@ -174,9 +174,8 @@ def setup_dist_eval(args):
         #top_p: float = 0.95,
         #early_stop = True,
         print('start to generate.....', rank)
-        outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p, early_stop=args.early_stop, force_wait_tokens = force_tokens)
+        outputs, _, _ = model.generate(input_ids, max_gen_len = args.max_generation, temperature = args.temperature, top_p = args.top_p, early_stop=args.early_stop, force_wait_tokens = force_tokens, soft_topk=args.soft_topk)
         print('end to generate .....', rank)
-        
         #assert len(outputs) == args.batch_size
         
         for o_idx, output in enumerate(outputs):
@@ -277,6 +276,7 @@ def parse_args():
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--early_stop', action='store_true')
     parser.add_argument('--debug2', action='store_true')
+    parser.add_argument('--soft_topk', default=0, type=int)
     
     args = parser.parse_args()
     args.top_p = (
