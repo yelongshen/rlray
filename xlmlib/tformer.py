@@ -522,7 +522,7 @@ class _TformerForCausalLM(_PreTrainedModel):
                 #loss = self.loss_function(logits, labels, self.vocab_size, **loss_kwargs)
                 logits_flat = logits.reshape(-1, self.vocab_size)    # Shape: (batch_size * seq_len, vocab_size)
                 target_flat = labels.reshape(-1)            # Shape: (batch_size * seq_len)
-                loss = criterion(logits, target_flat)
+                loss = self.criterion(logits_flat, target_flat)
         else:
             states = hidden_states[:, -num_logits_to_keep:, :]
             loss = LigerFusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), self.lm_head.weight, labels.reshape(-1), None, None, -100, 0.0, 0.0, 'none', None, False)
