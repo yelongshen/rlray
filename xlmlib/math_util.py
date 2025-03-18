@@ -11,7 +11,8 @@ import multiprocessing
 
 from transformers.utils import logging
 
-#from .math_verify_util import math_verify
+logger = logging.get_logger(__name__)
+
 try:
     from math_evaluation import is_equiv
 except ImportError as error:
