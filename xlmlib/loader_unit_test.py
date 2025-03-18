@@ -16,10 +16,10 @@ def create_dataloader(
     #datasets = []
     #data_config = train_data_config if split == "train" else val_data_config
     #for prefix, _ in data_config:
-    filenames = sorted(glob.glob(str(data_dir / f"{prefix}*")))
+    filenames = sorted(glob.glob(f'{data_dir}/{split}*'))
     random.seed(seed)
     random.shuffle(filenames)
-    print('length of files', len(filenames), prefix)
+    print('length of files', len(filenames), split)
   
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
