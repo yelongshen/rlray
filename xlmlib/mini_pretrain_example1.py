@@ -164,8 +164,8 @@ def main(args):
         if data_idx >= num_training_steps * gradient_accumulation_steps:
             break
         #print('data', data.shape, data) 
-        input_ids = train_data[:, 0 : seq_len].contiguous().to(frabic.device)
-        targets = train_data[:, 1 : seq_len + 1].contiguous().to(frabic.device)
+        input_ids = train_data[:, 0 : seq_len].contiguous().to(fabric.device)
+        targets = train_data[:, 1 : seq_len + 1].contiguous().to(fabric.device)
 
         is_grad_sync = (data_idx + 1) % gradient_accumulation_steps == 0
         if is_grad_sync:
@@ -184,7 +184,7 @@ def main(args):
 
         if (data_idx + 1) % step_log == 0:
             dist.all_reduce(micro_loss_log, op=dist.ReduceOp.SUM)  # Sum losses across GPUs
-            micro_loss_log = micro_loss_log / frabic.world_size
+            micro_loss_log = micro_loss_log / fabric.world_size
 
             avg_loss_log = avg_loss_log + micro_loss_log
             avg_step = avg_step + 1
