@@ -137,12 +137,12 @@ def main(args):
     llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
     print('distributed language model creation.') 
 
-    train_loader = create_dataloader(8, 4096, args.data, split='train')
+    train_loader = create_dataloader(args.batch_size, 4096, args.data, split='train')
     #valid_loader = create_dataloader(8, 4096, args.data, split='valid')
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="none", help="path to pretraining dataset.")
-    parser.add_argument("--batch_size", type=int, default=)
+    parser.add_argument("--batch_size", type=int, default=8, help='batch size.')
     parser.add_argument("--model_type", type=str, default="tformer400m", choices=["tformer400m", "xformer400m"], help="choose model type.")
     
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
