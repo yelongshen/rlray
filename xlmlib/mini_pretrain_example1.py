@@ -82,8 +82,8 @@ def create_dataloader(
     random.shuffle(filenames)
     print('length of files', len(filenames), split)
 
-    rank = int(os.environ['RANK']) 
-    world_size = int(os.environ['WORLD_SIZE']) 
+    #rank = int(os.environ['RANK']) 
+    #world_size = int(os.environ['WORLD_SIZE']) 
 
     dataset = PackedDataset(
             filenames,
@@ -93,9 +93,9 @@ def create_dataloader(
             n_chunks=8,
             block_size = block_size,
             shuffle=shuffle,
-            seed=seed+rank,
-            num_processes=world_size,
-            process_rank=rank,
+            seed=seed+fabric.rank,
+            num_processes=fabric.world_size,
+            process_rank=fabric.rank,
         )
     return DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
     #return dataset
@@ -137,16 +137,27 @@ def main(args):
     llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
     print('distributed language model creation.') 
 
-    train_loader = create_dataloader(args.batch_size, 4096, args.data, split='train')
+    # setup optimization.
+    optimizer = torch.optim.AdamW(llm.parameters(), lr=args.lr) # 1.0e-6) 
+    num_training_steps = args.num_training_step // fabric.world_size #dataset['train'].num_rows * args.epoch * args.n_rollout * 1.0 / (args.replay_size * world_size) # num_epochs * len(train_dataloader)    
+    warmup_steps = args.warmup_step * num_training_steps
+    scheduler = get_linear_schedule_with_warmup( 
+        optimizer, num_warmup_steps = int(warmup_steps), num_training_steps = int(num_training_steps) 
+    )     
+    
+    train_loader = create_dataloader(args.micro_batch_size, 4096, args.data, split='train')
     #valid_loader = create_dataloader(8, 4096, args.data, split='valid')
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="none", help="path to pretraining dataset.")
-    parser.add_argument("--batch_size", type=int, default=8, help='batch size.')
+    parser.add_argument("--micro_batch_size", type=int, default=4, help='batch size.')
+    parser.add_argument("--batch_size", type=int, default=256, help='overall batch size.')
+    
     parser.add_argument("--model_type", type=str, default="tformer400m", choices=["tformer400m", "xformer400m"], help="choose model type.")
     
+    parser.add_argument("--num_training_step", type=int, default=100000, help="number of training step.")
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
-    parser.add_argument("--lr", type=float, default=1e-6, help="peak learning rate.")
+    parser.add_argument("--lr", type=float, default=1e-4, help="peak learning rate.")
     parser.add_argument("--epoch", type=int, default=30, help="number of epoches.")
     
     parser.add_argument("--save_per_steps", type=int, default=40, help="save ckpt per steps.")
