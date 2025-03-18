@@ -20,7 +20,35 @@ def create_dataloader(
     random.seed(seed)
     random.shuffle(filenames)
     print('length of files', len(filenames), split)
-  
+
+    rank = int(os.environ['RANK']) 
+    world_size = int(os.environ['WORLD_SIZE']) 
+
+    dataset = PackedDataset(
+            filenames,
+            # n_chunks control the buffer size. 
+            # Note that the buffer size also impacts the random shuffle
+            # (PackedDataset is an IterableDataset. So the shuffle is done by prefetch a buffer and shuffle the buffer)
+            n_chunks=8,
+            block_size = block_size,
+            shuffle=shuffle,
+            seed=seed+rank,
+            num_processes=world_size,
+            process_rank=rank,
+        )
+
+def test_dataloader(loader, test_iters):
+    for data_idx, data in enumerate(loader):
+        if data_idx >= test_iters:
+            break
+        print('data', data.shape, data) 
+        #for i, length in enumerate([4096, 8192, 12288, 16384]):   #[2048, 4096, 8192, 16384]
+        #    input_ids = val_data[:, 0 : length].contiguous()
+        #    targets = val_data[:, 1 : length + 1].contiguous()
+        #    logits = model(input_ids).logits
+        #    loss = chunked_cross_entropy(logits, targets, chunk_size=0)
+        #    losses[k,i] = loss.item()
+            
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="none", help="path to pretrained data.")
@@ -41,6 +69,10 @@ if __name__ == "__main__":
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)    
     ########################################################
 
-    create_dataloader(8, 4096, args.data, split='train')
-    create_dataloader(8, 4096, args.data, split='valid')
-    
+    train_loader = create_dataloader(8, 4096, args.data, split='train')
+    valid_loader = create_dataloader(8, 4096, args.data, split='valid')
+
+    print('start to test train loader', rank)
+    test_dataloader(train_loader, 10)
+    print('start to test valid loader', rank)
+    test_dataloader(valid_loader, 8)
