@@ -211,7 +211,9 @@ def main(args):
                 print(f"Checkpoint saved at: {save_path}")
             
             if (scheduler._step_count+1) % step_log == 0:
-                dist.all_reduce(micro_loss_log / micro_step, op=dist.ReduceOp.SUM)  # Sum losses across GPUs
+                micro_loss_log = micro_loss_log / micro_step
+                
+                dist.all_reduce(micro_loss_log, op=dist.ReduceOp.SUM)  # Sum losses across GPUs
                 micro_loss_log = micro_loss_log / fabric.world_size
 
                 avg_loss_log = avg_loss_log + micro_loss_log
