@@ -25,7 +25,6 @@ from typing import List, Optional, Tuple, Union, Any, Dict, Optional
 import concurrent.futures
 from concurrent.futures import TimeoutError
 from functools import partial
-from contextlib import redirect_stdout
 from dataclasses import dataclass
 from collections import deque
 
@@ -41,11 +40,6 @@ from torch.optim import AdamW
 
 from accelerate import Accelerator
 
-from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
-from safetensors.torch import load_file
-
-from transformers import AutoConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline 
 from transformers import get_linear_schedule_with_warmup
 from transformers.activations import ACT2FN
 
