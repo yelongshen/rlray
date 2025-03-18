@@ -36,7 +36,8 @@ def create_dataloader(
             num_processes=world_size,
             process_rank=rank,
         )
-
+    return DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
+    #return dataset
 def test_dataloader(loader, test_iters):
     for data_idx, data in enumerate(loader):
         if data_idx >= test_iters:
