@@ -180,7 +180,6 @@ class _FlashAttention2(nn.Module):
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
-        self.original_max_position_embeddings = config.original_max_position_embeddings
         self.rope_theta = config.rope_theta
         self.rope_scaling = config.rope_scaling
         self.is_causal = True
