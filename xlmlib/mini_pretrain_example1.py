@@ -150,7 +150,7 @@ def main(args):
     loss_scalar = 1.0 / gradient_accumulation_steps
     
     def gradient_pass(input, target, scalar):
-        loss, _, _ = llm(input_ids=input, labels=target)
+        loss, _, _ = llm(input_ids=input, labels=target, fuse_loss=args.fuse_loss)
         avg_loss = loss.mean()
         (avg_loss * scalar).backward()
         return avg_loss.detach()
@@ -219,7 +219,8 @@ if __name__ == "__main__":
     
     parser.add_argument("--save_per_steps", type=int, default=40, help="save ckpt per steps.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
-    
+    parser.add_argument('--fuse_loss', action='store_true')
+
     args = parser.parse_args()
     
     main(args)
