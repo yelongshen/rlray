@@ -530,4 +530,3 @@ class _TformerForCausalLM(_PreTrainedModel):
         return loss, logits, critics, next_decoder_cache 
     
         
-        return out_tokens, out_logprobs, out_critics
