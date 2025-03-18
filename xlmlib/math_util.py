@@ -9,11 +9,14 @@ import concurrent.futures
 import time
 import multiprocessing
 
-from latex2sympy.latex2sympy2 import latex2sympy
-from math_evaluation import is_equiv
 #from .math_verify_util import math_verify
+try:
+    from math_evaluation import is_equiv
+except ImportError as error:
+    logger.warning(
+        f"`math_evaluation` package not found, consider installing for better performance: {error}."
+    )
 
-            
 def math_verify(gold, answer):
     escaped_answer = answer.replace("\n","\\n").replace("\r","\\r").replace("\\", "\\\\").replace('"', '\\"')
     escaped_gold = gold.replace("\n","\\n").replace("\r","\\r").replace("\\", "\\\\").replace('"', '\\"')
