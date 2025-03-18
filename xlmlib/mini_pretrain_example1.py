@@ -157,7 +157,8 @@ def main(args):
         
 
     micro_loss_log = 0
-    step_log = 100 # print loss every 100 steps.
+    micro_step = 0
+    step_log = 20 # print loss every 100 steps.
     avg_loss_log = 0
     avg_step = 0
     for data_idx, train_data in enumerate(train_loader):
@@ -174,35 +175,38 @@ def main(args):
             with llm.no_sync():
                 _loss = gradient_pass(input_ids, targets, loss_scalar)
 
-        
+
+        micro_loss_log = micro_loss_log + _loss
+        micro_step = micro_step + 1
         if is_grad_sync:
             optimizer.step()
             optimizer.zero_grad()
             scheduler.step()
 
-        micro_loss_log = micro_loss_log + _loss
-
-        if (data_idx + 1) % step_log == 0:
-            dist.all_reduce(micro_loss_log, op=dist.ReduceOp.SUM)  # Sum losses across GPUs
-            micro_loss_log = micro_loss_log / fabric.world_size
-
-            avg_loss_log = avg_loss_log + micro_loss_log
-            avg_step = avg_step + 1
-            
-            if rank == 0:  # Print only on rank 0
-                print(f"Data: {data_idx}, Update: {scheduler._step_count}, Loss: {micro_loss_log.item():.4f}, Avg Loss: {avg_loss_log.item() / avg_step:.4f}")
-
-            micro_loss_log = 0
-
-        if (scheduler._step_count+1) % args.save_per_steps == 0 and rank == 0:
-            checkpoint = {
+            if (scheduler._step_count+1) % args.save_per_steps == 0 and rank == 0:
+                checkpoint = {
                         "step": scheduler._step_count,
                         "model_state_dict": llm.module.state_dict(),  # Remove DDP wrapper
                         }
-            save_path = f"{args.save_ckpt}/ckpt_{scheduler._step_count}.pth"
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            torch.save(checkpoint, save_path)
-            print(f"Checkpoint saved at: {save_path}")
+                save_path = f"{args.save_ckpt}/ckpt_{scheduler._step_count}.pth"
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                torch.save(checkpoint, save_path)
+                print(f"Checkpoint saved at: {save_path}")
+            
+            if (scheduler._step_count+1) % step_log == 0:
+                dist.all_reduce(micro_loss_log / micro_step, op=dist.ReduceOp.SUM)  # Sum losses across GPUs
+                micro_loss_log = micro_loss_log / fabric.world_size
+
+                avg_loss_log = avg_loss_log + micro_loss_log
+                avg_step = avg_step + 1
+            
+                if rank == 0:  # Print only on rank 0
+                    print(f"Data: {data_idx + 1}, Update: {scheduler._step_count + 1}, Loss: {micro_loss_log.item():.4f}, Avg Loss: {avg_loss_log.item() / avg_step:.4f}")
+
+                micro_loss_log = 0
+                micro_step = 0
+
+        
                         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -217,7 +221,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-4, help="peak learning rate.")
     parser.add_argument("--epoch", type=int, default=30, help="number of epoches.")
     
-    parser.add_argument("--save_per_steps", type=int, default=40, help="save ckpt per steps.")
+    parser.add_argument("--save_per_steps", type=int, default=1000, help="save ckpt per steps.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
     parser.add_argument('--fuse_loss', action='store_true')
 
