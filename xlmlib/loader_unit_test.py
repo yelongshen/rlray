@@ -7,7 +7,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 
-from .packed_dataset import PackedDataset
+from packed_dataset import PackedDataset
 
 
 def create_dataloader(
