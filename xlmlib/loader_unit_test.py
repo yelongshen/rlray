@@ -1,13 +1,13 @@
 import os
 import glob
 import argparse
+import random
 
 import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 
-from packed_dataset import PackedDataset
-import random
+from .packed_dataset import PackedDataset
 
 
 def create_dataloader(
