@@ -190,7 +190,9 @@ def main(args):
             with llm.no_sync():
                 _loss = gradient_pass(input_ids, targets, loss_scalar)
 
-
+        if args.debug and fabric.rank == 0:
+            print('one pass loss...', _loss)
+            
         micro_loss_log = micro_loss_log + _loss
         micro_step = micro_step + 1
         if is_grad_sync:
@@ -239,6 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_per_steps", type=int, default=1000, help="save ckpt per steps.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
     parser.add_argument('--fuse_loss', action='store_true')
+    parser.add_argument('--debug', action='store_true')
 
     args = parser.parse_args()
     
