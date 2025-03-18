@@ -46,6 +46,8 @@ class PackedDataset(IterableDataset):
     def __iter__(self):
         worker_info = get_worker_info()
         num_workers = worker_info.num_workers if worker_info is not None else 1
+
+        print('num_workers:', num_workers)
         worker_id = worker_info.id if worker_info is not None else 0
         num_shards = num_workers * self._num_processes
         shard_id = self._process_rank * num_workers + worker_id
