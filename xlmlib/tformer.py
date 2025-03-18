@@ -162,7 +162,7 @@ class _MLP(nn.Module):
 class _FlashAttention2(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
     def __init__(self, config, layer_idx: Optional[int] = None):
-        super().__init__(*args, **kwargs)
+        #super().__init__(*args, **kwargs)
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
