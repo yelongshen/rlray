@@ -49,7 +49,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from transformers import get_linear_schedule_with_warmup
 from transformers.activations import ACT2FN
 
-
+from packed_dataset import PackedDataset
 #from replaybuffer import ReplayBuffer, Sample, AsyncReplayBuffer
 #from ppo import ppo_gradient, ppo_gradient_v2
 #from sft import sft_gradient
@@ -72,7 +72,34 @@ def sync_model_weights(model):
     """Broadcast model weights from rank 0 to all other processes."""
     for param in model.state_dict().values():
         dist.broadcast(param, src=0)  # Send parameters from rank 0 to all ranks
-        
+
+
+def create_dataloader(
+    batch_size: int, block_size: int, data_dir, shuffle: bool = True, seed: int = 12345, split="train"
+) -> DataLoader:
+    filenames = sorted(glob.glob(f'{data_dir}/{split}*'))
+    random.seed(seed)
+    random.shuffle(filenames)
+    print('length of files', len(filenames), split)
+
+    rank = int(os.environ['RANK']) 
+    world_size = int(os.environ['WORLD_SIZE']) 
+
+    dataset = PackedDataset(
+            filenames,
+            # n_chunks control the buffer size. 
+            # Note that the buffer size also impacts the random shuffle
+            # (PackedDataset is an IterableDataset. So the shuffle is done by prefetch a buffer and shuffle the buffer)
+            n_chunks=8,
+            block_size = block_size,
+            shuffle=shuffle,
+            seed=seed+rank,
+            num_processes=world_size,
+            process_rank=rank,
+        )
+    return DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
+    #return dataset
+
 def main(args):
     ########################################### on-policy ppo experiments with phi3.5 model on math dataset. 
     local_rank = int(os.environ['LOCAL_RANK']) 
@@ -110,10 +137,12 @@ def main(args):
     llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
     print('distributed language model creation.') 
 
-    
+    train_loader = create_dataloader(8, 4096, args.data, split='train')
+    #valid_loader = create_dataloader(8, 4096, args.data, split='valid')
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="none", help="path to pretraining dataset.")
+    parser.add_argument("--batch_size", type=int, default=)
     parser.add_argument("--model_type", type=str, default="tformer400m", choices=["tformer400m", "xformer400m"], help="choose model type.")
     
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
