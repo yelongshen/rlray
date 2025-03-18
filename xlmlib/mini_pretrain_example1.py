@@ -91,7 +91,7 @@ def main(args):
     # Step 3: Load and merge multiple safetensor state_dicts
     dist.barrier()
 
-    fabri.create(world_size, local_rank, rank, device)
+    fabric.create(world_size, local_rank, rank, device)
         
     #os.environ["TOKENIZERS_PARALLELISM"] = "false"
     if args.model_type == 'tformer400m':
