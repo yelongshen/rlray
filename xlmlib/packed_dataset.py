@@ -63,8 +63,6 @@ class PackedDataset(IterableDataset):
         )
 
 
-class PackedDatasetBuilder(object):
-        self._write_chunk()
 
 
 class PackedDatasetIterator:
