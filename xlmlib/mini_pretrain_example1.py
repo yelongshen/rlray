@@ -145,7 +145,7 @@ def main(args):
     seq_len = 4096
     train_loader = create_dataloader(args.micro_batch_size, seq_len+1, args.data, split='train')
     
-    gradient_accumulation_steps = args.batch_size // fabric.world_size // args.micro_batch_size
+    gradient_accumulation_steps = args.batch_size // args.micro_batch_size
 
     loss_scalar = 1.0 / gradient_accumulation_steps
     
