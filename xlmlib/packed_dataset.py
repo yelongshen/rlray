@@ -159,10 +159,3 @@ class PackedDatasetIterator:
         self._curr_idx += 1
         return torch.from_numpy(arr.astype(np.int64))
 
-
-class CombinedDataset(IterableDataset):
-        return CombinedDatasetIterator(self._datasets, self._seed, self._weights)
-
-
-class CombinedDatasetIterator:
-        return next(dataset)
