@@ -105,7 +105,7 @@ def create_dataloader(
 #    past_state = None
 #    #split state into chunks (i.e., 128 token per chunk)
 #    for c_i in state:
-#        new_states, new_c_i = recurr([past_states, c_i]) # we can set max_recurr_step (T) here.
+#        new_states, new_c_i = recurr([past_state, c_i]) # we can set max_recurr_step (T) here.
 #        past_states = [new_states, new_c_i]
 #        decode_state += [new_c_i]
 #    logits = decoder(decode_state)
