@@ -95,7 +95,7 @@ def main(args):
         
     #os.environ["TOKENIZERS_PARALLELISM"] = "false"
     if args.model_type == 'tformer400m':
-        from tformer import _TformerForCausalLM
+        from xlmlib.tformer import _TformerForCausalLM
         llm_model, llm_config = _TformerForCausalLM.init_400m()
             
     # Load tokenizer from local path 
