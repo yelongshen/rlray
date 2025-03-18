@@ -96,6 +96,21 @@ def create_dataloader(
     return DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
     #return dataset
 
+#encoder : transformer (i.e., 4 layers)
+#decoder : transformer (i.e., 2/0 layers)
+#recurr : transformer (i.e., 2 layers)
+#for seq_data (4k length) in training:
+#    state = encoder(data)
+#    decode_state = []
+#    past_state = None
+#    #split state into chunks (i.e., 128 token per chunk)
+#    for c_i in state:
+#        new_states, new_c_i = recurr([past_states, c_i]) # we can set max_recurr_step (T) here.
+#        past_states = [new_states, new_c_i]
+#        decode_state += [new_c_i]
+#    logits = decoder(decode_state)
+#    next_token_loss(logits, data)
+    
 def main(args):
     ########################################### on-policy ppo experiments with phi3.5 model on math dataset. 
     local_rank = int(os.environ['LOCAL_RANK']) 
@@ -201,7 +216,7 @@ def main(args):
                 avg_step = avg_step + 1
             
                 if rank == 0:  # Print only on rank 0
-                    print(f"Data: {data_idx + 1}, Update: {scheduler._step_count + 1}, Loss: {micro_loss_log.item():.4f}, Avg Loss: {avg_loss_log.item() / avg_step:.4f}")
+                    print(f"data: {data_idx + 1}, update: {scheduler._step_count + 1}, lr: {scheduler.get_last_lr()}, loss: {micro_loss_log.item():.4f}, avg_loss: {avg_loss_log.item() / avg_step:.4f}")
 
                 micro_loss_log = 0
                 micro_step = 0
