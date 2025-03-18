@@ -146,9 +146,70 @@ def main(args):
     scheduler = get_linear_schedule_with_warmup( 
         optimizer, num_warmup_steps = int(warmup_steps), num_training_steps = int(num_training_steps) 
     )     
+    print('distributed model optimization created.')
+
+    seq_len = 4096
+    train_loader = create_dataloader(args.micro_batch_size, seq_len+1, args.data, split='train')
     
-    train_loader = create_dataloader(args.micro_batch_size, 4096, args.data, split='train')
-    #valid_loader = create_dataloader(8, 4096, args.data, split='valid')
+    gradient_accumulation_steps = args.batch_size // fabric.world_size // args.micro_batch_size
+
+    loss_scalar = 1.0 / gradient_accumulation_steps
+    
+    def gradient_pass(input, target, scalar):
+        loss, _, _ = llm(input_ids=input, labels=target)
+        avg_loss = loss.mean()
+        (avg_loss * scalar).backward()
+        return avg_loss.detach()
+        
+
+    micro_loss_log = 0
+    step_log = 100 # print loss every 100 steps.
+    avg_loss_log = 0
+    avg_step = 0
+    for data_idx, train_data in enumerate(train_loader):
+        if data_idx >= num_training_steps * gradient_accumulation_steps:
+            break
+        #print('data', data.shape, data) 
+        input_ids = train_data[:, 0 : seq_len].contiguous().to(frabic.device)
+        targets = train_data[:, 1 : seq_len + 1].contiguous().to(frabic.device)
+
+        is_grad_sync = (data_idx + 1) % gradient_accumulation_steps == 0
+        if is_grad_sync:
+            _loss = gradient_pass(input_ids, targets, loss_scalar)
+        else:
+            with llm.no_sync():
+                _loss = gradient_pass(input_ids, targets, loss_scalar)
+
+        
+        if is_grad_sync:
+            optimizer.step()
+            optimizer.zero_grad()
+            scheduler.step()
+
+        micro_loss_log = micro_loss_log + _loss
+
+        if (data_idx + 1) % step_log == 0:
+            dist.all_reduce(micro_loss_log, op=dist.ReduceOp.SUM)  # Sum losses across GPUs
+            micro_loss_log = micro_loss_log / frabic.world_size
+
+            avg_loss_log = avg_loss_log + micro_loss_log
+            avg_step = avg_step + 1
+            
+            if rank == 0:  # Print only on rank 0
+                print(f"Data: {data_idx}, Update: {scheduler._step_count}, Loss: {micro_loss_log.item():.4f}, Avg Loss: {avg_loss_log.item() / avg_step:.4f}")
+
+            micro_loss_log = 0
+
+        if (scheduler._step_count+1) % args.save_per_steps == 0 and rank == 0:
+            checkpoint = {
+                        "step": scheduler._step_count,
+                        "model_state_dict": llm.module.state_dict(),  # Remove DDP wrapper
+                        }
+            save_path = f"{args.save_ckpt}/ckpt_{scheduler._step_count}.pth"
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            torch.save(checkpoint, save_path)
+            print(f"Checkpoint saved at: {save_path}")
+                        
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="none", help="path to pretraining dataset.")
