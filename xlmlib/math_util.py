@@ -9,6 +9,8 @@ import concurrent.futures
 import time
 import multiprocessing
 
+from transformers.utils import logging
+
 #from .math_verify_util import math_verify
 try:
     from math_evaluation import is_equiv
