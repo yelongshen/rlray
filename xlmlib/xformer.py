@@ -55,7 +55,7 @@ class _XformerConfig:
 
         num_encoder_layers = 4, # number of encoder layers. 
         num_decoder_layers= 2,
-        max_recur_step = 4,  
+        max_recur_step = 8,  
         #num_hidden_layers=12,
       
         num_attention_heads=12,
