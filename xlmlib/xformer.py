@@ -332,7 +332,8 @@ class _DecoderLayer(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         inference_mode = False,
         max_generation = 0,
-        cur_pos = 0
+        cur_pos = 0,
+        dynamic_cache = False
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -344,7 +345,8 @@ class _DecoderLayer(nn.Module):
             past_key_value=past_key_value,
             inference_mode = inference_mode,
             max_generation = max_generation,
-            cur_pos = cur_pos
+            cur_pos = cur_pos,
+            dynamic_cache = dynamic_cache
         )
         hidden_states = residual + self.resid_attn_dropout(attn_outputs)
         residual = hidden_states
