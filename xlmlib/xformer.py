@@ -44,7 +44,7 @@ except ImportError as error:
 class _XformerConfig:
     @classmethod
     def from_name(cls, name):
-        if name == '400m':
+        if name == '200m':
             return cls()  # Sum the list and initialize
         
     def __init__(
