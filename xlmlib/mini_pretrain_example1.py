@@ -157,7 +157,7 @@ def main(args):
     #grad_clip = 1.0
 
     optimizer = torch.optim.AdamW(
-        llm.parameters(), lr=args.lr, weight_decay=weight_decay, betas=(beta1, beta2))
+        llm.parameters(), lr=args.lr, weight_decay=args.w_decay, betas=(beta1, beta2))
     num_training_steps = args.num_training_step #dataset['train'].num_rows * args.epoch * args.n_rollout * 1.0 / (args.replay_size * world_size) # num_epochs * len(train_dataloader)    
     warmup_steps = args.warmup_step * num_training_steps
     scheduler = get_linear_schedule_with_warmup( 
@@ -250,6 +250,7 @@ if __name__ == "__main__":
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
     parser.add_argument("--lr", type=float, default=1e-4, help="peak learning rate.")
     parser.add_argument("--grad_clip", type=float, default=0.0, help="gradient clip.")
+    parser.add_argument("--w_decay", type=float, default=0.1, help="weight decay.")
     
     parser.add_argument("--save_per_steps", type=int, default=1000, help="save ckpt per steps.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
