@@ -150,7 +150,7 @@ def main(args):
 
     # setup optimization.
     optimizer = torch.optim.AdamW(llm.parameters(), lr=args.lr) # 1.0e-6) 
-    num_training_steps = args.num_training_step // fabric.world_size #dataset['train'].num_rows * args.epoch * args.n_rollout * 1.0 / (args.replay_size * world_size) # num_epochs * len(train_dataloader)    
+    num_training_steps = args.num_training_step #dataset['train'].num_rows * args.epoch * args.n_rollout * 1.0 / (args.replay_size * world_size) # num_epochs * len(train_dataloader)    
     warmup_steps = args.warmup_step * num_training_steps
     scheduler = get_linear_schedule_with_warmup( 
         optimizer, num_warmup_steps = int(warmup_steps), num_training_steps = int(num_training_steps) 
