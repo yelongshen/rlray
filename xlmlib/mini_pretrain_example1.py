@@ -157,7 +157,7 @@ def main(args):
     grad_clip = 1.0
 
     optimizer = torch.optim.AdamW(
-        llm.parameters(), lr=args.lr, weight_decay=weight_decay, betas=(beta1, beta2), fused=True)
+        llm.parameters(), lr=args.lr, weight_decay=weight_decay, betas=(beta1, beta2))
     num_training_steps = args.num_training_step #dataset['train'].num_rows * args.epoch * args.n_rollout * 1.0 / (args.replay_size * world_size) # num_epochs * len(train_dataloader)    
     warmup_steps = args.warmup_step * num_training_steps
     scheduler = get_linear_schedule_with_warmup( 
