@@ -59,7 +59,7 @@ class _XformerConfig:
         #num_hidden_layers=12,
       
         num_attention_heads=12,
-        num_key_value_heads=None,
+        num_key_value_heads=12,
         resid_pdrop=0.0,
         embd_pdrop=0.0,
         attention_dropout=0.0,
