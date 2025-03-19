@@ -53,9 +53,8 @@ class _XformerConfig:
         hidden_size=1536,
         intermediate_size=4096,
 
-        num_encoder_layers = 3, # number of encoder layers. 
-        num_recur_layers = 2,
-        num_decoder_layers= 1,
+        num_encoder_layers = 4, # number of encoder layers. 
+        num_decoder_layers= 2,
         max_recur_step = 4,  
         #num_hidden_layers=12,
       
@@ -80,7 +79,7 @@ class _XformerConfig:
         self.intermediate_size = intermediate_size
 
         self.num_encoder_layers = num_encoder_layers
-        self.num_recur_layers = num_recur_layers
+        #self.num_recur_layers = num_recur_layers
         self.num_decoder_layers = num_decoder_layers
         self.max_recur_step = max_recur_step
       
@@ -223,6 +222,7 @@ class _FlashAttention2(nn.Module):
         inference_mode = False,
         max_generation = 0,
         cur_pos = 0,
+        dynamic_cache = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         bsz, q_len, _ = hidden_states.size()
 
@@ -242,20 +242,28 @@ class _FlashAttention2(nn.Module):
         query_states = query_states.transpose(1,2).to(hidden_states.dtype)
         key_states = key_states.transpose(1,2).to(hidden_states.dtype)
         #value_states = value_states.transpose(1,2)
-        
-        if not inference_mode:
-            key_cache = key_states
-            value_cache = value_states
-        elif inference_mode and past_key_value is None: 
-            key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
-            value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
-            key_cache[:, :q_len] = key_states
-            value_cache[:, :q_len] = value_states
+
+        if dynamic_cache:
+            if past_key_value is None or cur_pos == 0:
+                key_cache = key_states
+                value_cache = value_states
+            else:
+                key_cache = torch.cat([past_key_value[0][:, :cur_pos], key_states], dim=1)
+                value_cache = torch.cat([past_key_value[1][:, :cur_pos], value_states], dim=1)
         else:
-            key_cache, value_cache = past_key_value
-            key_cache[:, cur_pos:cur_pos + q_len] = key_states
-            value_cache[:, cur_pos:cur_pos + q_len] = value_states
-        
+            if not inference_mode:
+                key_cache = key_states
+                value_cache = value_states
+            elif inference_mode and past_key_value is None: 
+                key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
+                value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
+                key_cache[:, :q_len] = key_states
+                value_cache[:, :q_len] = value_states
+            else:
+                key_cache, value_cache = past_key_value
+                key_cache[:, cur_pos:cur_pos + q_len] = key_states
+                value_cache[:, cur_pos:cur_pos + q_len] = value_states
+            
             
         key_states = key_cache[:, :cur_pos + q_len]
         value_states = value_cache[:, :cur_pos + q_len]
@@ -311,14 +319,11 @@ class _DecoderLayer(nn.Module):
         super().__init__()
         self.config = config
         self.self_attn = _FlashAttention2(config, layer_idx=layer_idx) 
-
         self.mlp = _MLP(config)
         self.input_layernorm = _RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
         self.resid_attn_dropout = nn.Dropout(config.resid_pdrop)
         self.resid_mlp_dropout = nn.Dropout(config.resid_pdrop)
         self.post_attention_layernorm = _RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -341,17 +346,13 @@ class _DecoderLayer(nn.Module):
             max_generation = max_generation,
             cur_pos = cur_pos
         )
-        #inference_mode = False,
-        #max_generation = 0,
-        #cur_pos = 0,
         hidden_states = residual + self.resid_attn_dropout(attn_outputs)
-
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + self.resid_mlp_dropout(hidden_states)
-
         return hidden_states, key_cache, value_cache
+
 
 
 class _PreTrainedModel(nn.Module):
@@ -394,38 +395,17 @@ class _Model(_PreTrainedModel):
         self.encoder = nn.ModuleList(
             [_DecoderLayer(config, layer_idx) for layer_idx in range(config.num_encoder_layers)]
         )
-        self.recur = nn.ModuleList(
-            [_DecoderLayer(config, layer_idx) for layer_idx in range(config.num_recur_layers)]
-        )
+        self.recur_layer = _DecoderLayer(config, 0) 
+        
         self.decoder = nn.ModuleList(
             [_DecoderLayer(config, layer_idx) for layer_idx in range(config.num_decoder_layers)]
         )
 
-        #self.layers = nn.ModuleList(
-        #    [_DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
-        #)
         self._attn_implementation = 'flash_attention_2' # config._attn_implementation
         self.norm = _RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False
 
-    # consider no generation at this momentum. 
-    def transformer(self, layers, hidden_states): #, past_key_values=None):
-        
-        for layer_idx, _layer in enumerate(layers):
-            kv_cache = None
-            #if past_key_values is not None:
-            #    kv_cache = past_key_values[layer_idx]
-                
-            layer_outputs, nk_cache, nv_cache = _layer(
-                hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=kv_cache)
-
-            hidden_states = layer_outputs
-            next_decoder_cache.append((nk_cache, nv_cache))
-  
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -467,12 +447,78 @@ class _Model(_PreTrainedModel):
         hidden_states = inputs_embeds
 
         # encoder layers
-        next_decoder_cache = [] 
-
-        for layer_idx, _layer in enumerate(self.recur):
+        next_decoder_cache = None
+        for layer_idx, _layer in enumerate(self.encoder):
+            kv_cache = None
+            #if past_key_values is not None:
+            #    kv_cache = past_key_values[layer_idx]
+            layer_outputs, nk_cache, nv_cache = _layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=kv_cache)
+            hidden_states = layer_outputs
+            #next_decoder_cache.append((nk_cache, nv_cache))
             
+        # split hidden_states into small chunks.
+        #encoder : transformer (i.e., 4 layers)
+        #decoder : transformer (i.e., 2/0 layers)
+        #recurr : transformer (i.e., 2 layers)
+        #for seq_data (4k length) in training:
+        #    state = encoder(data)
+        #    decode_state = []
+        #    past_state = None
+        #    #split state into chunks (i.e., 128 token per chunk)
+        #    for c_i in state:
+        #        new_states, new_c_i = recurr([past_state, c_i]) # we can set max_recurr_step (T) here.
+        #        past_states = [new_states, new_c_i]
+        #        decode_state += [new_c_i]
+        #    logits = decoder(decode_state)
+        #    next_token_loss(logits, data)、
+
+        # 4096 // 128 = 32
+        dim = hidden_states.shape[2]
         
-      
+        chunk_size = 128  
+        chunks = torch.split(hidden_states, chunk_size, dim=1)
+        
+        states = []
+
+        #past_key_value = None
+        #key_cache = torch.zeros(bsz, seq_length, self.config.num_key_value_heads, self.config.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
+        #value_cache = torch.zeros(bsz, seq_length, self.config.num_key_value_heads, self.config.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
+
+        kv_cache = None
+        kv_cache_len = 0
+        
+        decode_state = []
+        for c_idx, c_i in enumerate(chunks):
+            states.append(c_i)
+            
+            _state = torch.cat(states, dim=1)
+            _end = (c_idx+1) * chunk_size
+            _start = 0 if _state.shape[1] == _end else _end - _state.shape[1]
+            
+            _state, _key, _value = self.recur_layer(_state, position_ids=position_ids[:, _start : _end], past_key_value=kv_cache, cur_pos=kv_cache_len, dynamic_cache=True)
+            new_c_i = _state[:, -chunk_size:]
+
+            states = [_state[:, -self.config.max_recur_step * chunk_size:]]
+
+            kv_cache = (_key[:, :-self.config.max_recur_step * chunk_size], _value[:, :-self.config.max_recur_step * chunk_size])
+
+            kv_cache_len = kv_cache[0].shape[1]
+            decode_state.append(new_c_i)
+
+        
+        hidden_states = torch.cat(decode_state, dim=1)
+        for layer_idx, _layer in enumerate(self.decoder):
+            layer_outputs, nk_cache, nv_cache = _layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=None)
+            hidden_states = layer_outputs
+        
         hidden_states = self.norm(hidden_states)
         return hidden_states, next_decoder_cache
 
