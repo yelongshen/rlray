@@ -154,7 +154,7 @@ def main(args):
     weight_decay = 1e-1
     beta1 = 0.9
     beta2 = 0.95
-    grad_clip = 1.0
+    #grad_clip = 1.0
 
     optimizer = torch.optim.AdamW(
         llm.parameters(), lr=args.lr, weight_decay=weight_decay, betas=(beta1, beta2))
@@ -204,6 +204,9 @@ def main(args):
         micro_loss_log = micro_loss_log + _loss
         micro_step = micro_step + 1
         if is_grad_sync:
+            if args.grad_clip >= 0.01:
+                torch.nn.utils.clip_grad_norm_(llm.parameters(), max_norm=args.grad_clip)
+                #fabric.clip_gradients(model, optimizer, max_norm=grad_clip)
             optimizer.step()
             optimizer.zero_grad()
             scheduler.step()
@@ -246,7 +249,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_training_step", type=int, default=100000, help="number of training step.")
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
     parser.add_argument("--lr", type=float, default=1e-4, help="peak learning rate.")
-    parser.add_argument("--epoch", type=int, default=30, help="number of epoches.")
+    parser.add_argument("--grad_clip", type=float, default=0.0, help="gradient clip.")
     
     parser.add_argument("--save_per_steps", type=int, default=1000, help="save ckpt per steps.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
