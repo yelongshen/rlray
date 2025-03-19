@@ -135,7 +135,10 @@ def main(args):
     if args.model_type == 'tformer400m':
         from xlmlib.tformer import _TformerForCausalLM
         llm_model, llm_config = _TformerForCausalLM.init_400m()
-            
+    elif args.model_type == 'xformer200m':
+        from xlmlib.xformer import _XformerForCausalLM
+        llm_model, llm_config = _XformerForCausalLM.init_200m()
+        
     # Load tokenizer from local path 
     llm_model = llm_model.to(torch.bfloat16).to(device) 
     llm_model.model.gradient_checkpointing = False 
@@ -244,7 +247,7 @@ if __name__ == "__main__":
     parser.add_argument("--micro_batch_size", type=int, default=4, help='batch size.')
     parser.add_argument("--batch_size", type=int, default=256, help='overall batch size.')
     
-    parser.add_argument("--model_type", type=str, default="tformer400m", choices=["tformer400m", "xformer400m"], help="choose model type.")
+    parser.add_argument("--model_type", type=str, default="tformer400m", choices=["tformer400m", "xformer200m"], help="choose model type.")
     
     parser.add_argument("--num_training_step", type=int, default=100000, help="number of training step.")
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
