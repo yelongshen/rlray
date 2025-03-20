@@ -249,14 +249,40 @@ class _FlashAttention2(nn.Module):
             h_value_states, c_value_states = value_states[:, :-recurrent_chunk], value_states[:, -recurrent_chunk:]  
             h_query_states, c_query_states = query_states[:, :-recurrent_chunk], query_states[:, -recurrent_chunk:]  
 
-            
             if past_key_value is None or cur_pos == 0:
-                c_key_cache = torch.cat([h_key_states, c_key_states], dim = 1)
-                c_value_cache = torch.cat([h_value_states, c_value_states], dim = 1) #value_states
+                c_key_cache = key_states
+                c_value_cache = value_states
             else:
-                c_key_cache = torch.cat([past_key_value[0][:, :cur_pos], h_key_states, c_key_states], dim=1)
-                c_value_cache = torch.cat([past_key_value[1][:, :cur_pos], h_value_states, c_value_states], dim=1)
+                c_key_cache = torch.cat([past_key_value[0][:, :cur_pos], key_states], dim=1)
+                c_value_cache = torch.cat([past_key_value[1][:, :cur_pos], value_states], dim=1)
+                
+            c_attn_output = flash_attn_func(
+                        c_query_states,
+                        c_key_cache,
+                        c_value_cache,
+                        attn_dropout,
+                        softmax_scale=None,
+                        causal=True)
 
+            if past_key_value is None or cur_pos == 0:
+                h_key_cache = torch.cat([c_key_states, h_key_states], dim=1)
+                h_value_cache = torch.cat([c_value_states, h_value_states], dim=1) #value_states
+            else:
+                h_key_cache = torch.cat([past_key_value[0][:, :cur_pos], c_key_states, h_key_states], dim=1)
+                h_value_cache = torch.cat([past_key_value[1][:, :cur_pos], c_value_states, h_value_states], dim=1)
+
+            h_attn_output = flash_attn_func(
+                            h_query_states,
+                            h_key_cache,
+                            h_value_cache,
+                            attn_dropout,
+                            softmax_scale=None,
+                            causal=False)
+
+            attn_output = torch.cat([h_attn_output, c_attn_output], dim=1)
+            key_cache = c_key_cache
+            value_cache = c_value_cache
+            #c_attn_output = c_attn_output.reshape(bsz, c_len, self.hidden_size) #.contiguous()
         else:
             if dynamic_cache:
                 if past_key_value is None or cur_pos == 0:
@@ -302,9 +328,9 @@ class _FlashAttention2(nn.Module):
                 attention_mask,
                 dropout=attn_dropout,
             )
-            attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
-            attn_output = self.o_proj(attn_output)
-            return attn_output, key_cache, value_cache
+        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
+        attn_output = self.o_proj(attn_output)
+        return attn_output, key_cache, value_cache
 
     def _flash_attention_forward(
         self,
@@ -351,7 +377,8 @@ class _DecoderLayer(nn.Module):
         inference_mode = False,
         max_generation = 0,
         cur_pos = 0,
-        dynamic_cache = False
+        dynamic_cache = False,
+        recurrent_chunk = 0,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -364,7 +391,8 @@ class _DecoderLayer(nn.Module):
             inference_mode = inference_mode,
             max_generation = max_generation,
             cur_pos = cur_pos,
-            dynamic_cache = dynamic_cache
+            dynamic_cache = dynamic_cache,
+            recurrent_chunk = recurrent_chunk
         )
         hidden_states = residual + self.resid_attn_dropout(attn_outputs)
         residual = hidden_states
@@ -519,7 +547,7 @@ class _Model(_PreTrainedModel):
             _end = (c_idx+1) * chunk_size
             _start = 0 if _state.shape[1] == _end else _end - _state.shape[1]
             
-            _state, _key, _value = self.recur_layer(_state, position_ids=position_ids[:, _start : _end], past_key_value=kv_cache, cur_pos=kv_cache_len, dynamic_cache=True)
+            _state, _key, _value = self.recur_layer(_state, position_ids=position_ids[:, _start : _end], past_key_value=kv_cache, cur_pos=kv_cache_len, dynamic_cache=True, recurrent_chunk = 0 if c_idx == 0 else chunk_size)
             new_c_i = _state[:, -chunk_size:]
 
             states = [_state[:, -self.config.max_recur_step * chunk_size:]]
