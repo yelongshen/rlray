@@ -580,8 +580,8 @@ import torch.nn.functional as F
 class _XformerForCausalLM(_PreTrainedModel):
     
     @staticmethod
-    def init_200m():
-        _config = _XformerConfig.from_name('200m')
+    def create_model(name):
+        _config = _XformerConfig.from_name(name)
         _model = _XformerForCausalLM(_config)
         _model.apply(_model._init_weights)
         return _model, _config
