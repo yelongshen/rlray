@@ -244,6 +244,8 @@ class _FlashAttention2(nn.Module):
         key_states = key_states.transpose(1,2).to(hidden_states.dtype)
         #value_states = value_states.transpose(1,2)
 
+        attn_dropout = self.attention_dropout if self.training else 0.0
+
         if recurrent_chunk > 0:
             h_key_states, c_key_states = key_states[:, :-recurrent_chunk], key_states[:, -recurrent_chunk:]  
             h_value_states, c_value_states = value_states[:, :-recurrent_chunk], value_states[:, -recurrent_chunk:]  
@@ -308,7 +310,6 @@ class _FlashAttention2(nn.Module):
                 
             key_states = key_cache[:, :cur_pos + q_len]
             value_states = value_cache[:, :cur_pos + q_len]
-            attn_dropout = self.attention_dropout if self.training else 0.0
     
             if query_states.dtype == torch.float32:
                 target_dtype = torch.float16
