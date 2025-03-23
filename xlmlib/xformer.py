@@ -58,7 +58,7 @@ class _XformerConfig:
         num_decoder_layers= 2,
         max_recur_step = 8,  
         #num_hidden_layers=12,
-      
+        recur_chunk_size = 128,
         num_attention_heads=12,
         num_key_value_heads=12,
         resid_pdrop=0.0,
@@ -83,7 +83,8 @@ class _XformerConfig:
         #self.num_recur_layers = num_recur_layers
         self.num_decoder_layers = num_decoder_layers
         self.max_recur_step = max_recur_step
-      
+        self.recur_chunk_size = recur_chunk_size
+        
         #self.num_hidden_layers = num_hidden_layers
         self.num_attention_heads = num_attention_heads
 
@@ -529,7 +530,7 @@ class _Model(_PreTrainedModel):
         # 4096 // 128 = 32
         dim = hidden_states.shape[2]
         
-        chunk_size = 128  
+        chunk_size = self.config.recur_chunk_size  
         chunks = torch.split(hidden_states, chunk_size, dim=1)
         
         states = []
