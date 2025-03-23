@@ -143,7 +143,7 @@ def main(args):
         llm_model, llm_config = _XformerForCausalLM.create_model('300m')
 
     llm_config.max_recur_step = args.recur_step
-
+    llm_config.recur_chunk_size = args.recur_chunk
     print('recurrent step setup', llm_config.max_recur_step)
     # Load tokenizer from local path 
     llm_model = llm_model.to(torch.bfloat16).to(device) 
@@ -261,6 +261,8 @@ if __name__ == "__main__":
     parser.add_argument("--grad_clip", type=float, default=0.0, help="gradient clip.")
     parser.add_argument("--w_decay", type=float, default=0.1, help="weight decay.")
     parser.add_argument("--recur_step", type=int, default=8, help="recurrent step.")
+    parser.add_argument("--recur_chunk", type=int, default=128, help="recurrent chunk.")
+    
     parser.add_argument("--save_per_steps", type=int, default=1000, help="save ckpt per steps.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
     parser.add_argument('--fuse_loss', action='store_true')
