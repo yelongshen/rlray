@@ -45,7 +45,9 @@ class _TformerConfig:
     def from_name(cls, name):
         if name == '400m':
             return cls()  # Sum the list and initialize
-        
+        elif name == '1b':
+            return cls(hidden_size = 2048, intermediate_size=5120, num_attention_heads=16, num_key_value_heads=16, num_hidden_layers=24)
+            
     def __init__(
         self,
         vocab_size=32000,
@@ -465,14 +467,13 @@ import torch.nn.functional as F
 # PP, TP, DP
 # Causal Large Language Model 
 class _TformerForCausalLM(_PreTrainedModel):
-    
     @staticmethod
-    def init_400m():
-        _config = _TformerConfig.from_name('400m')
+    def create_model(name):
+        _config = _TformerConfig.from_name(name)
         _model = _TformerForCausalLM(_config)
         _model.apply(_model._init_weights)
         return _model, _config
-
+        
     def __init__(self, config):
         super().__init__(config)
         self.config = config
