@@ -110,7 +110,119 @@ def create_dataloader(
 #        decode_state += [new_c_i]
 #    logits = decoder(decode_state)
 #    next_token_loss(logits, data)
+
+def train(llm, args):
+    #weight_decay = 1e-1
+    beta1 = 0.9
+    beta2 = 0.95
+    #grad_clip = 1.0
+
+    optimizer = torch.optim.AdamW(
+        llm.parameters(), lr=args.lr, weight_decay=args.w_decay, betas=(beta1, beta2))
+    num_training_steps = args.num_training_step #dataset['train'].num_rows * args.epoch * args.n_rollout * 1.0 / (args.replay_size * world_size) # num_epochs * len(train_dataloader)    
+    warmup_steps = args.warmup_step * num_training_steps
+    scheduler = get_linear_schedule_with_warmup( 
+        optimizer, num_warmup_steps = int(warmup_steps), num_training_steps = int(num_training_steps) 
+    )     
+    #print('distributed model optimization created.')
+    seq_len = 4096
+    train_loader = create_dataloader(args.micro_batch_size, seq_len+1, args.data, split='train')
     
+    gradient_accumulation_steps = args.batch_size // args.micro_batch_size
+
+    loss_scalar = 1.0 / gradient_accumulation_steps
+    
+    def gradient_pass(input, target, scalar):
+        loss, _, _ = llm(input_ids=input, labels=target, fuse_loss=args.fuse_loss)
+        avg_loss = loss.mean()
+        (avg_loss * scalar).backward()
+        return avg_loss.detach()
+        
+    micro_loss_log = 0
+    micro_step = 0
+    step_log = 20 # print loss every 100 steps.
+    avg_loss_log = 0
+    avg_step = 0
+    for data_idx, train_data in enumerate(train_loader):
+        if data_idx >= num_training_steps * gradient_accumulation_steps:
+            break
+        #print('data', data.shape, data) 
+        input_ids = train_data[:, 0 : seq_len].contiguous().to(fabric.device)
+        targets = train_data[:, 1 : seq_len + 1].contiguous().to(fabric.device)
+        is_grad_sync = (data_idx + 1) % gradient_accumulation_steps == 0
+        if is_grad_sync:
+            _loss = gradient_pass(input_ids, targets, loss_scalar)
+        else:
+            with llm.no_sync():
+                _loss = gradient_pass(input_ids, targets, loss_scalar)
+        if args.debug and fabric.rank == 0:
+            print('one pass loss...', _loss)
+            
+        micro_loss_log = micro_loss_log + _loss
+        micro_step = micro_step + 1
+        if is_grad_sync:
+            if args.grad_clip >= 0.01:
+                torch.nn.utils.clip_grad_norm_(llm.parameters(), max_norm=args.grad_clip)
+                #fabric.clip_gradients(model, optimizer, max_norm=grad_clip)
+            optimizer.step()
+            optimizer.zero_grad()
+            scheduler.step()
+
+            if (scheduler._step_count+1) % args.save_per_steps == 0 and fabric.rank == 0:
+                checkpoint = {
+                        "step": scheduler._step_count,
+                        "model_state_dict": llm.module.state_dict(),  # Remove DDP wrapper
+                        }
+                save_path = f"{args.save_ckpt}/ckpt_{scheduler._step_count}.pth"
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                torch.save(checkpoint, save_path)
+                print(f"Checkpoint saved at: {save_path}")
+            
+            if (scheduler._step_count+1) % step_log == 0:
+                micro_loss_log = micro_loss_log / micro_step
+                
+                dist.all_reduce(micro_loss_log, op=dist.ReduceOp.SUM)  # Sum losses across GPUs
+                micro_loss_log = micro_loss_log / fabric.world_size
+
+                avg_loss_log = avg_loss_log + micro_loss_log
+                avg_step = avg_step + 1
+            
+                if fabric.rank == 0:  # Print only on rank 0
+                    print(f"data: {data_idx + 1}, update: {scheduler._step_count + 1}, lr: {scheduler.get_last_lr()}, loss: {micro_loss_log.item():.4f}, avg_loss: {avg_loss_log.item() / avg_step:.4f}")
+
+                micro_loss_log = 0
+                micro_step = 0
+
+
+def valid(llm, args):
+    seq_len = 4096
+    valid_loader = create_dataloader(args.micro_batch_size, seq_len+1, args.data, split='valid')
+
+    llm.eval()
+    
+    total_likelihood = 0
+    total_tokens = 0
+    
+    for data_idx, valid_data in enumerate(valid_loader):
+        if data_idx >= args.num_valid_step:
+            break
+        #print('data', data.shape, data) 
+        input_ids = valid_data[:, 0 : seq_len].contiguous().to(fabric.device)
+        targets = valid_data[:, 1 : seq_len + 1].contiguous().to(fabric.device)
+
+        loss, _, _ = llm(input_ids=input_ids, labels=targets, fuse_loss=args.fuse_loss)
+        total_likelihood += loss.detach().sum()
+        total_tokens += targets.numel()
+
+    total_tokens = torch.tensor(total_tokens, device=total_likelihood.device)
+    
+    dist.all_reduce(total_likelihood, op=dist.ReduceOp.SUM)  # Sum losses across GPUs
+    dist.all_reduce(total_tokens, op=dist.ReduceOp.SUM)  # Sum losses across GPUs
+
+    if fabric.rank == 0:
+        print('total tokens:', total_tokens)
+        print('ppl:', torch.exp(total_likelihood/total_tokens))
+
 def main(args):
     ########################################### on-policy ppo experiments with phi3.5 model on math dataset. 
     local_rank = int(os.environ['LOCAL_RANK']) 
@@ -145,6 +257,15 @@ def main(args):
         from xlmlib.xformer import _XformerForCausalLM
         llm_model, llm_config = _XformerForCausalLM.create_model('300m')
 
+    if args.mode == 'valid':
+        # load pretrained model. 
+        ckpt = torch.load(args.save_ckpt, map_location=torch.device('cpu'))
+        model_state_dict = ckpt['model_state_dict']        
+        #llm_model = _Phi4ForCausalLM(llm_config) 
+        missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
+        print('missing_keys: ', missing_keys)
+        print('unexpected_keys: ', unexpected_keys)    
+
     llm_config.max_recur_step = args.recur_step
     llm_config.recur_chunk_size = args.recur_chunk
     print('recurrent step setup', llm_config.max_recur_step)
@@ -156,8 +277,9 @@ def main(args):
 
     llm_model.model.gradient_checkpointing = False 
     dist.barrier()
+    if args.mode == 'train':
+        sync_model_weights(llm_model)
     
-    sync_model_weights(llm_model)    
     llm = llm_model 
     #print('initial llm model ....') 
     # setup model distribution.
@@ -166,92 +288,10 @@ def main(args):
 
     # setup optimization.
     #optimizer = torch.optim.AdamW(llm.parameters(), lr=args.lr) # 1.0e-6) 
-    
-    weight_decay = 1e-1
-    beta1 = 0.9
-    beta2 = 0.95
-    #grad_clip = 1.0
-
-    optimizer = torch.optim.AdamW(
-        llm.parameters(), lr=args.lr, weight_decay=args.w_decay, betas=(beta1, beta2))
-    num_training_steps = args.num_training_step #dataset['train'].num_rows * args.epoch * args.n_rollout * 1.0 / (args.replay_size * world_size) # num_epochs * len(train_dataloader)    
-    warmup_steps = args.warmup_step * num_training_steps
-    scheduler = get_linear_schedule_with_warmup( 
-        optimizer, num_warmup_steps = int(warmup_steps), num_training_steps = int(num_training_steps) 
-    )     
-    #print('distributed model optimization created.')
-
-    seq_len = 4096
-    train_loader = create_dataloader(args.micro_batch_size, seq_len+1, args.data, split='train')
-    
-    gradient_accumulation_steps = args.batch_size // args.micro_batch_size
-
-    loss_scalar = 1.0 / gradient_accumulation_steps
-    
-    def gradient_pass(input, target, scalar):
-        loss, _, _ = llm(input_ids=input, labels=target, fuse_loss=args.fuse_loss)
-        avg_loss = loss.mean()
-        (avg_loss * scalar).backward()
-        return avg_loss.detach()
-        
-
-    micro_loss_log = 0
-    micro_step = 0
-    step_log = 20 # print loss every 100 steps.
-    avg_loss_log = 0
-    avg_step = 0
-    for data_idx, train_data in enumerate(train_loader):
-        if data_idx >= num_training_steps * gradient_accumulation_steps:
-            break
-        #print('data', data.shape, data) 
-        input_ids = train_data[:, 0 : seq_len].contiguous().to(fabric.device)
-        targets = train_data[:, 1 : seq_len + 1].contiguous().to(fabric.device)
-
-        is_grad_sync = (data_idx + 1) % gradient_accumulation_steps == 0
-        if is_grad_sync:
-            _loss = gradient_pass(input_ids, targets, loss_scalar)
-        else:
-            with llm.no_sync():
-                _loss = gradient_pass(input_ids, targets, loss_scalar)
-
-        if args.debug and fabric.rank == 0:
-            print('one pass loss...', _loss)
-            
-        micro_loss_log = micro_loss_log + _loss
-        micro_step = micro_step + 1
-        if is_grad_sync:
-            if args.grad_clip >= 0.01:
-                torch.nn.utils.clip_grad_norm_(llm.parameters(), max_norm=args.grad_clip)
-                #fabric.clip_gradients(model, optimizer, max_norm=grad_clip)
-            optimizer.step()
-            optimizer.zero_grad()
-            scheduler.step()
-
-            if (scheduler._step_count+1) % args.save_per_steps == 0 and rank == 0:
-                checkpoint = {
-                        "step": scheduler._step_count,
-                        "model_state_dict": llm.module.state_dict(),  # Remove DDP wrapper
-                        }
-                save_path = f"{args.save_ckpt}/ckpt_{scheduler._step_count}.pth"
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                torch.save(checkpoint, save_path)
-                print(f"Checkpoint saved at: {save_path}")
-            
-            if (scheduler._step_count+1) % step_log == 0:
-                micro_loss_log = micro_loss_log / micro_step
-                
-                dist.all_reduce(micro_loss_log, op=dist.ReduceOp.SUM)  # Sum losses across GPUs
-                micro_loss_log = micro_loss_log / fabric.world_size
-
-                avg_loss_log = avg_loss_log + micro_loss_log
-                avg_step = avg_step + 1
-            
-                if rank == 0:  # Print only on rank 0
-                    print(f"data: {data_idx + 1}, update: {scheduler._step_count + 1}, lr: {scheduler.get_last_lr()}, loss: {micro_loss_log.item():.4f}, avg_loss: {avg_loss_log.item() / avg_step:.4f}")
-
-                micro_loss_log = 0
-                micro_step = 0
-
+    if args.mode == 'train':
+        train(llm, args)
+    elif args.mode == 'valid':
+        valid(llm, args)
         
                         
 if __name__ == "__main__":
@@ -261,8 +301,11 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=256, help='overall batch size.')
     
     parser.add_argument("--model_type", type=str, default="tformer400m", choices=["tformer400m", "tformer1b", "xformer200m", "xformer300m"], help="choose model type.")
+    parser.add_argument("--mode", type=str, default="train", choices=["train", "valid"], help="choose experimential mode.")
     
     parser.add_argument("--num_training_step", type=int, default=100000, help="number of training step.")
+    parser.add_argument("--num_valid_step", type=int, default=10000, help="number of validation step.")
+
     parser.add_argument("--warmup_step", type=float, default=0.1, help="warmup steps.")
     parser.add_argument("--lr", type=float, default=1e-4, help="peak learning rate.")
     parser.add_argument("--grad_clip", type=float, default=0.0, help="gradient clip.")
