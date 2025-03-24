@@ -149,16 +149,20 @@ def main(args):
     llm_config.recur_chunk_size = args.recur_chunk
     print('recurrent step setup', llm_config.max_recur_step)
     # Load tokenizer from local path 
-    llm_model = llm_model.to(torch.bfloat16).to(device) 
+    llm_model = llm_model.to(torch.bfloat16).to(device)
+
+    _total_params = sum(p.numel() for p in llm_model.parameters())
+    print(f"Total number of parameters: {_total_params}")
+
     llm_model.model.gradient_checkpointing = False 
     dist.barrier()
     
     sync_model_weights(llm_model)    
     llm = llm_model 
-    print('initial llm model ....') 
+    #print('initial llm model ....') 
     # setup model distribution.
     llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
-    print('distributed language model creation.') 
+    #print('distributed language model creation.') 
 
     # setup optimization.
     #optimizer = torch.optim.AdamW(llm.parameters(), lr=args.lr) # 1.0e-6) 
@@ -175,7 +179,7 @@ def main(args):
     scheduler = get_linear_schedule_with_warmup( 
         optimizer, num_warmup_steps = int(warmup_steps), num_training_steps = int(num_training_steps) 
     )     
-    print('distributed model optimization created.')
+    #print('distributed model optimization created.')
 
     seq_len = 4096
     train_loader = create_dataloader(args.micro_batch_size, seq_len+1, args.data, split='train')
