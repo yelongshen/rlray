@@ -48,6 +48,11 @@ class _XformerConfig:
             return cls()  # Sum the list and initialize
         elif name == '300m':
             return cls(hidden_size = 2048, intermediate_size=5120, num_attention_heads=16, num_key_value_heads=16)
+        elif name == '300mE':
+            return cls(hidden_size = 2048, num_encoder_layers=6, num_decoder_layers=0, intermediate_size=5120, num_attention_heads=16, num_key_value_heads=16)
+        elif name == '300mD':
+            return cls(hidden_size = 2048, num_encoder_layers=2, num_decoder_layers=4, intermediate_size=5120, num_attention_heads=16, num_key_value_heads=16)
+            
     def __init__(
         self,
         vocab_size=32000,
