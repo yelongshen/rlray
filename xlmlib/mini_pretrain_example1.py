@@ -264,6 +264,9 @@ def main(args):
     elif args.model_type == 'xformer300mD':
         from xlmlib.xformer import _XformerForCausalLM
         llm_model, llm_config = _XformerForCausalLM.create_model('300mD')
+    elif args.model_type == 'xformer1b':
+        from xlmlib.xformer import _XformerForCausalLM
+        llm_model, llm_config = _XformerForCausalLM.create_model('1b')
         
     #if args.recur_overlap:
     llm_config.max_recur_step = args.recur_step
@@ -315,7 +318,7 @@ if __name__ == "__main__":
     parser.add_argument("--micro_batch_size", type=int, default=4, help='batch size.')
     parser.add_argument("--batch_size", type=int, default=256, help='overall batch size.')
     
-    parser.add_argument("--model_type", type=str, default="tformer400m", choices=["tformer400m", "tformer1b", "xformer200m", "xformer300m", "xformer300mE", "xformer300mD"], help="choose model type.")
+    parser.add_argument("--model_type", type=str, default="tformer400m", choices=["tformer400m", "tformer1b", "xformer200m", "xformer300m", "xformer300mE", "xformer300mD", "xformer1b"], help="choose model type.")
     parser.add_argument("--mode", type=str, default="train", choices=["train", "valid"], help="choose experimential mode.")
     
     parser.add_argument("--num_training_step", type=int, default=100000, help="number of training step.")
