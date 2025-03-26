@@ -111,7 +111,7 @@ def create_dataloader(
 #    logits = decoder(decode_state)
 #    next_token_loss(logits, data)
 
-def train(llm, args):
+def train(llm, config, args):
     #weight_decay = 1e-1
     beta1 = 0.9
     beta2 = 0.95
@@ -172,8 +172,8 @@ def train(llm, args):
                 checkpoint = {
                         "step": scheduler._step_count,
                         "model_state_dict": llm.module.state_dict(),  # Remove DDP wrapper
-                        "max_recur_step": llm.config.max_recur_step,
-                        "recur_chunk_size": llm.config.recur_chunk_size,
+                        "max_recur_step": config.max_recur_step,
+                        "recur_chunk_size": config.recur_chunk_size,
                         }
                 save_path = f"{args.save_ckpt}/ckpt_{scheduler._step_count}.pth"
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -307,7 +307,7 @@ def main(args):
     # setup optimization.
     #optimizer = torch.optim.AdamW(llm.parameters(), lr=args.lr) # 1.0e-6) 
     if args.mode == 'train':
-        train(llm, args)
+        train(llm, llm_config, args)
     elif args.mode == 'valid':
         valid(llm, args)
         
