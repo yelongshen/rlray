@@ -172,6 +172,8 @@ def train(llm, args):
                 checkpoint = {
                         "step": scheduler._step_count,
                         "model_state_dict": llm.module.state_dict(),  # Remove DDP wrapper
+                        "max_recur_step": llm.config.max_recur_step,
+                        "recur_chunk_size": llm.config.recur_chunk_size,
                         }
                 save_path = f"{args.save_ckpt}/ckpt_{scheduler._step_count}.pth"
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -257,6 +259,12 @@ def main(args):
         from xlmlib.xformer import _XformerForCausalLM
         llm_model, llm_config = _XformerForCausalLM.create_model('300m')
 
+    #if args.recur_overlap:
+    llm_config.max_recur_step = args.recur_step
+    llm_config.recur_chunk_size = args.recur_chunk
+    
+    print('recurrent step setup', llm_config.max_recur_step)
+    
     if args.mode == 'valid':
         # load pretrained model. 
         ckpt = torch.load(args.save_ckpt, map_location=torch.device('cpu'))
@@ -266,9 +274,10 @@ def main(args):
         print('missing_keys: ', missing_keys)
         print('unexpected_keys: ', unexpected_keys)    
 
-    llm_config.max_recur_step = args.recur_step
-    llm_config.recur_chunk_size = args.recur_chunk
-    print('recurrent step setup', llm_config.max_recur_step)
+        if args.recur_restore:
+            llm_config.max_recur_step = ckpt['max_recur_step']
+            llm_config.recur_chunk_size = ckpt['recur_chunk_size']
+            
     # Load tokenizer from local path 
     llm_model = llm_model.to(torch.bfloat16).to(device)
 
@@ -312,6 +321,7 @@ if __name__ == "__main__":
     parser.add_argument("--w_decay", type=float, default=0.1, help="weight decay.")
     parser.add_argument("--recur_step", type=int, default=8, help="recurrent step.")
     parser.add_argument("--recur_chunk", type=int, default=128, help="recurrent chunk.")
+    parser.add_argument("--recur_restore", action='store_true')
     
     parser.add_argument("--save_per_steps", type=int, default=1000, help="save ckpt per steps.")
     parser.add_argument("--save_ckpt", type=str, default=None, help="path to save ckpt.")
