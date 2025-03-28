@@ -472,7 +472,7 @@ class _Model(_PreTrainedModel):
         # Create a matrix of shape (max_len, d_model) to store positional encodings
         pe = torch.zeros(max_len, embed, dtype=data_type, device=data_device)
         # Create a vector of shape (max_len, 1) with values [0, 1, 2, ..., max_len-1]
-        position = torch.arange(0, max_len, dtype=data_type, device=data_device).unsqueeze(1)
+        position = torch.arange(max_len-1, -1, -1, dtype=data_type, device=data_device).unsqueeze(1)
         # Compute the div_term as described in the paper
         div_term = torch.exp(torch.arange(0, embed, 2, dtype=data_type, device=data_device).float() * (-math.log(10000.0) / embed)).to(dtype=data_type)
         
