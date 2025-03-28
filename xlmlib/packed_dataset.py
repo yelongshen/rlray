@@ -121,17 +121,25 @@ class PackedDatasetIterator:
             # if not self._wrap:
             #     raise StopIteration
             self._file_idx = 0
-
-        for i in range(self._n_chunks):
+            
+        #for i in range(self._n_chunks):
+        i = 0
+        while(len(self._mmaps) < self._n_chunks):
+            i = i + 1
             filename = self._filenames[(self._file_idx + i) % len(self._filenames)]
             if self._dtype is None:
                 self._dtype, self._chunk_size = self._read_header(filename)
                 self._n_blocks = self._chunk_size // self._block_size
             # TODO: check header matches with previous files
-            mmap = np.memmap(filename, mode="r", order="C", offset=HDR_SIZE)
+            try:
+                mmap = np.memmap(filename, mode="r", order="C", offset=HDR_SIZE)
+            except OSError as e:
+                print(f"Skipping file {filename} due to I/O error: {e}")
+                continue
+            # mmap = np.memmap(filename, mode="r", order="C", offset=HDR_SIZE)
             self._mmaps.append(mmap)
             self._buffers.append(memoryview(mmap))
-
+            
         self._file_idx += self._n_chunks
         n_all_blocks = self._n_chunks * self._n_blocks
 
