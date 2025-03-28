@@ -468,6 +468,23 @@ class _Model(_PreTrainedModel):
 
         self.gradient_checkpointing = False
 
+    def chunk_pos_embed(self, max_len, embed, data_type, data_device):
+        # Create a matrix of shape (max_len, d_model) to store positional encodings
+        pe = torch.zeros(max_len, embed)
+        # Create a vector of shape (max_len, 1) with values [0, 1, 2, ..., max_len-1]
+        position = torch.arange(0, max_len, dtype=data_type, device=data_device).unsqueeze(1)
+        # Compute the div_term as described in the paper
+        div_term = torch.exp(torch.arange(embed-2, -2, -2).float() * (-math.log(10000.0) / embed))
+        
+        # Apply sine to even indices and cosine to odd indices
+        pe[:, 0::2] = torch.sin(position * div_term)  # Apply sin to even indices
+        pe[:, 1::2] = torch.cos(position * div_term)  # Apply cos to odd indices
+
+        # Add a batch dimension by unsqueezing and register as a buffer
+        pe = pe.unsqueeze(0)
+        return pe
+        #self.register_buffer('pe', pe)
+        
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -554,13 +571,25 @@ class _Model(_PreTrainedModel):
         kv_cache_len = 0
         
         decode_state = []
+
+        _nv_chunk_embed = self.chunk_pos_embed(self.config.max_recur_step + 1, dim, hidden_states.dtype, hidden_states.device) #  self, max_len, embed, data_type, data_device):
+
         for c_idx, c_i in enumerate(chunks):
             states.append(c_i)
             
             _state = torch.cat(states, dim=1)
             _end = (c_idx+1) * chunk_size
             _start = 0 if _state.shape[1] == _end else _end - _state.shape[1]
-            
+
+            _nv_state = _state.view(_state.shape[0], _state.shape[1] // chunk_size, chunk_size, _state.shape[2])
+
+            _nv_state = _nv_state + _nv_chunk_embed[:, -_state.shape[1] // chunk_size:].unsqueeze(dim=2) 
+
+            _state = _nv_state.view(_state.shape)
+            ## append chunk position information before feeding into recur_layer.
+            # _state: bsz, seqlen, dim : bsz, chunk_num, chunk_size, dim  
+            # _chunk_embed : bsz, chunk_num, dim 
+            # _state = _state + 
             _state, _key, _value = self.recur_layer(_state, position_ids=position_ids[:, _start : _end], past_key_value=kv_cache, cur_pos=kv_cache_len, dynamic_cache=True, recurrent_chunk = 0 if c_idx == 0 else chunk_size)
             new_c_i = _state[:, -chunk_size:]
 
