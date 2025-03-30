@@ -58,16 +58,19 @@ class _XformerConfig:
             return cls(hidden_size = 2048, num_encoder_layers=12, num_decoder_layers=0, intermediate_size=5120, num_attention_heads=16, num_key_value_heads=16)
         elif name == '1bD':
             return cls(hidden_size = 2048, num_encoder_layers=0, num_decoder_layers=12, intermediate_size=5120, num_attention_heads=16, num_key_value_heads=16)
-            
+        elif name == '1bT':
+            return cls(hidden_size = 2048, intermediate_size=5120, embed_time = True, num_encoder_layers=10, num_decoder_layers=2,  num_attention_heads=16, num_key_value_heads=16)
+
     def __init__(
         self,
         vocab_size=32000,
         hidden_size=1536,
         intermediate_size=4096,
-
+        embed_time = False,
         num_encoder_layers = 4, # number of encoder layers. 
         num_decoder_layers= 2,
         max_recur_step = 8,  
+
         #num_hidden_layers=12,
         recur_chunk_size = 128,
         num_attention_heads=12,
@@ -90,6 +93,8 @@ class _XformerConfig:
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
 
+        self.embed_time = embed_time
+        
         self.num_encoder_layers = num_encoder_layers
         #self.num_recur_layers = num_recur_layers
         self.num_decoder_layers = num_decoder_layers
@@ -462,10 +467,14 @@ class _Model(_PreTrainedModel):
         self.decoder = nn.ModuleList(
             [_DecoderLayer(config, layer_idx) for layer_idx in range(config.num_decoder_layers)]
         )
-
+        
+        # suppose the max time embedding is 128. 
+        if self.config.embed_time:
+            self.embed_time = nn.Embedding(128, config.hidden_size)
+        
         self._attn_implementation = 'flash_attention_2' # config._attn_implementation
         self.norm = _RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
+        
         self.gradient_checkpointing = False
 
     def chunk_pos_embed(self, max_len, embed, data_type, data_device):
@@ -572,7 +581,11 @@ class _Model(_PreTrainedModel):
         
         decode_state = []
 
-        _nv_chunk_embed = self.chunk_pos_embed(self.config.max_recur_step + 1, dim, hidden_states.dtype, hidden_states.device) #  self, max_len, embed, data_type, data_device):
+        time_seq = torch.arange(self.config.max_recur_step+1, -1, -1, dtype=torch.long, device=hidden_states.device).unsqueeze(0)
+        
+        _nv_chunk_embed = self.embed_time(time_seq) # bs, seq, dim 
+        
+        #self.chunk_pos_embed(self.config.max_recur_step + 1, dim, hidden_states.dtype, hidden_states.device) #  self, max_len, embed, data_type, data_device):
 
         for c_idx, c_i in enumerate(chunks):
             states.append(c_i)
