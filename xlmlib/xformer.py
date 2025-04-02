@@ -592,7 +592,7 @@ class _Model(_PreTrainedModel):
             
             _state = torch.cat(states, dim=1)
             _end = (c_idx+1) * chunk_size
-            _start = 0 if _state.shape[1] == _end else _end - _state.shape[1]
+            _start = 0 if _state.shape[1] >= _end else _end - _state.shape[1]
 
             _nv_state = _state.view(_state.shape[0], _state.shape[1] // chunk_size, chunk_size, _state.shape[2])
 
