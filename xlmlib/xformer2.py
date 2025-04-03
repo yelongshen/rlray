@@ -175,6 +175,13 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
+def apply_rotary_pos_emb_solo(p, cos, sin, position_ids=None, unsqueeze_dim=1):
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    p_embed = (p * cos) + (rotate_half(p) * sin)
+    return p_embed
+
+
 class _MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -243,111 +250,154 @@ class _FlashAttention2(nn.Module):
         cur_pos = 0,
         dynamic_cache = False,
         recurrent_chunk = 0, # split recurrent chunk for causal attention, and hidden chunk for full attention. 
+        split_qkv = False
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         bsz, q_len, _ = hidden_states.size()
-
-        qkv = self.qkv_proj(hidden_states)
-        query_pos = self.num_heads * self.head_dim
-        query_states = qkv[..., :query_pos]
-        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
-        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
-
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim)#.transpose(1, 2)
-
-        cos, sin = self.rotary_emb(value_states, position_ids) 
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
-
-        query_states = query_states.transpose(1,2).to(hidden_states.dtype)
-        key_states = key_states.transpose(1,2).to(hidden_states.dtype)
-        #value_states = value_states.transpose(1,2)
-
         attn_dropout = self.attention_dropout if self.training else 0.0
 
-        if recurrent_chunk > 0:
-            h_key_states, c_key_states = key_states[:, :-recurrent_chunk], key_states[:, -recurrent_chunk:]  
-            h_value_states, c_value_states = value_states[:, :-recurrent_chunk], value_states[:, -recurrent_chunk:]  
-            h_query_states, c_query_states = query_states[:, :-recurrent_chunk], query_states[:, -recurrent_chunk:]  
+        query_pos = self.num_heads * self.head_dim
 
+        if split_qkv:
+            q_hidden = hidden_states[:, :-recurrent_chunk]   
+            q_weight = self.qkv_proj.weight[:query_pos]
+            kv_weight = self.qkv_proj.weight[query_pos:]
+
+            q_states = F.linear(q_hidden, q_weight)  # shape: [B, T, q_dim]
+            kv_states = F.linear(hidden_states, kv_weight)  # shape: [B, T, kv_dim]
+
+            k_states = kv[..., : self.num_key_value_heads * self.head_dim]
+            v_states = kv[..., self.num_key_value_heads * self.head_dim :]
+
+            k_states = k_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+            v_states = v_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim)#.transpose(1, 2)
+    
+            k_cos, k_sin = self.rotary_emb(k_states, position_ids) 
+            q_cos, q_sin = self.rotary_emb(q_states, position_ids[:, -recurrent_chunk:]
+
+            # the length of q kv are different.
+            q_states = apply_rotary_pos_emb(q_states, q_cos, q_sin, position_ids[:, -recurrent_chunk:])
+            k_states = apply_rotary_pos_emb(k_states, k_cos, k_sin, position_ids)
+    
+            q_states = q_states.transpose(1,2).to(hidden_states.dtype)
+            k_states = k_states.transpose(1,2).to(hidden_states.dtype)
+
+        
             if past_key_value is None or cur_pos == 0:
-                c_key_cache = key_states
-                c_value_cache = value_states
+                key_cache = k_states
+                value_cache = v_states
             else:
-                c_key_cache = torch.cat([past_key_value[0][:, :cur_pos], key_states], dim=1)
-                c_value_cache = torch.cat([past_key_value[1][:, :cur_pos], value_states], dim=1)
-                
-            c_attn_output = flash_attn_func(
-                        c_query_states,
-                        c_key_cache,
-                        c_value_cache,
-                        attn_dropout,
-                        softmax_scale=None,
-                        causal=True)
+                key_cache = torch.cat([past_key_value[0][:, :cur_pos], k_states], dim=1)
+                value_cache = torch.cat([past_key_value[1][:, :cur_pos], v_states], dim=1)
 
-            if past_key_value is None or cur_pos == 0:
-                h_key_cache = torch.cat([c_key_states, h_key_states], dim=1)
-                h_value_cache = torch.cat([c_value_states, h_value_states], dim=1) #value_states
-            else:
-                h_key_cache = torch.cat([past_key_value[0][:, :cur_pos], c_key_states, h_key_states], dim=1)
-                h_value_cache = torch.cat([past_key_value[1][:, :cur_pos], c_value_states, h_value_states], dim=1)
+            attn_output = flash_attn_func(
+                                q_states,
+                                key_cache,
+                                value_cache,
+                                attn_dropout,
+                                softmax_scale=None,
+                                causal=True)
+            qlen = recurrent_chunk
+        else:
+            qkv = self.qkv_proj(hidden_states)
+            query_states = qkv[..., :query_pos]
+            key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
+            value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
+    
+            query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+            key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+            value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim)#.transpose(1, 2)
+    
+            cos, sin = self.rotary_emb(value_states, position_ids) 
+            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+    
+            query_states = query_states.transpose(1,2).to(hidden_states.dtype)
+            key_states = key_states.transpose(1,2).to(hidden_states.dtype)
+            #value_states = value_states.transpose(1,2)
 
-            h_attn_output = flash_attn_func(
-                            h_query_states,
-                            h_key_cache,
-                            h_value_cache,
+
+            if recurrent_chunk > 0:
+                h_key_states, c_key_states = key_states[:, :-recurrent_chunk], key_states[:, -recurrent_chunk:]  
+                h_value_states, c_value_states = value_states[:, :-recurrent_chunk], value_states[:, -recurrent_chunk:]  
+                h_query_states, c_query_states = query_states[:, :-recurrent_chunk], query_states[:, -recurrent_chunk:]  
+    
+                if past_key_value is None or cur_pos == 0:
+                    c_key_cache = key_states
+                    c_value_cache = value_states
+                else:
+                    c_key_cache = torch.cat([past_key_value[0][:, :cur_pos], key_states], dim=1)
+                    c_value_cache = torch.cat([past_key_value[1][:, :cur_pos], value_states], dim=1)
+                    
+                c_attn_output = flash_attn_func(
+                            c_query_states,
+                            c_key_cache,
+                            c_value_cache,
                             attn_dropout,
                             softmax_scale=None,
-                            causal=False)
-
-            attn_output = torch.cat([h_attn_output, c_attn_output], dim=1)
-            key_cache = c_key_cache
-            value_cache = c_value_cache
-            #c_attn_output = c_attn_output.reshape(bsz, c_len, self.hidden_size) #.contiguous()
-        else:
-            if dynamic_cache:
+                            causal=True)
+    
                 if past_key_value is None or cur_pos == 0:
-                    key_cache = key_states
-                    value_cache = value_states
+                    h_key_cache = torch.cat([c_key_states, h_key_states], dim=1)
+                    h_value_cache = torch.cat([c_value_states, h_value_states], dim=1) #value_states
                 else:
-                    key_cache = torch.cat([past_key_value[0][:, :cur_pos], key_states], dim=1)
-                    value_cache = torch.cat([past_key_value[1][:, :cur_pos], value_states], dim=1)
+                    h_key_cache = torch.cat([past_key_value[0][:, :cur_pos], c_key_states, h_key_states], dim=1)
+                    h_value_cache = torch.cat([past_key_value[1][:, :cur_pos], c_value_states, h_value_states], dim=1)
+    
+                h_attn_output = flash_attn_func(
+                                h_query_states,
+                                h_key_cache,
+                                h_value_cache,
+                                attn_dropout,
+                                softmax_scale=None,
+                                causal=False)
+    
+                attn_output = torch.cat([h_attn_output, c_attn_output], dim=1)
+                key_cache = c_key_cache
+                value_cache = c_value_cache
+                #c_attn_output = c_attn_output.reshape(bsz, c_len, self.hidden_size) #.contiguous()
             else:
-                if not inference_mode:
-                    key_cache = key_states
-                    value_cache = value_states
-                elif inference_mode and past_key_value is None: 
-                    key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
-                    value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
-                    key_cache[:, :q_len] = key_states
-                    value_cache[:, :q_len] = value_states
+                if dynamic_cache:
+                    if past_key_value is None or cur_pos == 0:
+                        key_cache = key_states
+                        value_cache = value_states
+                    else:
+                        key_cache = torch.cat([past_key_value[0][:, :cur_pos], key_states], dim=1)
+                        value_cache = torch.cat([past_key_value[1][:, :cur_pos], value_states], dim=1)
                 else:
-                    key_cache, value_cache = past_key_value
-                    key_cache[:, cur_pos:cur_pos + q_len] = key_states
-                    value_cache[:, cur_pos:cur_pos + q_len] = value_states
-                
-                
-            key_states = key_cache[:, :cur_pos + q_len]
-            value_states = value_cache[:, :cur_pos + q_len]
-    
-            if query_states.dtype == torch.float32:
-                target_dtype = torch.float16
-                logger.warning_once(
-                    f"The input hidden states seems to be silently casted in float32, this might be related to"
-                    f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
-                    f" {target_dtype}."
+                    if not inference_mode:
+                        key_cache = key_states
+                        value_cache = value_states
+                    elif inference_mode and past_key_value is None: 
+                        key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
+                        value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
+                        key_cache[:, :q_len] = key_states
+                        value_cache[:, :q_len] = value_states
+                    else:
+                        key_cache, value_cache = past_key_value
+                        key_cache[:, cur_pos:cur_pos + q_len] = key_states
+                        value_cache[:, cur_pos:cur_pos + q_len] = value_states
+                    
+                    
+                key_states = key_cache[:, :cur_pos + q_len]
+                value_states = value_cache[:, :cur_pos + q_len]
+        
+                if query_states.dtype == torch.float32:
+                    target_dtype = torch.float16
+                    logger.warning_once(
+                        f"The input hidden states seems to be silently casted in float32, this might be related to"
+                        f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
+                        f" {target_dtype}."
+                    )
+                    query_states = query_states.to(target_dtype)
+                    key_states = key_states.to(target_dtype)
+                    value_states = value_states.to(target_dtype)
+        
+                attn_output = self._flash_attention_forward(
+                    query_states,
+                    key_states,
+                    value_states,
+                    attention_mask,
+                    dropout=attn_dropout,
                 )
-                query_states = query_states.to(target_dtype)
-                key_states = key_states.to(target_dtype)
-                value_states = value_states.to(target_dtype)
-    
-            attn_output = self._flash_attention_forward(
-                query_states,
-                key_states,
-                value_states,
-                attention_mask,
-                dropout=attn_dropout,
-            )
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
         return attn_output, key_cache, value_cache
@@ -399,6 +449,7 @@ class _DecoderLayer(nn.Module):
         cur_pos = 0,
         dynamic_cache = False,
         recurrent_chunk = 0,
+        split_qkv = False
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -412,7 +463,8 @@ class _DecoderLayer(nn.Module):
             max_generation = max_generation,
             cur_pos = cur_pos,
             dynamic_cache = dynamic_cache,
-            recurrent_chunk = recurrent_chunk
+            recurrent_chunk = recurrent_chunk,
+            split_qkv=split_qkv,
         )
         hidden_states = residual + self.resid_attn_dropout(attn_outputs)
         residual = hidden_states
@@ -464,6 +516,8 @@ class _Model(_PreTrainedModel):
             [_DecoderLayer(config, layer_idx) for layer_idx in range(config.num_encoder_layers)]
         )
         self.recur_layer = _DecoderLayer(config, 0) 
+
+        self.merge_layer = _DecoderLayer(config, 0)
         
         self.decoder = nn.ModuleList(
             [_DecoderLayer(config, layer_idx) for layer_idx in range(config.num_decoder_layers)]
@@ -593,13 +647,16 @@ class _Model(_PreTrainedModel):
             
             _state = torch.cat(states, dim=1)
             _end = (c_idx+1) * chunk_size
-            _start = 0 if _state.shape[1] == _end else _end - _state.shape[1]
+            _start = 0 if _state.shape[1] >= _end else _end - _state.shape[1]
 
             _nv_state = _state.view(_state.shape[0], _state.shape[1] // chunk_size, chunk_size, _state.shape[2])
-
             _nv_state = _nv_state + _nv_chunk_embed[:, -_state.shape[1] // chunk_size:].unsqueeze(dim=2) 
-
             _state = _nv_state.view(_state.shape)
+
+
+                    self.merge_layer = _DecoderLayer(_state, position_ids=position_ids[:, _start : _end], past_key_value=kv_cache, cur_pos=kv_cache_len, recurrent_chunk = chunk_size, split_qkv=True)
+
+            
             ## append chunk position information before feeding into recur_layer.
             # _state: bsz, seqlen, dim : bsz, chunk_num, chunk_size, dim  
             # _chunk_embed : bsz, chunk_num, dim 
