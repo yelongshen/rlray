@@ -590,7 +590,7 @@ class _Model(_PreTrainedModel):
             time_seq = torch.arange(self.config.max_recur_step + 1, -1, -1, dtype=torch.long, device=hidden_states.device).unsqueeze(0)
             _nv_chunk_embed = self.embed_time(time_seq) # bs, seq, dim 
         else:
-            self.chunk_pos_embed(self.config.max_recur_step + 1, dim, hidden_states.dtype, hidden_states.device) #  self, max_len, embed, data_type, data_device):
+            _nv_chunk_embed = self.chunk_pos_embed(self.config.max_recur_step + 1, dim, hidden_states.dtype, hidden_states.device) #  self, max_len, embed, data_type, data_device):
 
         for c_idx, c_i in enumerate(chunks):
             states.append(c_i)
