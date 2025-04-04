@@ -42,7 +42,7 @@ except ImportError as error:
             "Current `flash-attention` does not support `window_size`. Either upgrade or use `attn_implementation='eager'`."
         )
 
-class _XformerConfig:
+class _Xformer2Config:
     @classmethod
     def from_name(cls, name):
         if name == '200m':
@@ -281,7 +281,7 @@ class _FlashAttention2(nn.Module):
             q_states = q_states.transpose(1,2).to(hidden_states.dtype)
             k_states = k_states.transpose(1,2).to(hidden_states.dtype)
 
-        
+            
             if past_key_value is None or cur_pos == 0:
                 key_cache = k_states
                 value_cache = v_states
@@ -314,90 +314,37 @@ class _FlashAttention2(nn.Module):
             key_states = key_states.transpose(1,2).to(hidden_states.dtype)
             #value_states = value_states.transpose(1,2)
 
-
-            if recurrent_chunk > 0:
-                h_key_states, c_key_states = key_states[:, :-recurrent_chunk], key_states[:, -recurrent_chunk:]  
-                h_value_states, c_value_states = value_states[:, :-recurrent_chunk], value_states[:, -recurrent_chunk:]  
-                h_query_states, c_query_states = query_states[:, :-recurrent_chunk], query_states[:, -recurrent_chunk:]  
-    
+            # no need to distingush recurrent chunk or 
+            if dynamic_cache:
                 if past_key_value is None or cur_pos == 0:
-                    c_key_cache = key_states
-                    c_value_cache = value_states
+                    key_cache = key_states
+                    value_cache = value_states
                 else:
-                    c_key_cache = torch.cat([past_key_value[0][:, :cur_pos], key_states], dim=1)
-                    c_value_cache = torch.cat([past_key_value[1][:, :cur_pos], value_states], dim=1)
-                    
-                c_attn_output = flash_attn_func(
-                            c_query_states,
-                            c_key_cache,
-                            c_value_cache,
-                            attn_dropout,
-                            softmax_scale=None,
-                            causal=True)
-    
-                if past_key_value is None or cur_pos == 0:
-                    h_key_cache = torch.cat([c_key_states, h_key_states], dim=1)
-                    h_value_cache = torch.cat([c_value_states, h_value_states], dim=1) #value_states
+                    key_cache = torch.cat([past_key_value[0][:, :cur_pos], key_states], dim=1)
+                    value_cache = torch.cat([past_key_value[1][:, :cur_pos], value_states], dim=1)
+            else:
+                if not inference_mode:
+                    key_cache = key_states
+                    value_cache = value_states
+                elif inference_mode and past_key_value is None: 
+                    key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
+                    value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
+                    key_cache[:, :q_len] = key_states
+                    value_cache[:, :q_len] = value_states
                 else:
-                    h_key_cache = torch.cat([past_key_value[0][:, :cur_pos], c_key_states, h_key_states], dim=1)
-                    h_value_cache = torch.cat([past_key_value[1][:, :cur_pos], c_value_states, h_value_states], dim=1)
-    
-                h_attn_output = flash_attn_func(
-                                h_query_states,
-                                h_key_cache,
-                                h_value_cache,
+                    key_cache, value_cache = past_key_value
+                    key_cache[:, cur_pos:cur_pos + q_len] = key_states
+                    value_cache[:, cur_pos:cur_pos + q_len] = value_states
+            
+                        
+            attn_output = flash_attn_func(
+                                query_states,
+                                key_cache,
+                                value_cache,
                                 attn_dropout,
                                 softmax_scale=None,
                                 causal=False)
-    
-                attn_output = torch.cat([h_attn_output, c_attn_output], dim=1)
-                key_cache = c_key_cache
-                value_cache = c_value_cache
-                #c_attn_output = c_attn_output.reshape(bsz, c_len, self.hidden_size) #.contiguous()
-            else:
-                if dynamic_cache:
-                    if past_key_value is None or cur_pos == 0:
-                        key_cache = key_states
-                        value_cache = value_states
-                    else:
-                        key_cache = torch.cat([past_key_value[0][:, :cur_pos], key_states], dim=1)
-                        value_cache = torch.cat([past_key_value[1][:, :cur_pos], value_states], dim=1)
-                else:
-                    if not inference_mode:
-                        key_cache = key_states
-                        value_cache = value_states
-                    elif inference_mode and past_key_value is None: 
-                        key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
-                        value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
-                        key_cache[:, :q_len] = key_states
-                        value_cache[:, :q_len] = value_states
-                    else:
-                        key_cache, value_cache = past_key_value
-                        key_cache[:, cur_pos:cur_pos + q_len] = key_states
-                        value_cache[:, cur_pos:cur_pos + q_len] = value_states
-                    
-                    
-                key_states = key_cache[:, :cur_pos + q_len]
-                value_states = value_cache[:, :cur_pos + q_len]
-        
-                if query_states.dtype == torch.float32:
-                    target_dtype = torch.float16
-                    logger.warning_once(
-                        f"The input hidden states seems to be silently casted in float32, this might be related to"
-                        f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
-                        f" {target_dtype}."
-                    )
-                    query_states = query_states.to(target_dtype)
-                    key_states = key_states.to(target_dtype)
-                    value_states = value_states.to(target_dtype)
-        
-                attn_output = self._flash_attention_forward(
-                    query_states,
-                    key_states,
-                    value_states,
-                    attention_mask,
-                    dropout=attn_dropout,
-                )
+            
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
         return attn_output, key_cache, value_cache
@@ -631,8 +578,11 @@ class _Model(_PreTrainedModel):
         #key_cache = torch.zeros(bsz, seq_length, self.config.num_key_value_heads, self.config.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
         #value_cache = torch.zeros(bsz, seq_length, self.config.num_key_value_heads, self.config.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
 
-        kv_cache = None
-        kv_cache_len = 0
+        decode_kv_cache = None
+        decode_kv_cache_len = 0
+
+        recur_kv_cache = None
+        recur_kv_cache_len = 0
         
         decode_state = []
 
@@ -653,23 +603,26 @@ class _Model(_PreTrainedModel):
             _nv_state = _nv_state + _nv_chunk_embed[:, -_state.shape[1] // chunk_size:].unsqueeze(dim=2) 
             _state = _nv_state.view(_state.shape)
 
-
-                    self.merge_layer = _DecoderLayer(_state, position_ids=position_ids[:, _start : _end], past_key_value=kv_cache, cur_pos=kv_cache_len, recurrent_chunk = chunk_size, split_qkv=True)
-
+            _decode_state, _decode_key_cache, _decode_value_cache = self.merge_layer(_state, position_ids=position_ids[:, _start : _end], past_key_value=decode_kv_cache, cur_pos=decode_kv_cache_len, recurrent_chunk = chunk_size, split_qkv=True)
             
             ## append chunk position information before feeding into recur_layer.
             # _state: bsz, seqlen, dim : bsz, chunk_num, chunk_size, dim  
             # _chunk_embed : bsz, chunk_num, dim 
             # _state = _state + 
-            _state, _key, _value = self.recur_layer(_state, position_ids=position_ids[:, _start : _end], past_key_value=kv_cache, cur_pos=kv_cache_len, dynamic_cache=True, recurrent_chunk = 0 if c_idx == 0 else chunk_size)
-            new_c_i = _state[:, -chunk_size:]
+            
+            # full attention for the recurrent layers. 
+            _recur_state, _recur_key_cache, _recur_value_cache = self.recur_layer(_state, position_ids=position_ids[:, _start : _end], past_key_value=recur_kv_cache, cur_pos=recur_kv_cache_len, dynamic_cache=True, recurrent_chunk = chunk_size, split_qkv=False)
 
-            states = [_state[:, -self.config.max_recur_step * chunk_size:]]
+            #new_c_i = _state[:, -chunk_size:]
+            states = [_recur_state[:, -self.config.max_recur_step * chunk_size:]]
+            
+            decode_kv_cache = (_decode_key_cache[:, :-self.config.max_recur_step * chunk_size], _decode_value_cache[:, :-self.config.max_recur_step * chunk_size])
+            decode_kv_cache_len = decode_kv_cache[0].shape[1]
 
-            kv_cache = (_key[:, :-self.config.max_recur_step * chunk_size], _value[:, :-self.config.max_recur_step * chunk_size])
+            recur_kv_cache = (_recur_key_cache[:, :-self.config.max_recur_step * chunk_size], _recur_value_cache[:, :-self.config.max_recur_step * chunk_size])
+            recur_kv_cache_len = recur_kv_cache[0].shape[1]
 
-            kv_cache_len = kv_cache[0].shape[1]
-            decode_state.append(new_c_i)
+            decode_state.append(_decode_state)
 
         
         hidden_states = torch.cat(decode_state, dim=1)
@@ -689,12 +642,12 @@ import torch.nn.functional as F
 # PP, TP, DP
 # Causal Large Language Model 
 # 
-class _XformerForCausalLM(_PreTrainedModel):
+class _Xformer2ForCausalLM(_PreTrainedModel):
     
     @staticmethod
     def create_model(name):
-        _config = _XformerConfig.from_name(name)
-        _model = _XformerForCausalLM(_config)
+        _config = _Xformer2Config.from_name(name)
+        _model = _Xformer2ForCausalLM(_config)
         _model.apply(_model._init_weights)
         return _model, _config
 
