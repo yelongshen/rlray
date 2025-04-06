@@ -268,6 +268,7 @@ class _FlashAttention2(nn.Module):
             k_states = kv_states[..., : self.num_key_value_heads * self.head_dim]
             v_states = kv_states[..., self.num_key_value_heads * self.head_dim :]
 
+            q_states = q_states.view(bsz, recurrent_chunk, self.num_heads, self.head_dim).transpose(1, 2)
             k_states = k_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
             v_states = v_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim)#.transpose(1, 2)
     
