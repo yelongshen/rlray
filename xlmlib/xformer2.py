@@ -351,6 +351,9 @@ class _FlashAttention2(nn.Module):
                                 attn_dropout,
                                 softmax_scale=None,
                                 causal=False)
+            print('qlen_2', qlen)
+            print('attn_output_2.shape',attn_output.shape)
+            
             
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
