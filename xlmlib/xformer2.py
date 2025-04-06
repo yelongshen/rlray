@@ -408,7 +408,12 @@ class _DecoderLayer(nn.Module):
         recurrent_chunk = 0,
         split_qkv = False
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        residual = hidden_states
+        #residual = hidden_states
+        if split_qkv:
+            residual = hidden_states[:, -recurrent_chunk:]  
+        else:
+            residual = hidden_states
+            
         hidden_states = self.input_layernorm(hidden_states)
         # Self Attention
         attn_outputs, key_cache, value_cache = self.self_attn(
