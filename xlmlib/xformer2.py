@@ -258,7 +258,7 @@ class _FlashAttention2(nn.Module):
         query_pos = self.num_heads * self.head_dim
 
         if split_qkv:
-            q_hidden = hidden_states[:, :-recurrent_chunk]   
+            q_hidden = hidden_states[:, -recurrent_chunk:]   
             q_weight = self.qkv_proj.weight[:query_pos]
             kv_weight = self.qkv_proj.weight[query_pos:]
 
