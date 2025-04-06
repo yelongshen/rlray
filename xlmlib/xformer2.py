@@ -257,7 +257,7 @@ class _FlashAttention2(nn.Module):
 
         query_pos = self.num_heads * self.head_dim
 
-        print('split_qkv',split_qkv)
+        #print('split_qkv',split_qkv)
         
         if split_qkv:
             q_hidden = hidden_states[:, -recurrent_chunk:]   
@@ -299,10 +299,10 @@ class _FlashAttention2(nn.Module):
                                 attn_dropout,
                                 softmax_scale=None,
                                 causal=True)
-            qlen = recurrent_chunk
-            print('qlen', qlen)
+            q_len = recurrent_chunk
+            #print('qlen', qlen)
             
-            print('attn_output.shape',attn_output.shape)
+            #print('attn_output.shape',attn_output.shape)
             
         else:
             qkv = self.qkv_proj(hidden_states)
@@ -351,8 +351,8 @@ class _FlashAttention2(nn.Module):
                                 attn_dropout,
                                 softmax_scale=None,
                                 causal=False)
-            print('qlen_2', qlen)
-            print('attn_output_2.shape',attn_output.shape)
+            #print('qlen_2', q_len)
+            #print('attn_output_2.shape',attn_output.shape)
             
             
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
