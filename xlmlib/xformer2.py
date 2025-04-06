@@ -275,8 +275,8 @@ class _FlashAttention2(nn.Module):
             q_cos, q_sin = self.rotary_emb(q_states, position_ids[:, -recurrent_chunk:])
 
             # the length of q kv are different.
-            q_states = apply_rotary_pos_emb(q_states, q_cos, q_sin, position_ids[:, -recurrent_chunk:])
-            k_states = apply_rotary_pos_emb(k_states, k_cos, k_sin, position_ids)
+            q_states = apply_rotary_pos_emb_solo(q_states, q_cos, q_sin, position_ids[:, -recurrent_chunk:])
+            k_states = apply_rotary_pos_emb_solo(k_states, k_cos, k_sin, position_ids)
     
             q_states = q_states.transpose(1,2).to(hidden_states.dtype)
             k_states = k_states.transpose(1,2).to(hidden_states.dtype)
