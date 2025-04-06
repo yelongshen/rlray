@@ -265,8 +265,8 @@ class _FlashAttention2(nn.Module):
             q_states = F.linear(q_hidden, q_weight)  # shape: [B, T, q_dim]
             kv_states = F.linear(hidden_states, kv_weight)  # shape: [B, T, kv_dim]
 
-            k_states = kv[..., : self.num_key_value_heads * self.head_dim]
-            v_states = kv[..., self.num_key_value_heads * self.head_dim :]
+            k_states = kv_states[..., : self.num_key_value_heads * self.head_dim]
+            v_states = kv_states[..., self.num_key_value_heads * self.head_dim :]
 
             k_states = k_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
             v_states = v_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim)#.transpose(1, 2)
