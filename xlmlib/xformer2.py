@@ -257,6 +257,8 @@ class _FlashAttention2(nn.Module):
 
         query_pos = self.num_heads * self.head_dim
 
+        print('split_qkv',split_qkv)
+        
         if split_qkv:
             q_hidden = hidden_states[:, -recurrent_chunk:]   
             q_weight = self.qkv_proj.weight[:query_pos]
@@ -299,7 +301,7 @@ class _FlashAttention2(nn.Module):
                                 causal=True)
             qlen = recurrent_chunk
             print('qlen', qlen)
-            print('split_qkv',split_qkv)
+            
             print('attn_output.shape',attn_output.shape)
             
         else:
