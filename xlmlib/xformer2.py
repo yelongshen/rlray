@@ -298,6 +298,10 @@ class _FlashAttention2(nn.Module):
                                 softmax_scale=None,
                                 causal=True)
             qlen = recurrent_chunk
+            print('qlen', qlen)
+            print('split_qkv',split_qkv)
+            print('attn_output.shape',attn_output.shape)
+            
         else:
             qkv = self.qkv_proj(hidden_states)
             query_states = qkv[..., :query_pos]
