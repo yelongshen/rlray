@@ -13,10 +13,10 @@ if __name__ == "__main__":
     inputs_1 = feature_extractor_1(audio_data, sampling_rate=16000, return_tensors="pt")
     print(inputs_1)
 
-    inputs_2 = feature_extractor_1(audio_data, sampling_rate=16000, return_tensors="pt")
+    inputs_2 = feature_extractor_2(audio_data, sampling_rate=16000, return_tensors="pt")
     print(inputs_2)
 
-    inputs_3 = feature_extractor_1(audio_data, sampling_rate=16000, return_tensors="pt")
+    inputs_3 = feature_extractor_3(audio_data, sampling_rate=16000, return_tensors="pt")
     print(inputs_3)
     
 
