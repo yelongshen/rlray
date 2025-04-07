@@ -11,13 +11,13 @@ if __name__ == "__main__":
     feature_extractor_3 = WhisperFeatureExtractor.from_pretrained("openai/whisper-medium")
 
     inputs_1 = feature_extractor_1(audio_data, sampling_rate=16000, return_tensors="pt")
-    print(inputs_1)
+    print(inputs_1['input_features'].shape)
 
     inputs_2 = feature_extractor_2(audio_data, sampling_rate=16000, return_tensors="pt")
-    print(inputs_2)
+    print(inputs_2['input_features'].shape)
 
     inputs_3 = feature_extractor_3(audio_data, sampling_rate=16000, return_tensors="pt")
-    print(inputs_3)
+    print(inputs_3['input_features'].shape)
     
 
 
