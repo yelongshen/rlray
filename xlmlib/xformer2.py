@@ -350,7 +350,7 @@ class _FlashAttention2(nn.Module):
                                 value_cache,
                                 attn_dropout,
                                 softmax_scale=None,
-                                causal=False)
+                                causal=not dynamic_cache)
             #print('qlen_2', q_len)
             #print('attn_output_2.shape',attn_output.shape)
             
