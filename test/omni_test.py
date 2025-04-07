@@ -32,12 +32,22 @@ from transformers import WhisperFeatureExtractor, WhisperTokenizer
 #  "sampling_rate": 16000,
 #  "temporal_patch_size": 2
 
+
+#        feature_size=80,
+#        sampling_rate=16000,
+#        hop_length=160,
+#        chunk_length=30,
+#        n_fft=400,
+#        padding_value=0.0,
+#        dither=0.0,
+#        return_attention_mask=False,  # pad inputs to max length with silence token (zero) and no attention mask
+
+
 if __name__ == "__main__":
     path = './question1.m4a'
     audio_data, _ = librosa.load(path, sr=16000)
 
     feature_extractor_1 = WhisperFeatureExtractor.from_pretrained("openai/whisper-small")
-    feature_extractor_2 = WhisperFeatureExtractor.from_pretrained('../../qwen2.5/Qwen2.5-Omni-7B')
     feature_extractor_3 = WhisperFeatureExtractor.from_pretrained("openai/whisper-medium")
 
     inputs_1 = feature_extractor_1(audio_data, sampling_rate=16000, return_tensors="pt")
@@ -45,6 +55,11 @@ if __name__ == "__main__":
 
     d = inputs_1['input_features'] - inputs_3['input_features']
     print(d)
+
+
+    feature_extractor_2 = WhisperFeatureExtractor.from_pretrained('../../qwen2.5/Qwen2.5-Omni-7B')
+    feature_extractor_4 = WhisperFeatureExtractor(feature_size=128, chunk_length=300)
+
     print(sum(d*d)/len(d))
     
     #assert torch.allclose(o1, o2, atol=1e-1)
