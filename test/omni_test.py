@@ -60,7 +60,11 @@ if __name__ == "__main__":
     feature_extractor_2 = WhisperFeatureExtractor.from_pretrained('../../qwen2.5/Qwen2.5-Omni-7B')
     feature_extractor_4 = WhisperFeatureExtractor(feature_size=128, chunk_length=300)
 
-    print(sum(d*d)/len(d))
+    
+    inputs_2 = feature_extractor_2(audio_data, sampling_rate=16000, return_tensors="pt")
+    inputs_4 = feature_extractor_4(audio_data, sampling_rate=16000, return_tensors="pt")
+    
+    #print(sum(d*d)/len(d))
     
     #assert torch.allclose(o1, o2, atol=1e-1)
     #assert 
