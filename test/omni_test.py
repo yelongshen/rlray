@@ -68,10 +68,10 @@ if __name__ == "__main__":
 
     safetensor_files = [
         f"{local_model_path}/model-00001-of-00005.safetensors",
-        f"{local_model_path}/model-00001-of-00005.safetensors",
-        f"{local_model_path}/model-00001-of-00005.safetensors",
-        f"{local_model_path}/model-00001-of-00005.safetensors",
-        f"{local_model_path}/model-00001-of-00005.safetensors",
+        f"{local_model_path}/model-00002-of-00005.safetensors",
+        f"{local_model_path}/model-00003-of-00005.safetensors",
+        f"{local_model_path}/model-00004-of-00005.safetensors",
+        f"{local_model_path}/model-00005-of-00005.safetensors",
     ]
     
     model_state_dict = {}
