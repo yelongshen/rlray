@@ -1,6 +1,7 @@
 # okay, let's do something fun. 
 import librosa
 from transformers import WhisperFeatureExtractor, WhisperTokenizer
+from safetensors.torch import load_file
 
 #  "chunk_length": 300,
 #  "dither": 0.0,
