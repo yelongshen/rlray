@@ -1,0 +1,1 @@
+{"project_name": "nextllm", "storage_account_name": "languagereasoning", "container_name": "amulet", "blob_storage_account_name": "languagereasoning", "registry_name": "projects", "local_path": "/mnt/c/rlray", "default_output_dir": "/mnt/c/rlray/amlt", "project_uuid": "7251505910.95352-ca055506-e048", "version": "10.14.1.post12"}
