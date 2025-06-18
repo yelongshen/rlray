@@ -167,22 +167,24 @@ def main(args):
                     print('crits.shape', len(crits[0]))
                     print('outputs.shape', len(outputs[0]))
                 response = tokenizer.decode(outputs[0])
-                response_mapping = tokenizer(response, return_offsets_mapping=True)
+                #response_mapping = tokenizer(response, return_offsets_mapping=True)
                 
                 #processed_response, extract_answer, reward
-                mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer)
-                def getindex(char_pos, offset_mapping):
-                    for token_idx, (start, end) in enumerate(offset_mapping):
-                        if start <= char_pos < end:
-                             return token_idx
-                    return None
-                response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
+                #mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer)
+                #def getindex(char_pos, offset_mapping):
+                #    for token_idx, (start, end) in enumerate(offset_mapping):
+                #        if start <= char_pos < end:
+                #             return token_idx
+                #    return None
+                #response_idx = getindex(len(mid_response), response_mapping.offset_mapping)
                 # 5 token space. 
-                if response_idx is not None and len(outputs[0]) > response_idx + 5:
-                    outputs[0] = outputs[0][ : response_idx]
-                    probs[0] = probs[0][ : response_idx]
-                    crits[0] = crits[0][ : response_idx]
-                response = tokenizer.decode(outputs[0])
+                #if response_idx is not None and len(outputs[0]) > response_idx + 5:
+                #    outputs[0] = outputs[0][ : response_idx]
+                #    probs[0] = probs[0][ : response_idx]
+                #    crits[0] = crits[0][ : response_idx]
+                #response = tokenizer.decode(outputs[0])
+
+                reward = 0.0
 
                 if reward > 0.5:
                     topk_hit = 1
@@ -195,17 +197,17 @@ def main(args):
                     print(prompt)
                     print('\n\n\nresponse: *************\n')
                     print(response)
-                    print('\n\n\nextracted answer: ************\n')
-                    print(extracted_answer)
+                    #print('\n\n\nextracted answer: ************\n')
+                    #print(extracted_answer)
                     print('\n\n\nground truth: *************\n')
                     print(answers)
-                    print('\n\n\nreward: **********\n')
-                    print(reward)
-                    print('\n\ncrits: *******\n')
-                    print(np.mean(crits[0]), crits[0][-1])
-                    print('\n\nprobs: *******\n')
-                    print(np.mean(probs[0]))
-                    print('\n\n')
+                    #print('\n\n\nreward: **********\n')
+                    #print(reward)
+                    #print('\n\ncrits: *******\n')
+                    #print(np.mean(crits[0]), crits[0][-1])
+                    #print('\n\nprobs: *******\n')
+                    #print(np.mean(probs[0]))
+                    #print('\n\n')
                     
                 # prompt_tokens: List[List[int]],
                 all_tokens = []
