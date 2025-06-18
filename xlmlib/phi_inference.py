@@ -256,7 +256,7 @@ if __name__ == "__main__":
     parser.add_argument("--pretrained_model", type=str, default="none", help="path to pretrained ckpt.")
     parser.add_argument("--n_rollout", type=int, default=8, help="number of rollout per sample.")
     parser.add_argument("--epoch", type=int, default=1, help="number of epoches.")
-    parser.add_argument("--replay_size", type=int, default=32, help="size of replay buffer.")
+    parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
 
     args = parser.parse_args()
     
