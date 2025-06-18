@@ -131,8 +131,8 @@ def main(args):
     #    optimizer, num_warmup_steps = int(warmup_steps), num_training_steps = int(num_training_steps) 
     #)     
     
-    if local_rank == 0:
-        print('num_training_steps', int(num_training_steps), ' warmup_steps', int(warmup_steps), ' learning rate', args.lr)
+    #if local_rank == 0:
+    #    print('num_training_steps', int(num_training_steps), ' warmup_steps', int(warmup_steps), ' learning rate', args.lr)
     #print('model optimization initialization...') 
 
     ### initialize replaybuffer.
