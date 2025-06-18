@@ -864,7 +864,6 @@ class _Phi3ForCausalLM(_Phi3PreTrainedModel):
         nn.init.xavier_normal_(self.critic_head.weight)
         nn.init.constant_(self.critic_head.bias, -8.0)
         
-        
         self._tied_weights_keys = ["lm_head.weight"]
         # Initialize weights and apply final processing
         #self.post_init()
