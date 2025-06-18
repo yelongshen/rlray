@@ -140,6 +140,9 @@ def main(args):
     buffer_size = args.replay_size
     buffer = ReplayBuffer(buffer_size)
     ### 
+
+    time_start = time.perf_counter()  
+
     for epoch in range(0, args.epoch):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         acc_reward = 0
@@ -233,11 +236,28 @@ def main(args):
                 avg_response_len = buffer.avg_responselen()
                 buffer.calculate_advantage()
                 
+
+
                 print('progress: ', batch_idx, ', avg_reward: ', avg_reward, ', avg_response_len: ', avg_response_len , ', rank: ', rank)
                 print('topk_reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num, ', rank: ', rank)
 
                 dist.barrier()
-                buffer.distributed_advantage_norm(device, dist)
+
+                ############# profiling
+                time_end = time.perf_counter()  
+
+                elapsed_time_generation = time_end - time_start
+
+
+                time_start = time.perf_counter()  
+
+                _n_tokens = torch.tensor([avg_response_len * len(buffer)], dtype=torch.float, device = device)
+                dist.all_reduce(_n_tokens, op=dist.ReduceOp.SUM)
+
+                if local_rank == 0:
+                    print('elapsed_time_generation:', elapsed_time_generation, 'total_tokens:', _n_tokens, 'token per sec:', _n_tokens/elapsed_time_generation)
+
+                #buffer.distributed_advantage_norm(device, dist)
                 #policy_loss_log, critic_loss_log = ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device)
                 #print('policy_loss_log: ', policy_loss_log)
                 #print('critic_loss_log: ', critic_loss_log)
