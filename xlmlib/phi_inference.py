@@ -60,6 +60,24 @@ def initmodel_sync(model:_Phi3ForCausalLM):
         torch.distributed.broadcast(model.critic_head.weight, 0, async_op=False)
         torch.distributed.broadcast(model.critic_head.bias, 0, async_op=False)
 
+# 增大batch size. 怎么优化batch sequence length. 怎么极大化memory usage. 
+from pynvml import *
+
+def get_gpu_memory():
+    torch.cuda.synchronize()
+    nvmlInit()
+    visible_device = list(map(int, os.getenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7").split(',')))
+    cuda_device_idx = torch.cuda.current_device()
+    cuda_device_idx = visible_device[cuda_device_idx]
+    handle = nvmlDeviceGetHandleByIndex(cuda_device_idx)
+    mem_info = nvmlDeviceGetMemoryInfo(handle)
+    total_memory = mem_info.total
+    used_memory = mem_info.used
+    free_memory = mem_info.free
+    nvmlShutdown()
+    return total_memory, used_memory, free_memory
+
+
 def main(args):
     # on-policy ppo experiments with phi3.5 model on math dataset. 
     local_rank = int(os.environ['LOCAL_RANK']) 
@@ -108,6 +126,9 @@ def main(args):
     # setup model distribution.
     llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
     print('distributed language model creation.') 
+    
+    total_memory, used_memory, free_memory = get_gpu_memory()
+    print('total_memory', total_memory, 'used_memory', used_memory, 'free_memory', free_memory)
     
     # Load tokenizer from local path 
     tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
