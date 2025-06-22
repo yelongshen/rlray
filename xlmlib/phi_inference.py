@@ -107,7 +107,7 @@ def reset_context():
     global _CONTEXT
     _CONTEXT = Context()
 
-def allocate_kv_cache(self, llm_config, gpu_memory_utilization = 0.90):
+def allocate_kv_cache(llm, llm_config, device, gpu_memory_utilization = 0.90):
     #config = self.config
     #hf_config = config.hf_config
 
@@ -129,15 +129,16 @@ def allocate_kv_cache(self, llm_config, gpu_memory_utilization = 0.90):
     # how many kv blocks. 
     num_kvcache_blocks = int(free) // block_bytes
     
-    kv_cache = torch.zeros(2, llm_config.num_hidden_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim, dtype=torch.bfloat16)
+    kv_cache = torch.zeros(2, llm_config.num_hidden_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim, dtype=torch.bfloat16, device=device)
     
-    layer_id = 0
-    for module in self.model.modules():
-        if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
-            module.k_cache = self.kv_cache[0, layer_id]
-            module.v_cache = self.kv_cache[1, layer_id]
-            layer_id += 1
+    print('max kv cache length:', num_kvcache_blocks * block_size)
 
+    layer_id = 0
+    for module in self.model.layers:
+        module.self_attn.k_cache = kv_cache[0, layer_id]
+        module.self_attn.v_cache = kv_cache[1, layer_id]
+        layer_id += 1
+        
 def main(args):
     # on-policy ppo experiments with phi3.5 model on math dataset. 
     local_rank = int(os.environ['LOCAL_RANK']) 
@@ -204,8 +205,10 @@ def main(args):
     total_memory, used_memory, free_memory = get_gpu_memory()
     print('total_memory', total_memory, 'used_memory', used_memory, 'free_memory', free_memory)
 
-    # Load tokenizer from local path 
+    
+    #allocate_kv_cache(llm, llm_config, device, gpu_memory_utilization = 0.90)
 
+    # Load tokenizer from local path 
     # load dataset....
     datafile = 'math_level3to5_data_processed_with_qwen_prompt.json' 
     dataset = load_dataset('json', data_files=datafile) 
@@ -233,6 +236,7 @@ def main(args):
 
     time_start = time.perf_counter()  
 
+    
     for epoch in range(0, args.epoch):
         sampler.set_epoch(epoch)  # Set epoch for shuffling
         acc_reward = 0

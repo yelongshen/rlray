@@ -273,7 +273,9 @@ class _Phi4FlashAttention2(_Phi4Attention):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._flash_attn_uses_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
-
+        self.k_cache = None
+        self.v_cache = None
+        
     def forward(
         self,
         hidden_states: torch.Tensor,
