@@ -152,7 +152,7 @@ def main(args):
     torch.cuda.set_device(local_rank) 
     device = torch.device(f"cuda:{local_rank}") 
     # init distributed process group.
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)    
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(days=365 * 10))    
 
     # Step 3: Load and merge multiple safetensor state_dicts
     dist.barrier()
@@ -289,7 +289,7 @@ def main(args):
                 acc_num = acc_num + 1
                 
                 if local_rank >= 0:
-                    print('batch idx', batch_idx)
+                    print('batch idx', batch_idx, 'device', rank)
                     print('\n\n\nquestion: ************\n')
                     print(prompt)
                     print('\n\n\nresponse: *************\n')
