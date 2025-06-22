@@ -288,7 +288,7 @@ def main(args):
                 acc_reward = acc_reward + reward
                 acc_num = acc_num + 1
                 
-                if local_rank == 0:
+                if local_rank >= 0:
                     print('batch idx', batch_idx)
                     print('\n\n\nquestion: ************\n')
                     print(prompt)
