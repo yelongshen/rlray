@@ -86,13 +86,13 @@ def get_gpu_memory():
 @dataclass
 class Context:
     is_prefill : bool = False
-    cu_seqlens_q : torch.Tensor = None # | None = None
-    cu_seqlens_k : torch.Tensor = None # | None = None
+    cu_seqlens_q : Optional[torch.Tensor] = None # | None = None
+    cu_seqlens_k : Optional[torch.Tensor] = None # | None = None
     max_seqlen_q : int = 0
     max_seqlen_k : int = 0
-    slot_mapping : torch.Tensor = None # | None = None
-    context_lens : torch.Tensor = None # | None = None
-    block_tables : torch.Tensor = None # | None = None
+    slot_mapping : Optional[torch.Tensor] = None # | None = None
+    context_lens : Optional[torch.Tensor] = None # | None = None
+    block_tables : Optional[torch.Tensor] = None # | None = None
 
 _CONTEXT = Context()
 
@@ -126,8 +126,11 @@ def allocate_kv_cache(self, llm_config, gpu_memory_utilization = 0.90):
     num_kv_heads = llm_config.num_key_value_heads # // dist.get_world_size()
     block_bytes = 2 * llm_config.num_hidden_layers * block_size * num_kv_heads * head_dim * torch.bfloat16.itemsize
 
-    config.num_kvcache_blocks = int(free) // block_bytes
-    self.kv_cache = torch.zeros(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, hf_config.head_dim)
+    # how many kv blocks. 
+    num_kvcache_blocks = int(free) // block_bytes
+    
+    kv_cache = torch.zeros(2, llm_config.num_hidden_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim, dtype=torch.bfloat16)
+    
     layer_id = 0
     for module in self.model.modules():
         if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
@@ -183,9 +186,9 @@ def main(args):
         llm_model, llm_config, tokenizer = _Phi4ForCausalLM.load_hfckpt(args.pretrained_model)
         tokenizer.model_max_length = 32768 
     
-    tokenizer.pad_token = tokenizer.unk_token # use unk rather than eos token to prevent endless generation
-    tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token) 
-    tokenizer.padding_side = 'right' 
+    #tokenizer.pad_token = tokenizer.unk_token # use unk rather than eos token to prevent endless generation
+    #tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token) 
+    #tokenizer.padding_side = 'right' 
 
     llm_model = llm_model.to(torch.bfloat16).to(device) 
     llm_model.model.gradient_checkpointing = True 
@@ -251,7 +254,7 @@ def main(args):
 
             topk_hit = 0
             for rollout in range(0, args.n_rollout):
-                outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 3000)
+                outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 32768, temperature = 0.7, top_p = 0.95)
                 if batch_idx == 0 and local_rank == 0 and rollout == 0:
                     print('probs.shape', len(probs[0]))
                     print('crits.shape', len(crits[0]))
@@ -323,8 +326,6 @@ def main(args):
                 avg_response_len = buffer.avg_responselen()
                 buffer.calculate_advantage()
                 
-
-
                 print('progress: ', batch_idx, ', avg_reward: ', avg_reward, ', avg_response_len: ', avg_response_len , ', rank: ', rank)
                 print('topk_reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num, ', rank: ', rank)
 
