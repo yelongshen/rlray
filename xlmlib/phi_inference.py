@@ -85,14 +85,14 @@ def get_gpu_memory():
 
 @dataclass
 class Context:
-    is_prefill: bool = False
-    cu_seqlens_q: torch.Tensor | None = None
-    cu_seqlens_k: torch.Tensor | None = None
-    max_seqlen_q: int = 0
-    max_seqlen_k: int = 0
-    slot_mapping: torch.Tensor | None = None
-    context_lens: torch.Tensor | None = None
-    block_tables: torch.Tensor | None = None
+    is_prefill : bool = False
+    cu_seqlens_q : torch.Tensor = None # | None = None
+    cu_seqlens_k : torch.Tensor = None # | None = None
+    max_seqlen_q : int = 0
+    max_seqlen_k : int = 0
+    slot_mapping : torch.Tensor = None # | None = None
+    context_lens : torch.Tensor = None # | None = None
+    block_tables : torch.Tensor = None # | None = None
 
 _CONTEXT = Context()
 
@@ -107,16 +107,25 @@ def reset_context():
     global _CONTEXT
     _CONTEXT = Context()
 
-def allocate_kv_cache(self, gpu_memory_utilization = 0.90):
+def allocate_kv_cache(self, llm_config, gpu_memory_utilization = 0.90):
     #config = self.config
     #hf_config = config.hf_config
 
     total, used, _ = get_gpu_memory()
     free = total * gpu_memory_utilization - used
 
+    #
+    #kvcache_block_size: int = 256
+    block_size = 256
+    head_dim = llm_config.hidden_size // llm_config.num_heads
+
+    #key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
+    #value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
+            
     # assume kv_cache is stored on one GPU only. 
-    num_kv_heads = hf_config.num_key_value_heads // dist.get_world_size()
-    block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * hf_config.head_dim * hf_config.torch_dtype.itemsize
+    num_kv_heads = llm_config.num_key_value_heads # // dist.get_world_size()
+    block_bytes = 2 * llm_config.num_hidden_layers * block_size * num_kv_heads * head_dim * torch.bfloat16.itemsize
+
     config.num_kvcache_blocks = int(free) // block_bytes
     self.kv_cache = torch.zeros(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, hf_config.head_dim)
     layer_id = 0
@@ -170,7 +179,7 @@ def main(args):
         tokenizer.model_max_length = 4096 
     
     elif args.model_type == 'phi4':
-        
+
         llm_model, llm_config, tokenizer = _Phi4ForCausalLM.load_hfckpt(args.pretrained_model)
         tokenizer.model_max_length = 32768 
     
