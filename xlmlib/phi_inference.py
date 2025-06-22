@@ -21,7 +21,10 @@ from typing import List, Optional, Tuple, Union, Any, Dict, Optional
 import concurrent.futures
 from concurrent.futures import TimeoutError
 from functools import partial
+
 from contextlib import redirect_stdout
+from contextlib import contextmanager
+
 from dataclasses import dataclass
 from collections import deque
 
@@ -51,6 +54,8 @@ from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3MLP, Phi
 from transformers.models.phi3.configuration_phi3 import Phi3Config
 
 from phimodel import _Phi3ForCausalLM
+from phi4 import _Phi4ForCausalLM
+
 from replaybuffer import ReplayBuffer, Sample
 from ppo import ppo_train 
 from math_util import compare_math_answers, process_math_prompt, process_math_answer
@@ -60,9 +65,9 @@ def initmodel_sync(model:_Phi3ForCausalLM):
         torch.distributed.broadcast(model.critic_head.weight, 0, async_op=False)
         torch.distributed.broadcast(model.critic_head.bias, 0, async_op=False)
 
-# 增大batch size. 怎么优化batch sequence length. 怎么极大化memory usage. 
 from pynvml import *
 
+# 增大batch size. 怎么优化batch sequence length. 怎么极大化memory usage. 
 def get_gpu_memory():
     torch.cuda.synchronize()
     nvmlInit()
@@ -77,6 +82,49 @@ def get_gpu_memory():
     nvmlShutdown()
     return total_memory, used_memory, free_memory
 
+
+@dataclass
+class Context:
+    is_prefill: bool = False
+    cu_seqlens_q: torch.Tensor | None = None
+    cu_seqlens_k: torch.Tensor | None = None
+    max_seqlen_q: int = 0
+    max_seqlen_k: int = 0
+    slot_mapping: torch.Tensor | None = None
+    context_lens: torch.Tensor | None = None
+    block_tables: torch.Tensor | None = None
+
+_CONTEXT = Context()
+
+def get_context():
+    return _CONTEXT
+
+def set_context(is_prefill, cu_seqlens_q=None, cu_seqlens_k=None, max_seqlen_q=0, max_seqlen_k=0, slot_mapping=None, context_lens=None, block_tables=None, ):
+    global _CONTEXT
+    _CONTEXT = Context(is_prefill, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables)
+
+def reset_context():
+    global _CONTEXT
+    _CONTEXT = Context()
+
+def allocate_kv_cache(self, gpu_memory_utilization = 0.90):
+    #config = self.config
+    #hf_config = config.hf_config
+
+    total, used, _ = get_gpu_memory()
+    free = total * gpu_memory_utilization - used
+
+    # assume kv_cache is stored on one GPU only. 
+    num_kv_heads = hf_config.num_key_value_heads // dist.get_world_size()
+    block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * hf_config.head_dim * hf_config.torch_dtype.itemsize
+    config.num_kvcache_blocks = int(free) // block_bytes
+    self.kv_cache = torch.zeros(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, hf_config.head_dim)
+    layer_id = 0
+    for module in self.model.modules():
+        if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
+            module.k_cache = self.kv_cache[0, layer_id]
+            module.v_cache = self.kv_cache[1, layer_id]
+            layer_id += 1
 
 def main(args):
     # on-policy ppo experiments with phi3.5 model on math dataset. 
@@ -98,24 +146,38 @@ def main(args):
     local_model_path = args.pretrained_model 
     print('model_path', local_model_path) 
     
-    llm_config = AutoConfig.from_pretrained(local_model_path, local_files_only=True) 
-    vocab_size = llm_config.vocab_size 
-    eos_token_id = llm_config.eos_token_id #": 32000,
-    safetensor_files = [
-        f"{local_model_path}/model-00001-of-00002.safetensors",
-        f"{local_model_path}/model-00002-of-00002.safetensors"
-    ]
-    model_state_dict = {}
-    for file in safetensor_files:
-        part_state_dict = load_file(file, device="cpu")  # Load each part
-        model_state_dict.update(part_state_dict)  # Merge into one dictionary
-    print('load model weight ... ')
-    llm_model = _Phi3ForCausalLM(llm_config) 
+
+    if args.model_type == 'phi3':
+        llm_config = AutoConfig.from_pretrained(local_model_path, local_files_only=True) 
+        vocab_size = llm_config.vocab_size 
+        eos_token_id = llm_config.eos_token_id #": 32000,
+        safetensor_files = [
+            f"{local_model_path}/model-00001-of-00002.safetensors",
+            f"{local_model_path}/model-00002-of-00002.safetensors"
+        ]
+        model_state_dict = {}
+        for file in safetensor_files:
+            part_state_dict = load_file(file, device="cpu")  # Load each part
+            model_state_dict.update(part_state_dict)  # Merge into one dictionary
+        print('load model weight ... ')
+        llm_model = _Phi3ForCausalLM(llm_config) 
+        # Step 4: Apply the merged state_dict to the model
+        missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
+        print('missing_keys: ', missing_keys)
+        print('unexpected_keys: ', unexpected_keys)    
+        
+        tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
+        tokenizer.model_max_length = 4096 
     
-    # Step 4: Apply the merged state_dict to the model
-    missing_keys, unexpected_keys = llm_model.load_state_dict(model_state_dict, strict=False) 
-    print('missing_keys: ', missing_keys)
-    print('unexpected_keys: ', unexpected_keys)    
+    elif args.model_type == 'phi4':
+        
+        llm_model, llm_config, tokenizer = _Phi4ForCausalLM.load_hfckpt(args.pretrained_model)
+        tokenizer.model_max_length = 32768 
+    
+    tokenizer.pad_token = tokenizer.unk_token # use unk rather than eos token to prevent endless generation
+    tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token) 
+    tokenizer.padding_side = 'right' 
+
     llm_model = llm_model.to(torch.bfloat16).to(device) 
     llm_model.model.gradient_checkpointing = True 
     dist.barrier()
@@ -129,13 +191,8 @@ def main(args):
     
     total_memory, used_memory, free_memory = get_gpu_memory()
     print('total_memory', total_memory, 'used_memory', used_memory, 'free_memory', free_memory)
-    
+
     # Load tokenizer from local path 
-    tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True) 
-    tokenizer.model_max_length = 4096 
-    tokenizer.pad_token = tokenizer.unk_token # use unk rather than eos token to prevent endless generation
-    tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token) 
-    tokenizer.padding_side = 'right' 
 
     # load dataset....
     datafile = 'math_level3to5_data_processed_with_qwen_prompt.json' 
@@ -298,7 +355,8 @@ if __name__ == "__main__":
     parser.add_argument("--n_rollout", type=int, default=8, help="number of rollout per sample.")
     parser.add_argument("--epoch", type=int, default=1, help="number of epoches.")
     parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
-
+    parser.add_argument("--model_type", type=str, default="phi3", choices=["phi3", "phi4"], help="choose model type.")
+    
     args = parser.parse_args()
     
     main(args)
