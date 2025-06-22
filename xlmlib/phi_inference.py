@@ -248,7 +248,7 @@ def main(args):
             answers_4 = d['target']
             answers = answers_1 + answers_2 + answers_3 + answers_4
             # features: ['input', 'answer', 'gt_answer', 'subject', 'level', 'question', 'ground_truth_answer', 'target']
-            prompt = process_math_prompt(vanilla_prompts[0])
+            prompt = process_math_prompt(vanilla_prompts[0], prompt_type = 'v17')
             x1 = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=True)
             input_ids = x1['input_ids']
 
