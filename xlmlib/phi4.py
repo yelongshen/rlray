@@ -275,7 +275,7 @@ class _Phi4FlashAttention2(_Phi4Attention):
         self._flash_attn_uses_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
         self.k_cache = None
         self.v_cache = None
-        
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -305,6 +305,7 @@ class _Phi4FlashAttention2(_Phi4Attention):
         key_states = key_states.transpose(1,2).to(hidden_states.dtype)
         #value_states = value_states.transpose(1,2)
         
+        # num_kvcache_blocks, block_size, num_kv_heads, head_dim, dtype=torch.bfloat16, device=device)
         if not inference_mode:
             key_cache = key_states
             value_cache = value_states
