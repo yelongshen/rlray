@@ -27,7 +27,7 @@ max_blocks = max((l + block_size - 1) // block_size for l in seq_lens)
 # Create dummy tensors: [total_tokens, num_heads, head_dim]
 total_tokens = sum(seq_lens)
 
-q = torch.randn(total_tokens, num_heads, head_dim, device=device)
+q = torch.randn(total_tokens, num_heads, head_dim, dtype=torch.bfloat16, device=device)
 k = torch.randn_like(q)
 v = torch.randn_like(q)
 
