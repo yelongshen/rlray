@@ -82,7 +82,7 @@ def test_vanilla_attention():
         v_i = v[cu_seqlens[i]:cu_seqlens[i+1]]
         o_i = flash_attn_func(q_i.unsqueeze(0), k_i.unsqueeze(0), v_i.unsqueeze(0), softmax_scale=1.0, causal=True)
 
-        outputs_naive.append(o_i[0])
+        outputs_naive.append(o_i.squeeze(0))
 
     # 将朴素实现的输出拼接起来
     out_naive = torch.cat(outputs_naive, dim=0)  # (total_q, nheads, headdim)
