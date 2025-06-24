@@ -155,7 +155,8 @@ class ReplayBuffer:
                 advantage = acc_reward - c
                 d.advantages.insert(0, advantage)
                 d.returns.insert(0, acc_reward)
-            
+    
+        
     def distributed_advantage_norm(self, device, dist):
         world_size = dist.get_world_size()
         full_advantages = [adv for dat in self.buffer for adv in dat.advantages]

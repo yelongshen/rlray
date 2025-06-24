@@ -310,7 +310,7 @@ class _Phi4FlashAttention2(_Phi4Attention):
             key_cache = key_states
             value_cache = value_states
         elif inference_mode and past_key_value is None: 
-            key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
+            key_cache = self.k_cache # torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
             value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
             key_cache[:, :q_len] = key_states
             value_cache[:, :q_len] = value_states
