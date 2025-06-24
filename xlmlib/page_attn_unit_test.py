@@ -86,7 +86,7 @@ def test_vanilla_attention():
 
     # 将朴素实现的输出拼接起来
     out_naive = torch.cat(outputs_naive, dim=0)  # (total_q, nheads, headdim)
-    return outputs_naive
+    return out_naive
 
 
 o1 = test_paged_attention()
