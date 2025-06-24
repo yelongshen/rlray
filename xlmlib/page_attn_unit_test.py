@@ -80,7 +80,7 @@ def test_vanilla_attention():
         q_i = q[cu_seqlens[i]:cu_seqlens[i+1]]  # (L_i, nheads, headdim)
         k_i = k[cu_seqlens[i]:cu_seqlens[i+1]]
         v_i = v[cu_seqlens[i]:cu_seqlens[i+1]]
-        o_i = flash_attn_func(q_i, k_i, v_i, softmax_scale=1.0, causal=True)
+        o_i = flash_attn_func(q_i.unsqueeze(0), k_i.unsqueeze(0), v_i.unsqueeze(0), softmax_scale=1.0, causal=True)
 
         outputs_naive.append(o_i)
 
