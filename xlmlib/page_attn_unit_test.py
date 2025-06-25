@@ -23,7 +23,7 @@ block_size = 4
 seq_lens = [7, 10, 13, 16, 20]  # => ceil(7/4)=2 blocks, ceil(10/4)=3 blocks
 # Batch size = 2, block_size = 4
 # Sequence lengths
-num_heads, head_dim = 2, 3
+num_heads, head_dim = 2, 2
 
 max_blocks = max((l + block_size - 1) // block_size for l in seq_lens)
 # Create dummy tensors: [total_tokens, num_heads, head_dim]
@@ -151,7 +151,7 @@ def test_vanilla_attention():
         v_i = v[cu_seqlens[i]:cu_seqlens[i+1]]
         o_i = flash_attn_func(q_i.unsqueeze(0), k_i.unsqueeze(0), v_i.unsqueeze(0), softmax_scale=1.0, causal=True)
 
-        outputs_naive.append(o_i.squeeze(0))
+        outputs_naive.append(o_i.squeeze(0)[-1])
 
     # 将朴素实现的输出拼接起来
     out_naive = torch.cat(outputs_naive, dim=0)  # (total_q, nheads, headdim)
