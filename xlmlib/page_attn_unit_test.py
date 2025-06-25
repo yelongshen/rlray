@@ -149,6 +149,52 @@ def test_paged_attention():
     # A basic sanity check: output should be finite and non-NaN
     #assert torch.isfinite(out).all()
 
+def test_paged_attention_decode():
+    cu_seqlens_q = cu_seqlens_k = torch.tensor(cu_seqlens, device=device, dtype=torch.int32)
+
+    slot_mapping = []
+    block_tables = []
+    context_lens = []
+
+    block_idx = 0
+    for sl in seq_lens:
+        num_blocks = (sl + block_size - 1) // block_size
+        for i in range(0, num_blocks):
+            start = (block_idx + i) * block_size # block start.
+            if i != num_blocks - 1:
+                end = start + block_size
+            else:
+                end = start + sl - block_size * i 
+            slot_mapping.extend(list(range(start, end)))
+        block_tables.append(list(range(block_idx, block_idx + num_blocks)) + [-1] * (max_blocks-num_blocks))
+        context_lens.append(sl)
+
+        # max_blocks
+        block_idx += num_blocks
+    
+    slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, device=device, pin_memory=True).cuda(non_blocking=True)
+    block_tables = torch.tensor(block_tables, dtype=torch.int32, device=device, pin_memory=True).cuda(non_blocking=True)
+    context_lens = torch.tensor(context_lens, dtype=torch.int32, device=device, pin_memory=True).cuda(non_blocking=True)
+
+    store_kvcache(k, v, k_cache, v_cache, slot_mapping)
+
+    q_s = []
+    for i in range(len(seq_lens)):
+        q_i = q[cu_seqlens[i+1]-1]  # (L_i, nheads, headdim)
+        q_s.append(q_i)
+    q_s = torch.cat(q_s, dim=0)
+
+    #k_i = k[cu_seqlens[i]:cu_seqlens[i+1]]
+    #v_i = v[cu_seqlens[i]:cu_seqlens[i+1]]
+    #o_i = flash_attn_func(q_i.unsqueeze(0), k_i.unsqueeze(0), v_i.unsqueeze(0), softmax_scale=1.0, causal=True)
+
+    o = flash_attn_with_kvcache(q_s.unsqueeze(1), k_cache, v_cache,
+                                cache_seqlens=context_lens, block_table=block_tables, 
+                                softmax_scale=1.0, causal=True)
+
+    #outputs_naive.append(o_i.squeeze(0))
+    #out_naive = torch.cat(outputs_naive, dim=0)  # (total_q, nheads, headdim)
+    return o
 
 def test_paged_attention_block_table():
     # obtain the max_block number.
@@ -212,7 +258,8 @@ def test_vanilla_attention():
     return out_naive
 
 
-o1 = test_paged_attention_block_table()
+o1 = test_paged_attention_decode()
+#o1 = test_paged_attention_block_table()
 o2 = test_vanilla_attention()
 
 print(o1)
