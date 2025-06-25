@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import pytest
 
-from flash_attn import flash_attn_func, flash_attn_varlen_func
+from flash_attn import flash_attn_func, flash_attn_varlen_func, flash_attn_with_kvcache
 
 import math
 import triton
