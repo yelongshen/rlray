@@ -8,6 +8,8 @@ import pytest
 from flash_attn import flash_attn_func, flash_attn_varlen_func
 
 import math
+import triton
+import triton.language as tl
 
 # two usage:
 #    1. query_state.length == key_states.length == value_states.length (attention with sliding_window_size 4) 
