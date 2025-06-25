@@ -182,7 +182,7 @@ def test_paged_attention_block_table():
 
     # Call paged flash attention
     out = flash_attn_varlen_func(
-        q, k, v,
+        q, k_cache, v_cache,
         max_seqlen_q=max(seq_lens),
         cu_seqlens_q=cu_seqlens_q,
         max_seqlen_k=max(seq_lens),
