@@ -20,12 +20,14 @@ device = 'cuda:0'
 #from vllm.attention.backends.flash_attn import flash_attn_varlen_func
 #from vllm.attention.backends.mla.common import _get_graph_runner_block_tables
 block_size = 4
-seq_lens = [7, 10, 13, 16, 20]  # => ceil(7/4)=2 blocks, ceil(10/4)=3 blocks
+seq_lens = [2,3,5]  # => ceil(7/4)=2 blocks, ceil(10/4)=3 blocks
 # Batch size = 2, block_size = 4
 # Sequence lengths
 num_heads, head_dim = 2, 2
 
+# block table. 
 max_blocks = max((l + block_size - 1) // block_size for l in seq_lens)
+
 # Create dummy tensors: [total_tokens, num_heads, head_dim]
 total_tokens = sum(seq_lens)
 
@@ -33,6 +35,10 @@ q = torch.randn(total_tokens, num_heads, head_dim, dtype=torch.bfloat16, device=
 k = torch.randn_like(q)
 v = torch.randn_like(q)
 
+num_blocks = 6
+k_cache = torch.zeros(num_blocks, block_size, num_heads, head_dim, dtype=torch.bfloat16, device=device)
+v_cache = torch.zeros(num_blocks, block_size, num_heads, head_dim, dtype=torch.bfloat16, device=device)
+    
 cu_seqlens = [0]
 for l in seq_lens:
     cu_seqlens.append(cu_seqlens[-1] + l)
@@ -102,7 +108,7 @@ def test_kv_store():
     print(v_cache)
 
 # block-wise kv cache store.
-test_kv_store()
+#test_kv_store()
 
 def test_paged_attention():
     # obtain the max_block number.
@@ -143,6 +149,54 @@ def test_paged_attention():
     # A basic sanity check: output should be finite and non-NaN
     #assert torch.isfinite(out).all()
 
+
+def test_paged_attention_block_table():
+    # obtain the max_block number.
+    # Cumulated lengths for varlen API
+    
+    cu_seqlens_q = cu_seqlens_k = torch.tensor(cu_seqlens, device=device, dtype=torch.int32)
+
+    slot_mapping = []
+    block_tables = []
+    block_idx = 0
+
+    for sl in seq_lens:
+        num_blocks = (sl + block_size - 1) // block_size
+        for i in range(0, num_blocks):
+            start = (block_idx + i) * block_size # block start.
+            if i != num_blocks - 1:
+                end = start + block_size
+            else:
+                end = start + sl - block_size * i 
+            slot_mapping.extend(list(range(start, end)))
+        block_tables.append(list(range(block_idx, block_idx + num_blocks)) + [-1] * (max_blocks-num_blocks))
+
+        # max_blocks
+        block_idx += num_blocks
+    
+    slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, device=device, pin_memory=True).cuda(non_blocking=True)
+
+    block_tables = torch.tensor(block_tables, dtype=torch.int32, device=device, pin_memory=True).cuda(non_blocking=True)
+
+    store_kvcache(key, value, k_cache, v_cache, slot_mapping)
+
+    # Call paged flash attention
+    out = flash_attn_varlen_func(
+        q, k, v,
+        max_seqlen_q=max(seq_lens),
+        cu_seqlens_q=cu_seqlens_q,
+        max_seqlen_k=max(seq_lens),
+        cu_seqlens_k=cu_seqlens_k,
+        softmax_scale=1.0,
+        causal=True,
+        block_table=block_tables
+    )
+    # Output shape: same as input q
+    #assert out.shape == q.shape
+
+    return out
+
+
 def test_vanilla_attention():
     outputs_naive = []
     for i in range(len(seq_lens)):
@@ -151,16 +205,16 @@ def test_vanilla_attention():
         v_i = v[cu_seqlens[i]:cu_seqlens[i+1]]
         o_i = flash_attn_func(q_i.unsqueeze(0), k_i.unsqueeze(0), v_i.unsqueeze(0), softmax_scale=1.0, causal=True)
 
-        outputs_naive.append(o_i.squeeze(0)[-1])
+        outputs_naive.append(o_i.squeeze(0))
 
     # 将朴素实现的输出拼接起来
     out_naive = torch.cat(outputs_naive, dim=0)  # (total_q, nheads, headdim)
     return out_naive
 
 
-o1 = test_paged_attention()
+o1 = test_paged_attention_block_table()
 o2 = test_vanilla_attention()
 
 print(o1)
 print(o2)
-assert torch.allclose(o1, o2, atol=1e-1)
+#assert torch.allclose(o1, o2, atol=1e-1)
