@@ -178,7 +178,7 @@ def test_paged_attention_block_table():
 
     block_tables = torch.tensor(block_tables, dtype=torch.int32, device=device, pin_memory=True).cuda(non_blocking=True)
 
-    store_kvcache(key, value, k_cache, v_cache, slot_mapping)
+    store_kvcache(k, v, k_cache, v_cache, slot_mapping)
 
     # Call paged flash attention
     out = flash_attn_varlen_func(
