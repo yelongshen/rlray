@@ -21,7 +21,7 @@ block_size = 4
 seq_lens = [7, 10, 13, 16, 20]  # => ceil(7/4)=2 blocks, ceil(10/4)=3 blocks
 # Batch size = 2, block_size = 4
 # Sequence lengths
-num_heads, head_dim = 2, 8
+num_heads, head_dim = 2, 3
 
 max_blocks = max((l + block_size - 1) // block_size for l in seq_lens)
 # Create dummy tensors: [total_tokens, num_heads, head_dim]
@@ -34,6 +34,73 @@ v = torch.randn_like(q)
 cu_seqlens = [0]
 for l in seq_lens:
     cu_seqlens.append(cu_seqlens[-1] + l)
+
+
+@triton.jit
+def store_kvcache_kernel(
+    key_ptr,
+    key_stride,
+    value_ptr,
+    value_stride,
+    k_cache_ptr,
+    v_cache_ptr,
+    slot_mapping_ptr,
+    D: tl.constexpr,
+):
+    idx = tl.program_id(0)
+    key_offsets = idx * key_stride + tl.arange(0, D)
+    value_offsets = idx * value_stride + tl.arange(0, D)
+    key = tl.load(key_ptr + key_offsets)
+    value = tl.load(value_ptr + value_offsets)
+    slot = tl.load(slot_mapping_ptr + idx)
+    cache_offsets = slot * D + tl.arange(0, D)
+    tl.store(k_cache_ptr + cache_offsets, key)
+    tl.store(v_cache_ptr + cache_offsets, value)
+
+
+def store_kvcache(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor, slot_mapping: torch.Tensor):
+    N, num_heads, head_dim = key.shape
+    D = num_heads * head_dim
+    assert key.stride(-1) == 1 and value.stride(-1) == 1
+    assert key.stride(1) == head_dim and value.stride(1) == head_dim
+    assert k_cache.stride(1) == D and v_cache.stride(1) == D
+    assert slot_mapping.numel() == N
+    store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), k_cache, v_cache, slot_mapping, D)
+
+
+def test_kv_store():
+    # 2,3,5, block-size:4
+    key = torch.randn(10, num_heads, head_dim, dtype=torch.bfloat16, device=device)
+    value = torch.randn_like(key)
+
+    k_cache = torch.zeros(6, 4, num_heads, head_dim, dtype=torch.bfloat16, device=device)
+    v_cache = torch.zeros(6, 4, num_heads, head_dim, dtype=torch.bfloat16, device=device)
+    
+    print(key)
+    print(value)
+
+    slot_mapping = []
+    block_idx = 0
+    _seq_len = [2,3,5]
+    for sl in _seq_len:
+        num_blocks = (sl + 4 - 1) // 4
+        for i in range(0, num_blocks):
+            start = (block_idx + i) * 4 # block start.
+            if i != num_blocks - 1:
+                end = start + 4
+            else:
+                end = start + sl - 4 * i 
+            slot_mapping.extend(list(range(start, end)))
+        block_idx += num_blocks
+    slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, device=device, pin_memory=True).cuda(non_blocking=True)
+
+    store_kvcache(key, value, k_cache, v_cache, slot_mapping)
+
+    print(k_cache)
+    print(v_cache)
+
+# block-wise kv cache store.
+test_kv_store()
 
 def test_paged_attention():
     # obtain the max_block number.
