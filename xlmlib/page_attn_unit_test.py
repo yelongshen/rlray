@@ -19,8 +19,8 @@ device = 'cuda:0'
 
 #from vllm.attention.backends.flash_attn import flash_attn_varlen_func
 #from vllm.attention.backends.mla.common import _get_graph_runner_block_tables
-block_size = 4
-seq_lens = [2,3,5]  # => ceil(7/4)=2 blocks, ceil(10/4)=3 blocks
+block_size = 256
+seq_lens = [2,260,5]  # => ceil(7/4)=2 blocks, ceil(10/4)=3 blocks
 # Batch size = 2, block_size = 4
 # Sequence lengths
 num_heads, head_dim = 2, 2
