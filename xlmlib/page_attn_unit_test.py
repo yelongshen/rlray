@@ -182,7 +182,7 @@ def test_paged_attention_decode():
     for i in range(len(seq_lens)):
         q_i = q[cu_seqlens[i+1]-1]  # (L_i, nheads, headdim)
         q_s.append(q_i)
-    q_s = torch.cat(q_s, dim=0)
+    q_s = torch.stack(q_s, dim=0)
 
     #k_i = k[cu_seqlens[i]:cu_seqlens[i+1]]
     #v_i = v[cu_seqlens[i]:cu_seqlens[i+1]]
