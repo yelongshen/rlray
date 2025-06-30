@@ -26,6 +26,10 @@ from xlmlib.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFuncti
 from transformers import AutoTokenizer 
 logger = logging.get_logger(__name__)
 
+import triton
+import triton.language as tl
+
+
 _flash_supports_window_size = False
 try:
     from flash_attn import flash_attn_func 
@@ -38,6 +42,9 @@ except ImportError as error:
         logger.warning(
             "Current `flash-attention` does not support `window_size`. Either upgrade or use `attn_implementation='eager'`."
         )
+
+from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+from context import set_context, get_context, reset_context
 
 class _Phi4RMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
@@ -122,7 +129,7 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
+def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
 
@@ -269,6 +276,38 @@ class _Phi4Attention(nn.Module):
         return attn_output, key_cache, value_cache
 
 
+@triton.jit
+def store_kvcache_kernel(
+    key_ptr,
+    key_stride,
+    value_ptr,
+    value_stride,
+    k_cache_ptr,
+    v_cache_ptr,
+    slot_mapping_ptr,
+    D: tl.constexpr,
+):
+    idx = tl.program_id(0)
+    key_offsets = idx * key_stride + tl.arange(0, D)
+    value_offsets = idx * value_stride + tl.arange(0, D)
+    key = tl.load(key_ptr + key_offsets)
+    value = tl.load(value_ptr + value_offsets)
+    slot = tl.load(slot_mapping_ptr + idx)
+    cache_offsets = slot * D + tl.arange(0, D)
+    tl.store(k_cache_ptr + cache_offsets, key)
+    tl.store(v_cache_ptr + cache_offsets, value)
+
+
+def store_kvcache(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor, slot_mapping: torch.Tensor):
+    N, num_heads, head_dim = key.shape
+    D = num_heads * head_dim
+    assert key.stride(-1) == 1 and value.stride(-1) == 1
+    assert key.stride(1) == head_dim and value.stride(1) == head_dim
+    assert k_cache.stride(1) == D and v_cache.stride(1) == D
+    assert slot_mapping.numel() == N
+    store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), k_cache, v_cache, slot_mapping, D)
+
+
 class _Phi4FlashAttention2(_Phi4Attention):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -305,12 +344,31 @@ class _Phi4FlashAttention2(_Phi4Attention):
         key_states = key_states.transpose(1,2).to(hidden_states.dtype)
         #value_states = value_states.transpose(1,2)
         
+        page_attention = False
+
         # num_kvcache_blocks, block_size, num_kv_heads, head_dim, dtype=torch.bfloat16, device=device)
         if not inference_mode:
             key_cache = key_states
             value_cache = value_states
+        elif inference_mode and self.k_cache is not None and self.v_cache is not None:
+            context = get_context()
+            query_states = query_states.view(-1, self.num_heads, self.head_dim)
+            key_states = key_states.view(-1, self.num_key_value_heads, self.head_dim)
+            value_states = value_states.view(-1, self.num_key_value_heads, self.head_dim)
+
+            #k_cache = self.k_cache
+            #v_cache = self.v_cache
+
+            store_kvcache(key_states, value_states, self.k_cache, self.v_cache, context.slot_mapping)
+            
+            page_attention = True
+            #if context.is_prefill:
+            #    if context.block_tables is not None:    # prefix cache
+            #        k, v = k_cache, v_cache
+
+            ## start 
         elif inference_mode and past_key_value is None: 
-            key_cache = self.k_cache # torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
+            key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
             value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
             key_cache[:, :q_len] = key_states
             value_cache[:, :q_len] = value_states
@@ -325,29 +383,40 @@ class _Phi4FlashAttention2(_Phi4Attention):
         #else:
         #    key_cache = key_states
         #    value_cache = value_states
-            
-        key_states = key_cache[:, :cur_pos + q_len]
-        value_states = value_cache[:, :cur_pos + q_len]
-        attn_dropout = self.attention_dropout if self.training else 0.0
+ 
+        if page_attention:
+            if context.is_prefill:
+                attn_output = flash_attn_varlen_func(query_states, self.k_cache, self.v_cache,
+                                       max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
+                                       max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
+                                       causal=True, block_table=context.block_tables)
+            else:
+                attn_output = flash_attn_with_kvcache(query_states.unsqueeze(1), self.k_cache, self.v_cache,
+                                        cache_seqlens=context.context_lens, block_table=context.block_tables, 
+                                        softmax_scale=None, causal=True)
+        else:           
+            key_states = key_cache[:, :cur_pos + q_len]
+            value_states = value_cache[:, :cur_pos + q_len]
+            attn_dropout = self.attention_dropout if self.training else 0.0
 
-        if query_states.dtype == torch.float32:
-            target_dtype = torch.float16
-            logger.warning_once(
-                f"The input hidden states seems to be silently casted in float32, this might be related to"
-                f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
-                f" {target_dtype}."
+            if query_states.dtype == torch.float32:
+                target_dtype = torch.float16
+                logger.warning_once(
+                    f"The input hidden states seems to be silently casted in float32, this might be related to"
+                    f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
+                    f" {target_dtype}."
+                )
+                query_states = query_states.to(target_dtype)
+                key_states = key_states.to(target_dtype)
+                value_states = value_states.to(target_dtype)
+
+            attn_output = self._flash_attention_forward(
+                query_states,
+                key_states,
+                value_states,
+                attention_mask,
+                dropout=attn_dropout,
             )
-            query_states = query_states.to(target_dtype)
-            key_states = key_states.to(target_dtype)
-            value_states = value_states.to(target_dtype)
-
-        attn_output = self._flash_attention_forward(
-            query_states,
-            key_states,
-            value_states,
-            attention_mask,
-            dropout=attn_dropout,
-        )
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
         return attn_output, key_cache, value_cache
@@ -674,7 +743,8 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         inference_mode = False,
         max_generation = 0,
         cur_pos = 0,
-        fuse_loss = False
+        fuse_loss = False,
+        logits_to_keep = None,
     ):
         hidden_states, next_decoder_cache = self.model(
             input_ids=input_ids,
@@ -686,9 +756,14 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
             cur_pos=cur_pos,
         )
 
-
         # suppose it is next token's Q value. 
-        critics = self.critic_head(hidden_states[:, -num_logits_to_keep:, :])
+        if logits_to_keep is None:
+            hidden_states = hidden_states.squeeze(0)[logits_to_keep]
+            hidden_states = hidden_states.unsqueeze(0)
+        else:
+            hidden_states = hidden_states[:, -num_logits_to_keep:, :]
+
+        critics = self.critic_head(hidden_states)
 
         # Apply sigmoid
         critics = torch.sigmoid(critics)
@@ -698,7 +773,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         
         if not fuse_loss:
             # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-            logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
+            logits = self.lm_head(hidden_states)
     
             if labels is not None:
                 #loss = self.loss_function(logits, labels, self.vocab_size, **loss_kwargs)
@@ -706,7 +781,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
                 target_flat = labels.reshape(-1)            # Shape: (batch_size * seq_len)
                 loss = self.criterion(logits_flat, target_flat)
         else:
-            states = hidden_states[:, -num_logits_to_keep:, :]
+            states = hidden_states
             loss = LigerFusedLinearCrossEntropyFunction.apply(states.view(-1, states.size(-1)), self.lm_head.weight, labels.reshape(-1), None, None, -100, 0.0, 0.0, 'none', None, False)
             loss = loss[0].reshape(input_ids.shape)
         return loss, logits, critics, next_decoder_cache 

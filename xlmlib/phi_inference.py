@@ -60,84 +60,13 @@ from replaybuffer import ReplayBuffer, Sample
 from ppo import ppo_train 
 from math_util import compare_math_answers, process_math_prompt, process_math_answer
 
+from llm_engine import LLMEngine
+
 def initmodel_sync(model:_Phi3ForCausalLM):
     with torch.no_grad():
         torch.distributed.broadcast(model.critic_head.weight, 0, async_op=False)
         torch.distributed.broadcast(model.critic_head.bias, 0, async_op=False)
 
-from pynvml import *
-
-# 增大batch size. 怎么优化batch sequence length. 怎么极大化memory usage. 
-def get_gpu_memory():
-    torch.cuda.synchronize()
-    nvmlInit()
-    visible_device = list(map(int, os.getenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7").split(',')))
-    cuda_device_idx = torch.cuda.current_device()
-    cuda_device_idx = visible_device[cuda_device_idx]
-    handle = nvmlDeviceGetHandleByIndex(cuda_device_idx)
-    mem_info = nvmlDeviceGetMemoryInfo(handle)
-    total_memory = mem_info.total
-    used_memory = mem_info.used
-    free_memory = mem_info.free
-    nvmlShutdown()
-    return total_memory, used_memory, free_memory
-
-
-@dataclass
-class Context:
-    is_prefill : bool = False
-    cu_seqlens_q : Optional[torch.Tensor] = None # | None = None
-    cu_seqlens_k : Optional[torch.Tensor] = None # | None = None
-    max_seqlen_q : int = 0
-    max_seqlen_k : int = 0
-    slot_mapping : Optional[torch.Tensor] = None # | None = None
-    context_lens : Optional[torch.Tensor] = None # | None = None
-    block_tables : Optional[torch.Tensor] = None # | None = None
-
-_CONTEXT = Context()
-
-def get_context():
-    return _CONTEXT
-
-def set_context(is_prefill, cu_seqlens_q=None, cu_seqlens_k=None, max_seqlen_q=0, max_seqlen_k=0, slot_mapping=None, context_lens=None, block_tables=None, ):
-    global _CONTEXT
-    _CONTEXT = Context(is_prefill, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables)
-
-def reset_context():
-    global _CONTEXT
-    _CONTEXT = Context()
-
-def allocate_kv_cache(llm, llm_config, device, gpu_memory_utilization = 0.90):
-    #config = self.config
-    #hf_config = config.hf_config
-
-    total, used, _ = get_gpu_memory()
-    free = total * gpu_memory_utilization - used
-
-    #
-    #kvcache_block_size: int = 256
-    block_size = 256
-    head_dim = llm_config.hidden_size // llm_config.num_heads
-
-    #key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
-    #value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
-            
-    # assume kv_cache is stored on one GPU only. 
-    num_kv_heads = llm_config.num_key_value_heads # // dist.get_world_size()
-    block_bytes = 2 * llm_config.num_hidden_layers * block_size * num_kv_heads * head_dim * torch.bfloat16.itemsize
-
-    # how many kv blocks. 
-    num_kvcache_blocks = int(free) // block_bytes
-    
-    kv_cache = torch.zeros(2, llm_config.num_hidden_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim, dtype=torch.bfloat16, device=device)
-    
-    print('max kv cache length:', num_kvcache_blocks * block_size)
-
-    layer_id = 0
-    for module in self.model.layers:
-        module.self_attn.k_cache = kv_cache[0, layer_id]
-        module.self_attn.v_cache = kv_cache[1, layer_id]
-        layer_id += 1
         
 def main(args):
     # on-policy ppo experiments with phi3.5 model on math dataset. 
@@ -159,7 +88,6 @@ def main(args):
     local_model_path = args.pretrained_model 
     print('model_path', local_model_path) 
     
-
     if args.model_type == 'phi3':
         llm_config = AutoConfig.from_pretrained(local_model_path, local_files_only=True) 
         vocab_size = llm_config.vocab_size 
@@ -199,12 +127,14 @@ def main(args):
     llm = llm_model 
     print('initial llm model ....') 
     # setup model distribution.
-    llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
+    #llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
     print('distributed language model creation.') 
     
     total_memory, used_memory, free_memory = get_gpu_memory()
     print('total_memory', total_memory, 'used_memory', used_memory, 'free_memory', free_memory)
 
+    engine = LLMEngine(llm_model, llm_config, device)
+    #def __init__(self, model, llm_config, device):
     
     #allocate_kv_cache(llm, llm_config, device, gpu_memory_utilization = 0.90)
 
@@ -214,7 +144,7 @@ def main(args):
     dataset = load_dataset('json', data_files=datafile) 
     print(f"loaded {dataset} with data_files={datafile}") 
     sampler = torch.utils.data.distributed.DistributedSampler(dataset['train'], num_replicas=world_size, rank=rank, shuffle=True) 
-    dataloader = DataLoader(dataset['train'], batch_size=1, sampler=sampler) 
+    dataloader = DataLoader(dataset['train'], batch_size=16, sampler=sampler) 
 
     # setup optimization.
     #optimizer = torch.optim.AdamW(llm.parameters(), lr=args.lr) # 1.0e-6) 
@@ -246,26 +176,46 @@ def main(args):
         for batch_idx, d in enumerate(dataloader):
             qwen_prompt = d['input']
             vanilla_prompts = d['question']    
+            
             answers_1 = d['answer']
             answers_2 = d['gt_answer']
             answers_3 = d['ground_truth_answer']
             answers_4 = d['target']
             answers = answers_1 + answers_2 + answers_3 + answers_4
             # features: ['input', 'answer', 'gt_answer', 'subject', 'level', 'question', 'ground_truth_answer', 'target']
-            prompt = process_math_prompt(vanilla_prompts[0], prompt_type = 'v17')
-            x1 = tokenizer([prompt], add_special_tokens=False, max_length=1024, truncation=True)
+
+            batch_prompts = []
+            for inner_prompt in vanilla_prompts:
+                prompt = process_math_prompt(vanilla_prompts[0], prompt_type = 'v17')
+                batch_prompts.append(prompt)
+
+            x1 = tokenizer(batch_prompts, add_special_tokens=False, max_length=1024, truncation=True)
             input_ids = x1['input_ids']
 
             topk_hit = 0
             for rollout in range(0, args.n_rollout):
-                outputs, probs, crits = llm.module.generate(input_ids, max_gen_len = 32768, temperature = 0.7, top_p = 0.95)
-                if batch_idx == 0 and local_rank == 0 and rollout == 0:
-                    print('probs.shape', len(probs[0]))
-                    print('crits.shape', len(crits[0]))
-                    print('outputs.shape', len(outputs[0]))
-                response = tokenizer.decode(outputs[0])
-                #response_mapping = tokenizer(response, return_offsets_mapping=True)
+                outputs = engine.generate(input_ids)
+
+                #outputs, probs, crits = llm.generate(input_ids, max_gen_len = 32768, temperature = 0.7, top_p = 0.95)
+                #if batch_idx == 0 and local_rank == 0 and rollout == 0:
+                #    print('probs.shape', len(probs[0]))
+                #    print('crits.shape', len(crits[0]))
+                #    print('outputs.shape', len(outputs[0]))
                 
+                batch_responses = []
+                for _i in range(0, len(outputs)):
+                    response = tokenizer.decode(outputs[_i])
+                    batch_responses.append(response)
+
+                    print('batch idx', _i, 'device', rank)
+                    print('\n\n\nquestion: ************\n')
+                    print(vanilla_prompts[_i])
+                    print('\n\n\nresponse: *************\n')
+                    print(batch_responses[_i])
+                    print('\n\n\nground truth: *************\n')
+                    print(answers_1[_i])
+
+                #response_mapping = tokenizer(response, return_offsets_mapping=True)
                 #processed_response, extract_answer, reward
                 #mid_response, extracted_answer, reward = process_math_answer(response, answers, tokenizer)
                 #def getindex(char_pos, offset_mapping):
@@ -282,35 +232,16 @@ def main(args):
                 #response = tokenizer.decode(outputs[0])
 
                 reward = 0.0
-
                 if reward > 0.5:
                     topk_hit = 1
                 acc_reward = acc_reward + reward
                 acc_num = acc_num + 1
                 
-                if local_rank >= 0:
-                    print('batch idx', batch_idx, 'device', rank)
-                    print('\n\n\nquestion: ************\n')
-                    print(prompt)
-                    print('\n\n\nresponse: *************\n')
-                    print(response)
-                    #print('\n\n\nextracted answer: ************\n')
-                    #print(extracted_answer)
-                    print('\n\n\nground truth: *************\n')
-                    print(answers)
-                    #print('\n\n\nreward: **********\n')
-                    #print(reward)
-                    #print('\n\ncrits: *******\n')
-                    #print(np.mean(crits[0]), crits[0][-1])
-                    #print('\n\nprobs: *******\n')
-                    #print(np.mean(probs[0]))
-                    #print('\n\n')
-                    
                 # prompt_tokens: List[List[int]],
                 all_tokens = []
                 all_masks = []
                 output_rewards = []
-                for input_id, output_id in zip(input_ids, outputs):
+                for prompt, response, input_id, output_id in zip(batch_prompts, batch_responses, input_ids, outputs):
                     _ids = input_id + output_id 
                     _masks = [0] * len(input_id) + [1] * len(output_id) 
                     _rewards = [0] * (len(output_id)-1) + [reward] 
@@ -319,9 +250,9 @@ def main(args):
                     all_masks.append(_masks)
                     output_rewards.append(_rewards)
     
-                #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>    
-                experience = Sample(prompt = prompt, response = response, reward = reward, probs = probs[0], crits = crits[0], tokens = all_tokens[0], masks = all_masks[0], seq_rewards = output_rewards[0])
-                buffer.push(experience)
+                    #<prompt, response, reward, probs, crits, tokens, masks, seq_rewards>    
+                    experience = Sample(prompt = prompt, response = response, reward = reward, tokens = all_tokens[0], masks = all_masks[0], seq_rewards = output_rewards[0])
+                    buffer.push(experience)
 
             topk_reward = topk_reward + topk_hit
             topk_num = topk_num + 1
@@ -334,7 +265,6 @@ def main(args):
                 print('topk_reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num, ', rank: ', rank)
 
                 dist.barrier()
-
                 ############# profiling
                 time_end = time.perf_counter()  
 
