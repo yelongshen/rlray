@@ -363,8 +363,8 @@ class ModelRunner:
 
 
     def call(self, method_name, *args):
-        if self.world_size > 1 and self.rank == 0:
-            self.write_shm(method_name, *args)
+        #if self.world_size > 1 and self.rank == 0:
+        #    self.write_shm(method_name, *args)
         method = getattr(self, method_name, None)
         assert callable(method)
         return method(*args)
@@ -543,7 +543,7 @@ class LLMEngine:
 
     def is_finished(self):
         return self.scheduler.is_finished()
-        
+
     def step(self):
         # sequence & tasks. 筹划decoding. 
         seqs, is_prefill = self.scheduler.schedule()
