@@ -757,7 +757,7 @@ class _Phi4ForCausalLM(_Phi4PreTrainedModel):
         )
 
         # suppose it is next token's Q value. 
-        if logits_to_keep is None:
+        if logits_to_keep is not None:
             hidden_states = hidden_states.squeeze(0)[logits_to_keep]
             hidden_states = hidden_states.unsqueeze(0)
         else:

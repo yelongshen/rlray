@@ -354,7 +354,7 @@ class ModelRunner:
         #self.sampler = Sampler()
 
         # gpu memory resource.
-        self.num_kvcache_blocks = self.allocate_kv_cache(self.model, self.llm_config, 0.8)
+        self.num_kvcache_blocks = self.allocate_kv_cache(self.model, self.llm_config, 0.85)
         
         self.temperature = 0.6
         # 这个操作是为了加速decoding。 
@@ -524,7 +524,7 @@ class ModelRunner:
         print('input_ids', input_ids.shape)
         
         print('positions', positions.shape)
-        
+
         logits = self.run_model(input_ids, positions, is_prefill)
         
         print('logits', logits.shape)
