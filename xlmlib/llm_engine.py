@@ -379,7 +379,7 @@ class ModelRunner:
         #
         #kvcache_block_size: int = 256
         block_size = 256
-        head_dim = llm_config.hidden_size // llm_config.num_heads
+        head_dim = llm_config.hidden_size // llm_config.num_attention_heads
 
         #key_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype) 
         #value_cache = torch.zeros(bsz, max_generation, self.num_key_value_heads, self.head_dim, device=hidden_states.device, dtype=hidden_states.dtype)
