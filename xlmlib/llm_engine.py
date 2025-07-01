@@ -38,7 +38,7 @@ class Sequence:
         self.token_ids = copy(token_ids)
         self.last_token = token_ids[-1]
         
-        #self.num_tokens = 
+        self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = len(token_ids)
 
         # 
@@ -79,7 +79,7 @@ class Sequence:
 
     @property
     def num_blocks(self):
-        return (self.num_tokens + self.block_size - 1) // self.block_size
+        return (len(self.token_ids) + self.block_size - 1) // self.block_size
 
     @property
     def last_block_num_tokens(self):
