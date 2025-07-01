@@ -520,21 +520,21 @@ class ModelRunner:
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
         #temperatures = self.prepare_sample(seqs)
 
-        print('is_prefill', is_prefill)
-        print('input_ids', input_ids.shape)
+        #print('is_prefill', is_prefill)
+        #print('input_ids', input_ids.shape)
         
-        print('positions', positions.shape)
+        #print('positions', positions.shape)
 
         logits = self.run_model(input_ids, positions, is_prefill)
         
-        print('logits', logits.shape)
+        #print('logits', logits.shape)
         probs = torch.softmax( (logits / self.temperature).to(torch.float32), dim=-1)
         
-        print('probs', probs.shape)
+        #print('probs', probs.shape)
         #norm_probs = normalize_probs(probs, 0.9)
         token_ids = torch.multinomial(probs, num_samples=1)
 
-        print('token_ids', token_ids.shape)
+        #print('token_ids', token_ids.shape)
         #token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
         reset_context()
         return token_ids.squeeze(dim=1).tolist()
