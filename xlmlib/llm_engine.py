@@ -37,7 +37,8 @@ class Sequence:
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
         self.last_token = token_ids[-1]
-        self.num_tokens = len(self.token_ids)
+        
+        #self.num_tokens = 
         self.num_prompt_tokens = len(token_ids)
 
         # 
@@ -48,7 +49,7 @@ class Sequence:
         #self.ignore_eos = sampling_params.ignore_eos
 
     def __len__(self):
-        return self.num_tokens
+        return len(self.token_ids) #self.num_tokens
 
     def __lt__(self, other):
         return self.seq_id < other.seq_id
@@ -468,7 +469,7 @@ class ModelRunner:
 
         for seq in seqs:
             input_ids.append(seq.last_token)
-            positions.append(len(seq))
+            positions.append(len(seq)-1)
             context_lens.append(len(seq))
             slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens  - 1)
 
