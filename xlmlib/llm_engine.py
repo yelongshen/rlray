@@ -3,6 +3,7 @@ from time import perf_counter
 from copy import copy
 from enum import Enum, auto
 from itertools import count
+from typing import List, Optional, Tuple, Union, Any, Dict
 
 
 import pickle
@@ -20,7 +21,7 @@ import numpy as np
 
 from context import set_context, get_context, reset_context
 from phi4 import normalize_probs
-from typing import List, Optional, Tuple, Union, Any, Dict
+
 
 class SequenceStatus(Enum):
     WAITING = auto()
@@ -31,7 +32,7 @@ class Sequence:
     block_size = 256
     counter = count()
 
-    def __init__(self, token_ids: list[int]):
+    def __init__(self, token_ids: List[int]):
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
@@ -116,7 +117,7 @@ def get_gpu_memory():
 
 
 
-def compute_hash(token_ids: list[int], prefix: int = -1):
+def compute_hash(token_ids: List[int], prefix: int = -1):
     h = xxhash.xxh64()
     if prefix != -1:
         h.update(prefix.to_bytes(8, "little"))
@@ -132,7 +133,7 @@ class Block:
         self.hash = -1
         self.token_ids = []
 
-    def update(self, hash: int, token_ids: list[int]):
+    def update(self, hash: int, token_ids: List[int]):
         assert hash != -1
         self.hash = hash
         self.token_ids = token_ids
@@ -152,7 +153,7 @@ class BlockManager:
         self.block_size = block_size
         self.num_blocks = num_blocks
 
-        self.blocks: list[Block] = [Block(i) for i in range(num_blocks)]
+        self.blocks: List[Block] = [Block(i) for i in range(num_blocks)]
         self.hash_to_block_id: dict[int, int] = dict()
         self.free_block_ids: deque[int] = deque(range(num_blocks))
         self.used_block_ids: set[int] = set()
@@ -265,7 +266,7 @@ class Scheduler:
         self.waiting.append(seq)
 
     # decoding or prefill stage. 
-    def schedule(self) -> tuple[list[Sequence], bool]:
+    def schedule(self) -> tuple[List[Sequence], bool]:
         # prefill
         scheduled_seqs = []
         num_seqs = 0
@@ -315,7 +316,7 @@ class Scheduler:
         self.block_manager.deallocate(seq)
         self.waiting.appendleft(seq)
 
-    def postprocess(self, seqs: list[Sequence], token_ids: list[int]) :
+    def postprocess(self, seqs: List[Sequence], token_ids: List[int]) :
         eos_id1 = self.llm_config.eos_token_id
         eos_id2 = 200020 # eos_token_id
 
@@ -403,7 +404,7 @@ class ModelRunner:
 
         return num_kvcache_blocks
 
-    def prepare_block_tables(self, seqs: list[Sequence]):
+    def prepare_block_tables(self, seqs: List[Sequence]):
         max_len = max(len(seq.block_table) for seq in seqs)
         block_tables = [
             seq.block_table + [-1] * (max_len - len(seq.block_table))
@@ -412,7 +413,7 @@ class ModelRunner:
         block_tables = torch.tensor(block_tables, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
         return block_tables
 
-    def prepare_prefill(self, seqs: list[Sequence]):
+    def prepare_prefill(self, seqs: List[Sequence]):
         input_ids = []
         positions = []
         cu_seqlens_q = [0]
@@ -459,7 +460,7 @@ class ModelRunner:
         set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables)
         return input_ids, positions
 
-    def prepare_decode(self, seqs: list[Sequence]):
+    def prepare_decode(self, seqs: List[Sequence]):
         input_ids = []
         positions = []
         slot_mapping = []
@@ -479,7 +480,7 @@ class ModelRunner:
         set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
         return input_ids, positions
 
-    #def prepare_sample(self, seqs: list[Sequence]):
+    #def prepare_sample(self, seqs: List[Sequence]):
     #    temperatures = []
     #    for seq in seqs:
     #        temperatures.append(seq.temperature)
@@ -515,7 +516,7 @@ class ModelRunner:
         #    return self.model.compute_logits(graph_vars["outputs"][:bs])
 
     
-    def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
+    def run(self, seqs: List[Sequence], is_prefill: bool) -> List[int]:
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
         #temperatures = self.prepare_sample(seqs)
 
@@ -560,8 +561,8 @@ class LLMEngine:
     # do we expect 
     def generate(
         self,
-        prompts: list[list[int]],
-    ) -> list[list[int]]:
+        prompts: List[List[int]],
+    ) -> List[List[int]]:
         # step 1. fill all the request into schedule.
         for prompt in prompts: #zip(prompts, sampling_params):
             self.scheduler.add(Sequence(prompt))
