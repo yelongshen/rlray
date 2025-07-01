@@ -266,7 +266,7 @@ class Scheduler:
         self.waiting.append(seq)
 
     # decoding or prefill stage. 
-    def schedule(self) -> tuple[List[Sequence], bool]:
+    def schedule(self) -> Tuple[List[Sequence], bool]:
         # prefill
         scheduled_seqs = []
         num_seqs = 0
