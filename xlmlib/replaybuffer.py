@@ -187,7 +187,7 @@ class ReplayBuffer:
         return np.mean(rewards)
 
     def avg_responselen(self):
-        response_len = [len(d.probs) for d in self.buffer]
+        response_len = [sum(d.masks) for d in self.buffer]
         return np.mean(response_len)
             
     def z_score_normalization(self):
