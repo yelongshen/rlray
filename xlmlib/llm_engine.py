@@ -386,7 +386,7 @@ class ModelRunner:
                 
         # assume kv_cache is stored on one GPU only. 
         num_kv_heads = llm_config.num_key_value_heads # // dist.get_world_size()
-        block_bytes = 2 * llm_config.num_hidden_layers * block_size * num_kv_heads * head_dim * torch.bfloat16.itemsize
+        block_bytes = 2 * llm_config.num_hidden_layers * block_size * num_kv_heads * head_dim * torch.finfo(torch.bfloat16).bits // 8 #torch.bfloat16.itemsize
 
         # how many kv blocks. 
         num_kvcache_blocks = int(free) // block_bytes
