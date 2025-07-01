@@ -239,7 +239,7 @@ class _Phi4Attention(nn.Module):
         
         cos, sin = self.rotary_emb(value_states, position_ids) #, seq_len=kv_seq_len)
 
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_value is not None:
             key_cache = torch.cat([past_key_value[0], key_states], dim=-2)
@@ -338,7 +338,7 @@ class _Phi4FlashAttention2(_Phi4Attention):
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim)#.transpose(1, 2)
 
         cos, sin = self.rotary_emb(value_states, position_ids) 
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         query_states = query_states.transpose(1,2).to(hidden_states.dtype)
         key_states = key_states.transpose(1,2).to(hidden_states.dtype)
