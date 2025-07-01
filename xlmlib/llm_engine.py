@@ -20,6 +20,7 @@ import numpy as np
 
 from context import set_context, get_context, reset_context
 from phi4 import normalize_probs
+from typing import List, Optional, Tuple, Union, Any, Dict
 
 class SequenceStatus(Enum):
     WAITING = auto()
