@@ -369,7 +369,7 @@ class ModelRunner:
         assert callable(method)
         return method(*args)
 
-    def allocate_kv_cache(llm, llm_config, gpu_memory_utilization = 0.90):
+    def allocate_kv_cache(self, llm, llm_config, gpu_memory_utilization = 0.90):
         #config = self.config
         #hf_config = config.hf_config
 
