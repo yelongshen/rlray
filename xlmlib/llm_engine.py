@@ -540,6 +540,10 @@ class LLMEngine:
         #atexit.register(self.exit)
         #config, 0, self.events)
 
+
+    def is_finished(self):
+        return self.scheduler.is_finished()
+        
     def step(self):
         # sequence & tasks. 筹划decoding. 
         seqs, is_prefill = self.scheduler.schedule()
