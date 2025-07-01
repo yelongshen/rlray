@@ -144,7 +144,7 @@ def main(args):
     dataset = load_dataset('json', data_files=datafile) 
     print(f"loaded {dataset} with data_files={datafile}") 
     sampler = torch.utils.data.distributed.DistributedSampler(dataset['train'], num_replicas=world_size, rank=rank, shuffle=True) 
-    dataloader = DataLoader(dataset['train'], batch_size=16, sampler=sampler) 
+    dataloader = DataLoader(dataset['train'], batch_size=1, sampler=sampler) 
 
     # setup optimization.
     #optimizer = torch.optim.AdamW(llm.parameters(), lr=args.lr) # 1.0e-6) 
@@ -298,7 +298,7 @@ if __name__ == "__main__":
     parser.add_argument("--pretrained_model", type=str, default="none", help="path to pretrained ckpt.")
     parser.add_argument("--n_rollout", type=int, default=1, help="number of rollout per sample.")
     parser.add_argument("--epoch", type=int, default=1, help="number of epoches.")
-    parser.add_argument("--replay_size", type=int, default=64, help="size of replay buffer.")
+    parser.add_argument("--replay_size", type=int, default=16, help="size of replay buffer.")
     parser.add_argument("--model_type", type=str, default="phi3", choices=["phi3", "phi4"], help="choose model type.")
     
     args = parser.parse_args()
