@@ -354,7 +354,7 @@ class ModelRunner:
         #self.sampler = Sampler()
 
         # gpu memory resource.
-        self.num_kvcache_blocks = self.allocate_kv_cache(self.model, self.llm_config, 0.9)
+        self.num_kvcache_blocks = self.allocate_kv_cache(self.model, self.llm_config, 0.8)
         
         self.temperature = 0.6
         # 这个操作是为了加速decoding。 
@@ -523,8 +523,8 @@ class ModelRunner:
         logits = self.run_model(input_ids, positions, is_prefill)
         
         probs = torch.softmax( (logits / self.temperature).to(torch.float32), dim=-1)
-        norm_probs = normalize_probs(probs, 0.9)
-        token_ids = torch.multinomial(norm_probs, num_samples=1)
+        #norm_probs = normalize_probs(probs, 0.9)
+        token_ids = torch.multinomial(probs, num_samples=1)
         #token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
         reset_context()
         return token_ids.squeeze(dim=1).tolist()
