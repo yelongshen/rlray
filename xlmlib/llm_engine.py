@@ -534,7 +534,7 @@ class ModelRunner:
 class LLMEngine:
     def __init__(self, model, llm_config, device):
         self.model_runner = ModelRunner(model, llm_config, device) 
-        self.scheduler = Scheduler(llm_config, self.model_runner.block_size, self.num_kvcache_blocks) 
+        self.scheduler = Scheduler(llm_config, self.model_runner.block_size, self.model_runner.num_kvcache_blocks) 
 
         #config)
         #atexit.register(self.exit)
