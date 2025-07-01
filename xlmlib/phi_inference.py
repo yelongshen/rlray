@@ -130,8 +130,8 @@ def main(args):
     #llm = torch.nn.parallel.DistributedDataParallel(llm, device_ids=[local_rank]) 
     print('distributed language model creation.') 
     
-    total_memory, used_memory, free_memory = get_gpu_memory()
-    print('total_memory', total_memory, 'used_memory', used_memory, 'free_memory', free_memory)
+    #total_memory, used_memory, free_memory = get_gpu_memory()
+    #print('total_memory', total_memory, 'used_memory', used_memory, 'free_memory', free_memory)
 
     engine = LLMEngine(llm_model, llm_config, device)
     #def __init__(self, model, llm_config, device):
