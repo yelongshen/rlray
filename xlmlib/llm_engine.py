@@ -523,7 +523,7 @@ class ModelRunner:
         logits = self.run_model(input_ids, positions, is_prefill)
         
         probs = torch.softmax( (logits / self.temperature).to(torch.float32), dim=-1)
-        #norm_probs = normalize_probs(probs, 0.9)
+        norm_probs = normalize_probs(probs, 0.9)
         token_ids = torch.multinomial(norm_probs, num_samples=1)
         #token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
         reset_context()
