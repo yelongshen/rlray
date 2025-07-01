@@ -521,6 +521,10 @@ class ModelRunner:
         #temperatures = self.prepare_sample(seqs)
 
         print('is_prefill', is_prefill)
+        print('input_ids', input_ids.shape)
+        
+        print('positions', positions.shape)
+        
         logits = self.run_model(input_ids, positions, is_prefill)
         
         print('logits', logits.shape)
