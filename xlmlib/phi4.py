@@ -385,15 +385,15 @@ class _Phi4FlashAttention2(_Phi4Attention):
         #    value_cache = value_states
  
         if page_attention:
-            print('context.is_prefill', context.is_prefill)
+            print('context.is_prefill:', context.is_prefill)
             if context.is_prefill:
                 attn_output = flash_attn_varlen_func(query_states, self.k_cache, self.v_cache,
                                        max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
                                        max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
                                        causal=True, block_table=context.block_tables)
             else:
-                print('query_states', query_states.shape)
-                print('context.block_tables', context.block_tables)
+                print('query_states:', query_states.shape)
+                print('context.block_tables:', context.block_tables)
                 
                 attn_output = flash_attn_with_kvcache(query_states.unsqueeze(1), self.k_cache, self.v_cache,
                                     cache_seqlens=context.context_lens, causal=True, block_table=context.block_tables)
