@@ -477,7 +477,7 @@ class ModelRunner:
         print('input_ids', input_ids)
         print('slot_mapping', slot_mapping)
         print('context_lens', context_lens)
-        
+
         input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
@@ -498,9 +498,9 @@ class ModelRunner:
 
         context = get_context()
         if is_prefill:
-            _, logits, _, _ = self.model(input_ids=input_ids.unsqueeze(0), position_ids=positions.unsqueeze(0), logits_to_keep=context.cu_seqlens_q[1:]-1)
+            _, logits, _, _ = self.model(input_ids=input_ids.unsqueeze(0), position_ids=positions.unsqueeze(0), inference_mode=True, logits_to_keep=context.cu_seqlens_q[1:]-1)
         else:
-            _, logits, _, _ = self.model(input_ids=input_ids.unsqueeze(0), position_ids=positions.unsqueeze(0))
+            _, logits, _, _ = self.model(input_ids=input_ids.unsqueeze(0), position_ids=positions.unsqueeze(0), inference_mode=True)
 
         logits = logits.squeeze(0)
             #self.model
