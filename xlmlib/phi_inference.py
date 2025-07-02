@@ -259,7 +259,8 @@ def main(args):
             if len(buffer) >= buffer_size:    
                 avg_reward = buffer.mean_reward()
                 avg_response_len = buffer.avg_responselen()
-                buffer.calculate_advantage()
+                
+                #buffer.calculate_advantage()
                 
                 print('progress: ', batch_idx, ', avg_reward: ', avg_reward, ', avg_response_len: ', avg_response_len , ', rank: ', rank)
                 print('topk_reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num, ', rank: ', rank)
