@@ -330,9 +330,9 @@ class _Phi4FlashAttention2(_Phi4Attention):
 
         qkv = self.qkv_proj(hidden_states)
         query_pos = self.num_heads * self.head_dim
-        query_states = qkv[..., :query_pos].contiguous()
-        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim].contiguous()
-        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :].contiguous()
+        query_states = qkv[..., :query_pos]
+        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
+        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -355,9 +355,9 @@ class _Phi4FlashAttention2(_Phi4Attention):
 
             
             context = get_context()
-            query_states = query_states.view(-1, self.num_heads, self.head_dim)
-            key_states = key_states.view(-1, self.num_key_value_heads, self.head_dim)
-            value_states = value_states.view(-1, self.num_key_value_heads, self.head_dim)
+            query_states = query_states.view(-1, self.num_heads, self.head_dim).contiguous()
+            key_states = key_states.view(-1, self.num_key_value_heads, self.head_dim).contiguous()
+            value_states = value_states.view(-1, self.num_key_value_heads, self.head_dim).contiguous()
 
 
             print('key_states.shape', key_states.shape)
