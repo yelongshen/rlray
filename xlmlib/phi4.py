@@ -361,14 +361,14 @@ class _Phi4FlashAttention2(_Phi4Attention):
             value_states = value_states.view(-1, self.num_key_value_heads, self.head_dim).contiguous()
 
 
-            print('key_states.shape', key_states.shape)
-            print('key_states.stride', key_states.stride())
+            #print('key_states.shape', key_states.shape)
+            #print('key_states.stride', key_states.stride())
             
-            print('value_states.shape', value_states.shape)
-            print('value_states.stride', value_states.stride())
+            #print('value_states.shape', value_states.shape)
+            #print('value_states.stride', value_states.stride())
             
-            print('query_states.shape', query_states.shape)
-            print('query_states.stride', query_states.stride())
+            #print('query_states.shape', query_states.shape)
+            #print('query_states.stride', query_states.stride())
 
             #k_cache = self.k_cache
             #v_cache = self.v_cache
@@ -399,15 +399,15 @@ class _Phi4FlashAttention2(_Phi4Attention):
         #    value_cache = value_states
  
         if page_attention:
-            print('context.is_prefill:', context.is_prefill)
+            #print('context.is_prefill:', context.is_prefill)
             if context.is_prefill:
                 attn_output = flash_attn_varlen_func(query_states, self.k_cache, self.v_cache,
                                        max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
                                        max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
                                        causal=True, block_table=context.block_tables)
             else:
-                print('query_states:', query_states.shape)
-                print('context.block_tables:', context.block_tables)
+                #print('query_states:', query_states.shape)
+                #print('context.block_tables:', context.block_tables)
                 
                 attn_output = flash_attn_with_kvcache(query_states.unsqueeze(1), self.k_cache, self.v_cache,
                                     cache_seqlens=context.context_lens, causal=True, block_table=context.block_tables)
