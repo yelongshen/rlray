@@ -186,7 +186,7 @@ def main(args):
 
             batch_prompts = []
             for inner_prompt in vanilla_prompts:
-                prompt = process_math_prompt(vanilla_prompts[0], prompt_type = 'v17')
+                prompt = process_math_prompt(inner_prompt, prompt_type = 'v17')
                 batch_prompts.append(prompt)
 
             x1 = tokenizer(batch_prompts, add_special_tokens=False, max_length=1024, truncation=True)
