@@ -353,7 +353,8 @@ class _Phi4FlashAttention2(_Phi4Attention):
             value_cache = value_states
         elif inference_mode and self.k_cache is not None and self.v_cache is not None:
 
-            
+            key_cache = None
+            value_cache = None
             context = get_context()
             query_states = query_states.view(-1, self.num_heads, self.head_dim).contiguous()
             key_states = key_states.view(-1, self.num_key_value_heads, self.head_dim).contiguous()
@@ -368,7 +369,7 @@ class _Phi4FlashAttention2(_Phi4Attention):
             
             print('query_states.shape', query_states.shape)
             print('query_states.stride', query_states.stride())
-            
+
             #k_cache = self.k_cache
             #v_cache = self.v_cache
 
