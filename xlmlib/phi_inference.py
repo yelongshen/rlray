@@ -275,10 +275,12 @@ def main(args):
                 time_start = time.perf_counter()  
 
                 _n_tokens = torch.tensor([avg_response_len * len(buffer)], dtype=torch.float, device = device)
+                print('_n_tokens', _n_tokens)
+                
                 dist.all_reduce(_n_tokens, op=dist.ReduceOp.SUM)
 
-                #if local_rank == 0:
-                print('elapsed_time_generation:', elapsed_time_generation, 'total_tokens:', _n_tokens, 'token per sec:', _n_tokens/elapsed_time_generation)
+                if local_rank == 0:
+                    print('elapsed_time_generation:', elapsed_time_generation, 'total_tokens:', _n_tokens, 'token per sec:', _n_tokens/elapsed_time_generation)
 
                 #buffer.distributed_advantage_norm(device, dist)
                 #policy_loss_log, critic_loss_log = ppo_train(llm, llm_config, optimizer, scheduler, buffer, buffer_size, device)
