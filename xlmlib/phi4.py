@@ -392,8 +392,7 @@ class _Phi4FlashAttention2(_Phi4Attention):
                                        causal=True, block_table=context.block_tables)
             else:
                 attn_output = flash_attn_with_kvcache(query_states.unsqueeze(1), self.k_cache, self.v_cache,
-                                        cache_seqlens=context.context_lens, block_table=context.block_tables, 
-                                        softmax_scale=None, causal=True)
+                                    cache_seqlens=context.context_lens, causal=True, block_table=context.block_tables)
         else:           
             key_states = key_cache[:, :cur_pos + q_len]
             value_states = value_cache[:, :cur_pos + q_len]
