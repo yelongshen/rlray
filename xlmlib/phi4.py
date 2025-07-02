@@ -391,6 +391,9 @@ class _Phi4FlashAttention2(_Phi4Attention):
                                        max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
                                        causal=True, block_table=context.block_tables)
             else:
+                print('query_states', query_states.shape)
+                print('context.block_tables', context.block_tables)
+                
                 attn_output = flash_attn_with_kvcache(query_states.unsqueeze(1), self.k_cache, self.v_cache,
                                     cache_seqlens=context.context_lens, causal=True, block_table=context.block_tables)
         else:           
