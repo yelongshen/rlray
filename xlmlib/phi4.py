@@ -330,13 +330,13 @@ class _Phi4FlashAttention2(_Phi4Attention):
 
         qkv = self.qkv_proj(hidden_states)
         query_pos = self.num_heads * self.head_dim
-        query_states = qkv[..., :query_pos]
-        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
-        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
+        query_states = qkv[..., :query_pos].contiguous()
+        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim].contiguous()
+        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :].contiguous()
 
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).contiguous().transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).contiguous().transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).contiguous() #.transpose(1, 2)
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim) #.transpose(1, 2)
 
         cos, sin = self.rotary_emb(value_states, position_ids) 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -352,6 +352,16 @@ class _Phi4FlashAttention2(_Phi4Attention):
             key_cache = key_states
             value_cache = value_states
         elif inference_mode and self.k_cache is not None and self.v_cache is not None:
+
+            print('key_states.shape', key_states.shape)
+            print('key_states.stride', key_states.stride())
+            
+            print('value_states.shape', value_states.shape)
+            print('value_states.stride', value_states.stride())
+            
+            print('query_states.shape', query_states.shape)
+            print('query_states.stride', query_states.stride())
+            
             context = get_context()
             query_states = query_states.view(-1, self.num_heads, self.head_dim)
             key_states = key_states.view(-1, self.num_key_value_heads, self.head_dim)
