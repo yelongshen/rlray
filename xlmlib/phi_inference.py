@@ -262,7 +262,7 @@ def main(args):
                 
                 #buffer.calculate_advantage()
                 
-                print('progress: ', batch_idx, ', avg_reward: ', avg_reward, ', avg_response_len: ', avg_response_len , ', rank: ', rank)
+                print('progress: ', batch_idx, ', buffer_size: ', buffer_size, ', avg_reward: ', avg_reward, ', avg_response_len: ', avg_response_len , ', rank: ', rank)
                 print('topk_reward: ', topk_reward * 1.0 / topk_num, ', topk_num: ', topk_num, ', rank: ', rank)
 
                 dist.barrier()
@@ -276,7 +276,7 @@ def main(args):
 
                 _n_tokens = torch.tensor([avg_response_len * len(buffer)], dtype=torch.float, device = device)
                 print('_n_tokens', _n_tokens)
-                
+
                 dist.all_reduce(_n_tokens, op=dist.ReduceOp.SUM)
 
                 if local_rank == 0:
