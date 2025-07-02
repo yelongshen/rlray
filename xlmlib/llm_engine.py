@@ -473,10 +473,10 @@ class ModelRunner:
             context_lens.append(len(seq))
             slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens  - 1)
 
-        print('positions', positions)
-        print('input_ids', input_ids)
-        print('slot_mapping', slot_mapping)
-        print('context_lens', context_lens)
+        #print('positions', positions)
+        #print('input_ids', input_ids)
+        #print('slot_mapping', slot_mapping)
+        #print('context_lens', context_lens)
 
         input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
@@ -527,8 +527,8 @@ class ModelRunner:
         #temperatures = self.prepare_sample(seqs)
 
         #print('is_prefill', is_prefill)
-        if is_prefill:
-            print('input_ids', input_ids.shape)
+        #if is_prefill:
+        #    print('input_ids', input_ids.shape)
         
         #print('positions', positions.shape)
         logits = self.run_model(input_ids, positions, is_prefill)
