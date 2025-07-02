@@ -475,7 +475,9 @@ class ModelRunner:
 
         print('positions', positions)
         print('input_ids', input_ids)
-
+        print('slot_mapping', slot_mapping)
+        print('context_lens', context_lens)
+        
         input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
