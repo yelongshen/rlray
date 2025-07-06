@@ -2,6 +2,7 @@
 import librosa
 from transformers import WhisperFeatureExtractor, WhisperTokenizer
 from safetensors.torch import load_file
+import sys
 
 #  "chunk_length": 300,
 #  "dither": 0.0,
@@ -64,15 +65,15 @@ if __name__ == "__main__":
     #inputs_2 = feature_extractor_2(audio_data, sampling_rate=16000, return_tensors="pt")
     #inputs_4 = feature_extractor_4(audio_data, sampling_rate=16000, return_tensors="pt")
 
-
-    local_model_path = '../../qwen2.5/Qwen2.5-Omni-7B'
+    # qwen2.5/
+    local_model_path = '../../Qwen2.5-Omni-3B'
     
     safetensor_files = [
         f"{local_model_path}/model-00001-of-00005.safetensors",
         f"{local_model_path}/model-00002-of-00005.safetensors",
         f"{local_model_path}/model-00003-of-00005.safetensors",
-        f"{local_model_path}/model-00004-of-00005.safetensors",
-        f"{local_model_path}/model-00005-of-00005.safetensors",
+        #f"{local_model_path}/model-00004-of-00005.safetensors",
+        #f"{local_model_path}/model-00005-of-00005.safetensors",
     ]
     
     model_state_dict = {}
