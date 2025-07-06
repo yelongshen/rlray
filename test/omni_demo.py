@@ -49,5 +49,9 @@ response = inference(audio_path)
 
 print(response[0][0])
 
-with open("./a1.wav", "wb") as f:
-    f.write(response[1])      # done—this is a valid WAV file
+import torchaudio
+
+torchaudio.save("a1.wav", response[1].cpu(), 16000)
+
+#with open("./a1.wav", "wb") as f:
+#    f.write(response[1])      # done—this is a valid WAV file
