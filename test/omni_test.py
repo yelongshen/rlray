@@ -45,28 +45,28 @@ from safetensors.torch import load_file
 
 
 if __name__ == "__main__":
-    path = './question1.m4a'
-    audio_data, _ = librosa.load(path, sr=16000)
+    #path = './question1.m4a'
+    #audio_data, _ = librosa.load(path, sr=16000)
 
-    feature_extractor_1 = WhisperFeatureExtractor.from_pretrained("openai/whisper-small")
-    feature_extractor_3 = WhisperFeatureExtractor.from_pretrained("openai/whisper-medium")
+    #feature_extractor_1 = WhisperFeatureExtractor.from_pretrained("openai/whisper-small")
+    #feature_extractor_3 = WhisperFeatureExtractor.from_pretrained("openai/whisper-medium")
 
-    inputs_1 = feature_extractor_1(audio_data, sampling_rate=16000, return_tensors="pt")
-    inputs_3 = feature_extractor_3(audio_data, sampling_rate=16000, return_tensors="pt")
+    #inputs_1 = feature_extractor_1(audio_data, sampling_rate=16000, return_tensors="pt")
+    #inputs_3 = feature_extractor_3(audio_data, sampling_rate=16000, return_tensors="pt")
 
-    d = inputs_1['input_features'] - inputs_3['input_features']
-    print(d)
+    #d = inputs_1['input_features'] - inputs_3['input_features']
+    #print(d)
+
+    #feature_extractor_2 = WhisperFeatureExtractor.from_pretrained(local_model_path)
+    #feature_extractor_4 = WhisperFeatureExtractor(feature_size=128, chunk_length=300)
+
+    
+    #inputs_2 = feature_extractor_2(audio_data, sampling_rate=16000, return_tensors="pt")
+    #inputs_4 = feature_extractor_4(audio_data, sampling_rate=16000, return_tensors="pt")
 
 
     local_model_path = '../../qwen2.5/Qwen2.5-Omni-7B'
-    feature_extractor_2 = WhisperFeatureExtractor.from_pretrained(local_model_path)
-    feature_extractor_4 = WhisperFeatureExtractor(feature_size=128, chunk_length=300)
-
     
-    inputs_2 = feature_extractor_2(audio_data, sampling_rate=16000, return_tensors="pt")
-    inputs_4 = feature_extractor_4(audio_data, sampling_rate=16000, return_tensors="pt")
-
-
     safetensor_files = [
         f"{local_model_path}/model-00001-of-00005.safetensors",
         f"{local_model_path}/model-00002-of-00005.safetensors",
@@ -80,7 +80,9 @@ if __name__ == "__main__":
         part_state_dict = load_file(file, device="cpu")  # Load each part
         model_state_dict.update(part_state_dict)  # Merge into one dictionary
 
-
+    for mkey in model_state_dict:
+        print(mkey, model_state_dict[mkey].shape)
+    #print(model_state_dict)
     #print(sum(d*d)/len(d))
     
     #assert torch.allclose(o1, o2, atol=1e-1)
