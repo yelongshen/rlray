@@ -39,7 +39,7 @@ def inference(audio_path):
     audio = output[1]
     return text, audio
 
-audio_path = "./q1.wav"
+audio_path = "./q4.wav"
 
 audio = librosa.load(audio_path, sr=16000)[0]
 #display(Audio(audio, rate=16000))
@@ -48,11 +48,9 @@ audio = librosa.load(audio_path, sr=16000)[0]
 response = inference(audio_path)
 
 print(response[0][0])
-
 print(response[1], response[1].shape)
 import torchaudio
-
-torchaudio.save("a1.wav", response[1].unsqueeze(0).cpu(), 16_000)
+torchaudio.save("a4.wav", response[1].unsqueeze(0).cpu(), 16_000)
 
 #with open("./a1.wav", "wb") as f:
 #    f.write(response[1])      # done—this is a valid WAV file

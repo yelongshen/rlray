@@ -2556,6 +2556,20 @@ let's try something interesting here.
 	a. (整体压缩率大概10 times) [B(1), C_mel, T_frame]
 	b. wav.shape torch.Size([1, 144384]) --> torch.Size([1, 100, 564])
 	c. 6 sec.
+
 2. Encodec model, 离散化表达wave ->RVQ -> wave
 
+	# Supported bandwidths are 1.5kbps (n_q = 2), 3 kbps (n_q = 4), 6 kbps (n_q = 8) and 12 kbps (n_q =16) and 24kbps (n_q=32).
 
+	bandwidth 1.5k
+	a. wav.shape torch.Size([1, 144384]) --> RVQ.codec.shape torch.Size([1, 1, 2, 452]), 有噪音
+	bandwidth 
+	wav.shape torch.Size([1, 110081]) --> RVQ.codec.shape torch.Size([1, 1, 2, 348]), 有噪音
+	bandwidth
+
+	bandwidth 6k
+	a. wav.shape torch.Size([1, 144384]) --> RVQ.codec.shape torch.Size([1, 1, 8, 452]), 有噪音
+	bandwidth 
+	a. wav.shape torch.Size([1, 110081]) --> RVQ.codec.shape torch.Size([1, 1, 8, 348]), 有噪音
+	bandwidth 
+	
