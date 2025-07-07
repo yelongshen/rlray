@@ -2549,4 +2549,13 @@ token2wav.code2wav_dit_model.transformer_blocks.9.ff.ff.0.weight torch.Size([204
 token2wav.code2wav_dit_model.transformer_blocks.9.ff.ff.3.bias torch.Size([1024])
 token2wav.code2wav_dit_model.transformer_blocks.9.ff.ff.3.weight torch.Size([1024, 2048])
 
-(torch121) yeshe@microsoft.com@Reasoning-H100-VM3:~/rlray/test$
+(torch121) yeshe@microsoft.com@Reasoning-H100-VM3:~/rlray/test$ 
+let's try something interesting here. 
+目前两种选项：
+1. bigvgan, 连续化表达, wave -> melfeature -> wave 
+	a. (整体压缩率大概10 times) [B(1), C_mel, T_frame]
+	b. wav.shape torch.Size([1, 144384]) --> torch.Size([1, 100, 564])
+	c. 6 sec.
+2. Encodec model, 离散化表达wave ->RVQ -> wave
+
+
