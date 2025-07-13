@@ -12,6 +12,9 @@ processor = AutoProcessor.from_pretrained("facebook/encodec_24khz")
 librispeech_dummy = librispeech_dummy.cast_column("audio", Audio(sampling_rate=processor.sampling_rate))
 audio_sample = librispeech_dummy[0]["audio"]["array"]
 
+wav = torch.FloatTensor(wav).unsqueeze(0) # wav is FloatTensor with shape [B(1), T_time]
+
+wav_path = '../rlray/test/q4.wav'
 wav, sr = librosa.load(wav_path, sr=24000, mono=True)
 
 # pre-process the inputs
@@ -19,7 +22,7 @@ wav, sr = librosa.load(wav_path, sr=24000, mono=True)
 inputs = processor(raw_audio=wav, sampling_rate=processor.sampling_rate, return_tensors='pt')
 
 # explicitly encode then decode the audio inputs
-encoder_outputs = model.encode(inputs["input_values"], inputs["padding_mask"])
+encoder_outputs = model.encode(inputs["input_values"], inputs["padding_mask"], bandwidth=6.0)
 audio_values = model.decode(encoder_outputs.audio_codes, encoder_outputs.audio_scales, inputs["padding_mask"])[0]
 
 # encoder_outputs.audio_codes

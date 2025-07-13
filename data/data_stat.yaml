@@ -1,0 +1,68 @@
+description: job-testing-flow
+
+target:
+  name: genaicpu
+  #name: genai-win-sa #GenAI-Shared-UKSouth # genai-win-sa # GenAI-Shared-UKSouth #  genai-win-sa # aims-sing-a100-wus3 #  # aims-sing-a100-wus3 genai-win-sa #
+  workspace_name: Singularity-GenAI-WS-UKSouth # genai-phi-san #
+  service: sing
+
+environment:
+  image: ys_flashattn2:v4.1
+  username: phipretraining
+  registry: phipretraining.azurecr.io
+  setup:
+    - set -e -o xtrace
+    - export PATH=/home/$$USER/.local/bin:$$PATH
+    - printenv
+    - pip install -e .
+    # - pip install lm-eval==0.4.7
+    # - pip install datasets==3.2.0
+    # - pip install transformers==4.47.1
+    # - pip install evaluate==0.4.3
+
+storage:
+  aimsllmeus2_data:
+    storage_account_name: aimsllmeus2
+    container_name: data
+    mount_dir: /mnt/aimsllmeus2_data
+
+code:
+  local_dir: ./
+
+#env_defaults:
+#  uai: /subscriptions/d676d072-7cbf-4197-b2d6-17ecf38370d0/resourceGroups/Singularity-GenAI-GPU-UKSouth/providers/Microsoft.ManagedIdentity/userAssignedIdentities/genai-sing-uai
+
+# genaicpu                singularity-genai-cpu-rg        CPU    3/4/5GB    32 / 2048    .      .    .
+jobs:
+  - name: "phi_mini_inference"
+    sku: 1xD16_v3  #Standard_D4s_v3  #1x80G8-H100-IB-NvLink
+    process_count_per_node: 1
+    sla_tier: Premium
+    execution_mode: basic
+    priority: high
+    identity: managed
+    command:
+      - set -x
+      - export PATH=/home/aiscuser/.local/bin:$$PATH
+      - export PATH=$$HOME/.local/bin/:$$PATH
+      - echo $${NODE_RANK}
+      - printenv
+      - pip install pynvml
+      - pip install zuko
+      - pip install scikit-learn
+      - pip install xxhash
+      - pip install pyarrow
+      #- 'git clone https://github.com/yelongshen/rlray.git'
+      #- cd rlray
+      #- pip install .
+      #- cd xlmlib
+      - export NCCL_BLOCKING_WAIT=1
+      - export NCCL_ASYNC_ERROR_HANDLING=1
+      - export NCCL_TIMEOUT=72000
+      #- python data_stat.py --data /mnt/aimsllmeus2_data/mid_train/m7_1/ 
+      - python data_convert.py --src_data /mnt/aimsllmeus2_data/mid_train/m7_1/ --tgt_data /mnt/aimsllmeus2_data/mid_train/m7_1_bin/
+      #- torchrun --nproc_per_node 8 --nnodes 1 --node_rank $${NODE_RANK} --master_addr $${MASTER_ADDR} --master_port $${MASTER_PORT} phi_inference.py --pretrained_model /mnt/aimsllmeus2_data/Phi-4-mini-reasoning/ --model_type phi4
+    submit_args:
+      env:
+        #_AZUREML_SINGULARITY_JOB_UAI: /subscriptions/d676d072-7cbf-4197-b2d6-17ecf38370d0/resourceGroups/Singularity-GenAI-GPU-UKSouth/providers/Microsoft.ManagedIdentity/userAssignedIdentities/genai-sing-uai
+        _AZUREML_SINGULARITY_JOB_UAI: "/subscriptions/d676d072-7cbf-4197-b2d6-17ecf38370d0/resourcegroups/Singularity-GenAI-GPU-UKSouth/providers/Microsoft.ManagedIdentity/userAssignedIdentities/genai-sing-uai"

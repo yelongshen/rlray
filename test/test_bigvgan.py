@@ -14,6 +14,7 @@ model = model.eval().to(device)
 
 # load wav file and compute mel spectrogram
 wav_path = '../rlray/test/q1.wav'
+
 wav, sr = librosa.load(wav_path, sr=model.h.sampling_rate, mono=True) # wav is np.ndarray with shape [T_time] and values in [-1, 1]
 wav = torch.FloatTensor(wav).unsqueeze(0) # wav is FloatTensor with shape [B(1), T_time]
 
