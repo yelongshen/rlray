@@ -487,6 +487,8 @@ thinker.audio_tower.ln_post.bias torch.Size([1280])
 thinker.audio_tower.ln_post.weight torch.Size([1280])
 thinker.audio_tower.proj.bias torch.Size([2048])
 thinker.audio_tower.proj.weight torch.Size([2048, 1280])
+-----------------------------------------------------------------------------------------------------
+
 thinker.model.embed_tokens.weight torch.Size([151936, 2048])
 thinker.model.layers.0.input_layernorm.weight torch.Size([2048])
 thinker.model.layers.0.mlp.down_proj.weight torch.Size([2048, 11008])
@@ -628,6 +630,7 @@ thinker.model.layers.9.self_attn.q_proj.bias torch.Size([2048])
 thinker.model.layers.9.self_attn.q_proj.weight torch.Size([2048, 2048])
 thinker.model.layers.9.self_attn.v_proj.bias torch.Size([256])
 thinker.model.layers.9.self_attn.v_proj.weight torch.Size([256, 2048])
+----------------------------------------------------------------------------------------
 thinker.visual.blocks.0.attn.k.bias torch.Size([1280])
 thinker.visual.blocks.0.attn.k.weight torch.Size([1280, 1280])
 thinker.visual.blocks.0.attn.proj.bias torch.Size([1280])
@@ -2549,27 +2552,3 @@ token2wav.code2wav_dit_model.transformer_blocks.9.ff.ff.0.weight torch.Size([204
 token2wav.code2wav_dit_model.transformer_blocks.9.ff.ff.3.bias torch.Size([1024])
 token2wav.code2wav_dit_model.transformer_blocks.9.ff.ff.3.weight torch.Size([1024, 2048])
 
-(torch121) yeshe@microsoft.com@Reasoning-H100-VM3:~/rlray/test$ 
-let's try something interesting here. 
-目前两种选项：
-1. bigvgan, 连续化表达, wave -> melfeature -> wave 
-	a. (整体压缩率大概10 times) [B(1), C_mel, T_frame]
-	b. wav.shape torch.Size([1, 144384]) --> torch.Size([1, 100, 564])
-	c. 6 sec.
-
-2. Encodec model, 离散化表达wave ->RVQ -> wave
-
-	# Supported bandwidths are 1.5kbps (n_q = 2), 3 kbps (n_q = 4), 6 kbps (n_q = 8) and 12 kbps (n_q =16) and 24kbps (n_q=32).
-
-	bandwidth 1.5k
-	a. wav.shape torch.Size([1, 144384]) --> RVQ.codec.shape torch.Size([1, 1, 2, 452]), 有噪音
-	bandwidth 
-	wav.shape torch.Size([1, 110081]) --> RVQ.codec.shape torch.Size([1, 1, 2, 348]), 有噪音
-	bandwidth
-
-	bandwidth 6k
-	a. wav.shape torch.Size([1, 144384]) --> RVQ.codec.shape torch.Size([1, 1, 8, 452]), 有噪音
-	bandwidth 
-	a. wav.shape torch.Size([1, 110081]) --> RVQ.codec.shape torch.Size([1, 1, 8, 348]), 有噪音
-	bandwidth 
-	

@@ -1,0 +1,3 @@
+# lib
+librosa
+git+https://github.com/huggingface/transformers@v4.51.3-Qwen2.5-Omni-preview

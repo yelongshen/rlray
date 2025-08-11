@@ -37,6 +37,7 @@ class Request:
 #    
 # on rank_0:
 # for 
+# prompt: text --> speech , text LLM 
 # processing _engine.results
 class _inference_engine:
     def __init__(self, model, rank, world_size):
