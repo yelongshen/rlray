@@ -29,9 +29,8 @@ storage:
 code:
   local_dir: ./
 
-env_defaults:
-  uai: /subscriptions/d676d072-7cbf-4197-b2d6-17ecf38370d0/resourceGroups/Singularity-GenAI-GPU-UKSouth/providers/Microsoft.ManagedIdentity/userAssignedIdentities/genai-sing-uai
-
+#env_defaults:
+#  uai: /subscriptions/d676d072-7cbf-4197-b2d6-17ecf38370d0/resourceGroups/Singularity-GenAI-GPU-UKSouth/providers/Microsoft.ManagedIdentity/userAssignedIdentities/genai-sing-uai
 
 jobs:
   - name: "phi_mini_ppo2"
@@ -56,4 +55,6 @@ jobs:
       - torchrun --nproc_per_node 1 --nnodes 1 --node_rank $${NODE_RANK} --master_addr $${MASTER_ADDR} --master_port $${MASTER_PORT} flow.py 
     submit_args:
       env:
-        _AZUREML_SINGULARITY_JOB_UAI: /subscriptions/d676d072-7cbf-4197-b2d6-17ecf38370d0/resourceGroups/Singularity-GenAI-GPU-UKSouth/providers/Microsoft.ManagedIdentity/userAssignedIdentities/genai-sing-uai
+        #_AZUREML_SINGULARITY_JOB_UAI: /subscriptions/d676d072-7cbf-4197-b2d6-17ecf38370d0/resourceGroups/Singularity-GenAI-GPU-UKSouth/providers/Microsoft.ManagedIdentity/userAssignedIdentities/genai-sing-uai
+
+        _AZUREML_SINGULARITY_JOB_UAI: "/subscriptions/d676d072-7cbf-4197-b2d6-17ecf38370d0/resourcegroups/Singularity-GenAI-GPU-UKSouth/providers/Microsoft.ManagedIdentity/userAssignedIdentities/genai-sing-uai"

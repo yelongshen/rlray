@@ -87,6 +87,10 @@ class CNF(nn.Module):
     def __init__(self, features: int, freqs: int = 3, **kwargs):
         super().__init__()
 
+        # input feature: 2* 3 + 2, 
+        # output feature: 2
+        # hidden features : 64, 64, 64
+
         self.net = MLP(2 * freqs + features, features, **kwargs)
 
         self.register_buffer('freqs', torch.arange(1, freqs + 1) * torch.pi)
@@ -132,9 +136,10 @@ class FlowMatchingLoss(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         t = torch.rand_like(x[..., 0, None])
         z = torch.randn_like(x)
-        y = (1 - t) * x + (1e-4 + (1 - 1e-4) * t) * z
-        u = (1 - 1e-4) * z - x
+        y = (1 - t) * x + (1e-4 + (1 - 1e-4) * t) * z 
+        u = (1 - 1e-4) * z - x # the gradiant of y to t
 
+        # gradient matching approach. 
         return (self.v(t.squeeze(-1), y) - u).square().mean()
 
 def main(args):
@@ -147,6 +152,7 @@ def main(args):
     loss = FlowMatchingLoss(flow)
     optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
 
+    # 数据集
     data, _ = make_moons(16384, noise=0.05)
     data = torch.from_numpy(data).float()
 
@@ -168,7 +174,8 @@ def main(args):
         optimizer.step()
         optimizer.zero_grad()
 
-    # Sampling
+
+    # model distribution. Sampling
     with torch.no_grad():
         z = torch.randn(16384, 2)
         x = flow.decode(z)
@@ -180,7 +187,6 @@ def main(args):
     # Log-likelihood
     #with torch.no_grad():
     #    log_p = flow.log_prob(data[:4])
-
     #print(log_p)   
                         
 if __name__ == "__main__":
@@ -188,3 +194,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     main(args)
+
+
+# the difference between diffusion and flow-matching is clear now. 
+

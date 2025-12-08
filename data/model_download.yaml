@@ -59,10 +59,27 @@ jobs:
       - export NCCL_BLOCKING_WAIT=1
       - export NCCL_ASYNC_ERROR_HANDLING=1
       - export NCCL_TIMEOUT=72000
-      - apt install git-lfs
-      - git lfs install
-      - git clone https://huggingface.co/moonshotai/Kimi-K2-Instruct
-      - mv Kimi-K2-Instruct /mnt/aimsllmeus2_data/
+
+      # 1. Become root (preferred) or prefix every apt line with sudo
+      - sudo -i                         # or: sudo bash
+
+      # 2. Make sure no other apt/dpkg process is running
+      - ps -ef | grep -E 'apt|dpkg'     # if you see one, wait for it to finish or kill it
+      - rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock   # only if you are sure nothing else is using apt
+
+      # 3. Update package lists and install Git LFS
+      - apt update
+
+      - curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz
+      - tar -xf google-cloud-cli-linux-x86_64.tar.gz
+      - ./google-cloud-sdk/install.sh --quiet
+      - gsutil -m cp -r gs://gresearch/robotics/droid /mnt/aimsllmeus2_data/
+      #- apt install -y git-lfs
+      #- apt install git-lfs
+      #- git lfs install
+      #- git clone https://huggingface.co/moonshotai/Kimi-K2-Instruct ./
+      #- mv --no-preserve=mode,ownership,timestamps Kimi-K2-Instruct /mnt/aimsllmeus2_data/
+      #/mnt/aimsllmeus2_data/
       #- python data_stat.py --data /mnt/aimsllmeus2_data/mid_train/m7_1/ 
       #- python data_convert.py --src_data /mnt/aimsllmeus2_data/mid_train/m7_1/ --tgt_data /mnt/aimsllmeus2_data/mid_train/m7_1_bin/
       #- torchrun --nproc_per_node 8 --nnodes 1 --node_rank $${NODE_RANK} --master_addr $${MASTER_ADDR} --master_port $${MASTER_PORT} phi_inference.py --pretrained_model /mnt/aimsllmeus2_data/Phi-4-mini-reasoning/ --model_type phi4

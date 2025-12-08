@@ -1,0 +1,1 @@
+{"project_name": "llmrl", "storage_account_name": "aimsllmeus2", "container_name": "amulet", "blob_storage_account_name": "aimsllmeus2", "registry_name": "projects", "local_path": "/mnt/c/rlray/xlmlib", "default_output_dir": "/mnt/c/rlray/xlmlib/amlt", "project_uuid": "7249766445.98796-0a9d76f5-14ce", "version": "10.14.1.post12"}
