@@ -29,10 +29,6 @@ storage:
 code:
   local_dir: ./
 
-#env_defaults:
-#  uai: /subscriptions/d676d072-7cbf-4197-b2d6-17ecf38370d0/resourceGroups/Singularity-GenAI-GPU-UKSouth/providers/Microsoft.ManagedIdentity/userAssignedIdentities/genai-sing-uai
-
-
 jobs:
   - name: "phi_mini_inference"
     sku: 1x80G8-H100-IB-NvLink
@@ -52,7 +48,6 @@ jobs:
       - pip install setuptools_scm
       
       - pip uninstall -y vllm
-      - git clone -b congcongchen/phi4-mini-shadow https://yelongshen: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@github.com/congcongchen123/vllm-private.git
       - cd vllm-private
       - pip install -e .
       #- python setup.py bdist_wheel
