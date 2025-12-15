@@ -10,7 +10,7 @@
 #bbb sync -q --concurrency 128 $remote_output_dir $local_output_dir
 #[ -d $local_output_dir ] || mkdir -p $local_output_dir
 
-#cd scripts/train/
+cd "$(dirname "$0")"
 echo "-------------Start Training--------------"
 node0_ip=`brix pods "$BRIX_POOL-0" | awk 'NR>1 {print $9}'`
 MASTER_ADDR="${node0_ip}:12345"
