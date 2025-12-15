@@ -2,7 +2,7 @@
 
 ## 📁 Files Created
 
-### Core Implementation (3 files)
+### Core Implementation (4 files)
 1. **`minimal_model.py`** (735 lines)
    - Complete transformer model with DP/TP support
    - Tensor parallel layers and operators
@@ -13,10 +13,17 @@
    - GPipe and 1F1B schedules
    - Microbatch management
 
-3. **`minimal_pretrain.py`** (486 lines)
+3. **`moe_layers.py`** (685 lines) ⭐ NEW
+   - Mixture of Experts implementation
+   - Expert Parallel (EP) support
+   - No-drop token routing
+   - Load balancing with auxiliary loss
+
+4. **`minimal_pretrain.py`** (486 lines, modified)
    - Main training script
-   - Supports all parallelism modes
+   - Supports all parallelism modes (DP/TP/PP/EP)
    - Checkpointing, logging, optimization
+   - MoE model support
 
 ### Configuration & Launch (3 files)
 4. **`pretrain_config.py`** (211 lines)
@@ -29,33 +36,46 @@
 6. **`launch_pretrain.ps1`** (75 lines)
    - PowerShell launch script (Windows)
 
-### Testing & Examples (2 files)
+### Testing & Examples (3 files)
 7. **`test_minimal_pretrain.py`** (339 lines)
    - Comprehensive unit tests
    - Verifies all components
 
-8. **`examples_pretrain.py`** (383 lines)
+8. **`test_moe.py`** (323 lines) ⭐ NEW
+   - MoE-specific tests
+   - Router, expert, and load balancing tests
+
+9. **`examples_pretrain.py`** (383 lines)
    - 9 interactive examples
    - Different parallelism configurations
 
-### Documentation (4 files)
-9. **`README_PRETRAIN.md`** (580 lines)
-   - Complete documentation
-   - Usage guide, tips, troubleshooting
+### Documentation (6 files)
+10. **`README_PRETRAIN.md`** (580 lines)
+    - Complete documentation
+    - Usage guide, tips, troubleshooting
 
-10. **`QUICKREF_PRETRAIN.md`** (192 lines)
+11. **`README_MOE.md`** (495 lines) ⭐ NEW
+    - Complete MoE documentation
+    - Expert parallel guide
+    - Load balancing tips
+
+12. **`QUICKREF_PRETRAIN.md`** (192 lines)
     - Quick reference guide
     - Common commands and issues
 
-11. **`ARCHITECTURE_VISUAL.md`** (295 lines)
+13. **`ARCHITECTURE_VISUAL.md`** (295 lines)
     - Visual architecture diagrams
     - Parallelism illustrations
 
-12. **`IMPLEMENTATION_SUMMARY.py`** (258 lines)
+14. **`IMPLEMENTATION_SUMMARY.py`** (258 lines)
     - Implementation overview
     - Feature checklist
 
-**Total: 12 new files, ~4,000 lines of code and documentation**
+15. **`MOE_SUMMARY.md`** (203 lines) ⭐ NEW
+    - MoE implementation summary
+    - Quick start guide
+
+**Total: 15 new files, ~5,500 lines of code and documentation**
 
 ---
 
@@ -65,9 +85,13 @@
 ```bash
 # Run tests
 python test_minimal_pretrain.py
+python test_moe.py  # NEW: Test MoE
 
 # Train on single GPU
 python minimal_pretrain.py --max-steps 100
+
+# Train MoE model  # NEW
+python minimal_pretrain.py --num-experts 8 --max-steps 100
 
 # Train on 4 GPUs (data parallel)
 torchrun --nproc_per_node=4 minimal_pretrain.py

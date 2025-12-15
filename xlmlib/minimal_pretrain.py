@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader, Dataset
 
 # Import our modules
 from minimal_model import MinimalTransformer
+from moe_layers import MoETransformer
 from pipeline_parallel import PipelineParallel, partition_model_for_pipeline
 from parallel_initialization import (
     initialize_model_parallel,
@@ -96,17 +97,37 @@ def setup_model_parallel(tensor_parallel_size: int, pipeline_parallel_size: int)
 def create_model(args, device):
     """Create model with appropriate parallelism"""
     use_tensor_parallel = args.tensor_parallel_size > 1
+    use_expert_parallel = args.expert_parallel_size > 1
     
-    model = MinimalTransformer(
-        vocab_size=args.vocab_size,
-        hidden_size=args.hidden_size,
-        intermediate_size=args.intermediate_size,
-        num_hidden_layers=args.num_layers,
-        num_attention_heads=args.num_attention_heads,
-        num_key_value_heads=args.num_key_value_heads,
-        max_position_embeddings=args.max_seq_length,
-        use_tensor_parallel=use_tensor_parallel,
-    )
+    # Create MoE model if num_experts > 0
+    if args.num_experts > 0:
+        model = MoETransformer(
+            vocab_size=args.vocab_size,
+            hidden_size=args.hidden_size,
+            intermediate_size=args.intermediate_size,
+            num_hidden_layers=args.num_layers,
+            num_attention_heads=args.num_attention_heads,
+            num_key_value_heads=args.num_key_value_heads,
+            max_position_embeddings=args.max_seq_length,
+            num_experts=args.num_experts,
+            num_experts_per_token=args.num_experts_per_token,
+            moe_layer_interval=args.moe_layer_interval,
+            use_tensor_parallel=use_tensor_parallel,
+            use_expert_parallel=use_expert_parallel,
+            router_aux_loss_coef=args.router_aux_loss_coef,
+            router_z_loss_coef=args.router_z_loss_coef,
+        )
+    else:
+        model = MinimalTransformer(
+            vocab_size=args.vocab_size,
+            hidden_size=args.hidden_size,
+            intermediate_size=args.intermediate_size,
+            num_hidden_layers=args.num_layers,
+            num_attention_heads=args.num_attention_heads,
+            num_key_value_heads=args.num_key_value_heads,
+            max_position_embeddings=args.max_seq_length,
+            use_tensor_parallel=use_tensor_parallel,
+        )
     
     model = model.to(device)
     
@@ -183,9 +204,16 @@ def train_step(model, batch, optimizer, scheduler, args, device):
             input_ids=input_ids,
             labels=labels,
         )
+        aux_loss = None
     else:
         # Regular forward
-        logits, loss = model(input_ids=input_ids, labels=labels)
+        if args.num_experts > 0:
+            # MoE model returns (logits, loss, aux_loss)
+            logits, loss, aux_loss = model(input_ids=input_ids, labels=labels)
+        else:
+            # Regular model returns (logits, loss)
+            logits, loss = model(input_ids=input_ids, labels=labels)
+            aux_loss = None
     
     # Backward pass (if not pipeline parallel)
     if not isinstance(model, PipelineParallel):
@@ -204,7 +232,7 @@ def train_step(model, batch, optimizer, scheduler, args, device):
     optimizer.step()
     scheduler.step()
     
-    return loss.item() if loss is not None else 0.0
+    return loss.item() if loss is not None else 0.0, aux_loss.item() if aux_loss is not None else 0.0
 
 
 def save_checkpoint(model, optimizer, scheduler, step, args, rank):
@@ -243,6 +271,11 @@ def print_training_info(args, rank, world_size):
         print(f"Data Parallel Size: {args.data_parallel_size}")
         print(f"Tensor Parallel Size: {args.tensor_parallel_size}")
         print(f"Pipeline Parallel Size: {args.pipeline_parallel_size}")
+        if args.num_experts > 0:
+            print(f"Expert Parallel Size: {args.expert_parallel_size}")
+            print(f"Num Experts: {args.num_experts}")
+            print(f"Num Experts Per Token: {args.num_experts_per_token}")
+            print(f"MoE Layer Interval: {args.moe_layer_interval}")
         print(f"Micro Batch Size: {args.micro_batch_size}")
         print(f"Global Batch Size: {args.global_batch_size}")
         print(f"Gradient Accumulation Steps: {args.gradient_accumulation_steps}")
@@ -306,10 +339,24 @@ def main():
     # Parallelism args
     parser.add_argument('--tensor-parallel-size', type=int, default=1)
     parser.add_argument('--pipeline-parallel-size', type=int, default=1)
+    parser.add_argument('--expert-parallel-size', type=int, default=1,
+                       help='Expert parallel size for MoE models')
     parser.add_argument('--num-microbatches', type=int, default=1,
                        help='Number of microbatches for pipeline parallelism')
     parser.add_argument('--pipeline-schedule', type=str, default='1f1b',
                        choices=['gpipe', '1f1b'])
+    
+    # MoE args
+    parser.add_argument('--num-experts', type=int, default=0,
+                       help='Number of experts (0 = no MoE, use dense model)')
+    parser.add_argument('--num-experts-per-token', type=int, default=2,
+                       help='Number of experts to route each token to')
+    parser.add_argument('--moe-layer-interval', type=int, default=2,
+                       help='Use MoE every N layers (0 = all layers, 1 = no MoE)')
+    parser.add_argument('--router-aux-loss-coef', type=float, default=0.01,
+                       help='Coefficient for router auxiliary loss')
+    parser.add_argument('--router-z-loss-coef', type=float, default=0.001,
+                       help='Coefficient for router z-loss')
     
     # Data args
     parser.add_argument('--data-dir', type=str, default=None)
@@ -327,6 +374,12 @@ def main():
     rank, world_size, local_rank, device = setup_distributed()
     
     # Calculate data parallel size
+    # Note: For MoE models with expert parallel, EP size is same as TP size
+    if args.num_experts > 0 and args.expert_parallel_size > 1:
+        args.expert_parallel_size = args.tensor_parallel_size
+    else:
+        args.expert_parallel_size = 1
+    
     args.data_parallel_size = world_size // (args.tensor_parallel_size * args.pipeline_parallel_size)
     
     # Setup model parallel
@@ -392,6 +445,7 @@ def main():
     model.train()
     global_step = 0
     total_loss = 0
+    total_aux_loss = 0
     start_time = time.time()
     
     dp_rank, dp_world_size, tp_rank, tp_world_size, pp_rank, pp_world_size = get_parallel_info()
@@ -408,21 +462,27 @@ def main():
             batch = next(data_iter)
         
         # Training step
-        loss = train_step(model, batch, optimizer, scheduler, args, device)
+        loss, aux_loss = train_step(model, batch, optimizer, scheduler, args, device)
         total_loss += loss
+        total_aux_loss += aux_loss
         global_step += 1
         
         # Logging
         if global_step % args.log_interval == 0:
             avg_loss = total_loss / args.log_interval
+            avg_aux_loss = total_aux_loss / args.log_interval
             elapsed = time.time() - start_time
             throughput = args.log_interval * args.micro_batch_size / elapsed
             
             if rank == 0 or (pp_rank == pp_world_size - 1 and dp_rank == 0 and tp_rank == 0):
-                print(f"Step {global_step} | Loss: {avg_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.2e} | "
-                      f"Throughput: {throughput:.2f} samples/s")
+                log_msg = f"Step {global_step} | Loss: {avg_loss:.4f}"
+                if args.num_experts > 0:
+                    log_msg += f" | Aux Loss: {avg_aux_loss:.4f}"
+                log_msg += f" | LR: {scheduler.get_last_lr()[0]:.2e} | Throughput: {throughput:.2f} samples/s"
+                print(log_msg)
             
             total_loss = 0
+            total_aux_loss = 0
             start_time = time.time()
         
         # Save checkpoint
