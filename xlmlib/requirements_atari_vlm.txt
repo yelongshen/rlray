@@ -1,0 +1,65 @@
+# Requirements for Atari VLM Environment
+
+# Core dependencies
+gymnasium[atari]>=0.29.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+tqdm>=4.66.0
+
+# Deep Learning (for open-source VLMs)
+torch>=2.0.0
+transformers>=4.35.0
+accelerate>=0.25.0
+
+# Commercial VLM APIs
+openai>=1.0.0              # For GPT-4V/GPT-4o
+anthropic>=0.7.0           # For Claude 3.5 Sonnet
+google-generativeai>=0.3.0  # For Gemini 1.5 Pro
+
+# Optional optimizations
+bitsandbytes>=0.41.0       # For quantization (4-bit/8-bit models)
+flash-attn>=2.0.0          # For faster attention (CUDA only)
+
+# Visualization and logging
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Atari ROM license (required)
+# Install separately with: pip install gymnasium[accept-rom-license]
+# Or: pip install autorom && AutoROM --accept-license
+
+# Model-specific dependencies:
+
+# For Qwen2-VL
+# pip install qwen-vl-utils
+
+# For LLaVA-1.6
+# pip install git+https://github.com/haotian-liu/LLaVA.git
+
+# For CogVLM2
+# pip install xformers  # Optional, for memory efficiency
+
+# For Video-LLaVA
+# pip install git+https://github.com/PKU-YuanGroup/Video-LLaVA.git
+
+# Hardware recommendations:
+# - For API-based VLMs: Any machine with internet
+# - For 7B models: 16GB+ VRAM (e.g., RTX 4080, A4000)
+# - For 34B models: 70GB+ VRAM (e.g., A100 80GB, multi-GPU)
+# - For 72B models: 80GB+ VRAM (e.g., A100 80GB, H100)
+
+# Installation guide:
+
+# 1. Basic setup (API-based VLMs)
+# pip install -r requirements_atari_vlm.txt
+
+# 2. For local open-source VLMs
+# pip install -r requirements_atari_vlm.txt
+# pip install gymnasium[accept-rom-license]
+
+# 3. For GPU optimization
+# pip install bitsandbytes flash-attn  # Requires CUDA
+
+# 4. Test installation
+# python examples_atari_vlm.py

@@ -1,8 +1,8 @@
-# Minimal Language Model Pretraining - Complete Index
+# Complete Index - XLMLib Projects
 
-## 📁 Files Created
+## 📁 All Files
 
-### Core Implementation (4 files)
+### 1. Language Model Pretraining (Core Implementation)
 1. **`minimal_model.py`** (735 lines)
    - Complete transformer model with DP/TP support
    - Tensor parallel layers and operators
@@ -13,100 +13,174 @@
    - GPipe and 1F1B schedules
    - Microbatch management
 
-3. **`moe_layers.py`** (685 lines) ⭐ NEW
+3. **`moe_layers.py`** (685 lines)
    - Mixture of Experts implementation
    - Expert Parallel (EP) support
    - No-drop token routing
    - Load balancing with auxiliary loss
 
-4. **`minimal_pretrain.py`** (486 lines, modified)
+4. **`minimal_pretrain.py`** (486 lines)
    - Main training script
    - Supports all parallelism modes (DP/TP/PP/EP)
    - Checkpointing, logging, optimization
    - MoE model support
 
-### Configuration & Launch (3 files)
-4. **`pretrain_config.py`** (211 lines)
+### 2. Atari VLM Environment ⭐ NEW
+1. **`atari_vlm_env.py`** (850 lines)
+   - Atari game wrapper for Vision-Language Models
+   - Support for GPT-4V, Claude, Qwen-VL, LLaVA, etc.
+   - Frame preprocessing and action space management
+   - Prompt engineering (basic, CoT, expert)
+
+2. **`train_atari_vlm.py`** (500 lines)
+   - Training framework for VLM agents
+   - In-context learning with trajectory replay
+   - Experience buffer and evaluation
+   - Multi-VLM backend support
+
+3. **`examples_atari_vlm.py`** (450 lines)
+   - 9 comprehensive examples
+   - VLM simulation and comparison
+   - Performance tracking and visualization
+
+4. **`README_ATARI_VLM.md`** (600 lines)
+   - Complete documentation
+   - 8 recommended VLMs with comparisons
+   - Setup, usage, optimization guides
+
+5. **`ATARI_VLM_SUMMARY.md`** (200 lines)
+   - Quick start guide
+   - VLM recommendations
+   - Performance benchmarks
+
+6. **`requirements_atari_vlm.txt`** (50 lines)
+   - All dependencies for Atari VLM
+   - Installation instructions
+
+### 3. Parallel Loop Transformer (PLT)
+1. **`PLT_PSEUDOCODE.md`** (900 lines)
+   - Complete pseudocode for arXiv:2510.24824
+   - Cross-loop parallelism algorithm
+   - Gated sliding-window attention
+   - Test-time computation scaling
+
+### 4. Configuration & Launch
+1. **`pretrain_config.py`** (211 lines)
    - Configuration dataclasses
    - Predefined model sizes (Small/Medium/Large/XL)
 
-5. **`launch_pretrain.sh`** (60 lines)
+2. **`launch_pretrain.sh`** (60 lines)
    - Bash launch script (Linux/Mac)
 
-6. **`launch_pretrain.ps1`** (75 lines)
+3. **`launch_pretrain.ps1`** (75 lines)
    - PowerShell launch script (Windows)
 
-### Testing & Examples (3 files)
-7. **`test_minimal_pretrain.py`** (339 lines)
+### 5. Testing & Examples
+1. **`test_minimal_pretrain.py`** (339 lines)
    - Comprehensive unit tests
    - Verifies all components
 
-8. **`test_moe.py`** (323 lines) ⭐ NEW
+2. **`test_moe.py`** (323 lines)
    - MoE-specific tests
    - Router, expert, and load balancing tests
 
-9. **`examples_pretrain.py`** (383 lines)
+3. **`examples_pretrain.py`** (383 lines)
    - 9 interactive examples
    - Different parallelism configurations
 
-### Documentation (6 files)
-10. **`README_PRETRAIN.md`** (580 lines)
-    - Complete documentation
+4. **`examples_atari_vlm.py`** (450 lines)
+   - Atari VLM examples and demos
+
+### 6. Documentation
+1. **`README_PRETRAIN.md`** (580 lines)
+    - Complete pretraining documentation
     - Usage guide, tips, troubleshooting
 
-11. **`README_MOE.md`** (495 lines) ⭐ NEW
+2. **`README_MOE.md`** (495 lines)
     - Complete MoE documentation
     - Expert parallel guide
     - Load balancing tips
 
-12. **`QUICKREF_PRETRAIN.md`** (192 lines)
+3. **`README_ATARI_VLM.md`** (600 lines)
+    - Atari VLM complete guide
+    - 8 VLM comparisons
+    - Performance benchmarks
+
+4. **`QUICKREF_PRETRAIN.md`** (192 lines)
     - Quick reference guide
     - Common commands and issues
 
-13. **`ARCHITECTURE_VISUAL.md`** (295 lines)
+5. **`ARCHITECTURE_VISUAL.md`** (295 lines)
     - Visual architecture diagrams
     - Parallelism illustrations
 
-14. **`IMPLEMENTATION_SUMMARY.py`** (258 lines)
+6. **`IMPLEMENTATION_SUMMARY.py`** (258 lines)
     - Implementation overview
     - Feature checklist
 
-15. **`MOE_SUMMARY.md`** (203 lines) ⭐ NEW
+7. **`MOE_SUMMARY.md`** (203 lines)
     - MoE implementation summary
     - Quick start guide
 
-**Total: 15 new files, ~5,500 lines of code and documentation**
+8. **`PLT_PSEUDOCODE.md`** (900 lines)
+    - Parallel Loop Transformer pseudocode
+    - Paper arXiv:2510.24824
+
+**Total: 20+ files, ~8,000 lines of code and documentation**
 
 ---
 
 ## 🎯 Quick Start
 
-### For the Impatient
+### Language Model Pretraining
 ```bash
 # Run tests
 python test_minimal_pretrain.py
-python test_moe.py  # NEW: Test MoE
+python test_moe.py  # Test MoE
 
 # Train on single GPU
 python minimal_pretrain.py --max-steps 100
 
-# Train MoE model  # NEW
+# Train MoE model
 python minimal_pretrain.py --num-experts 8 --max-steps 100
 
 # Train on 4 GPUs (data parallel)
 torchrun --nproc_per_node=4 minimal_pretrain.py
 ```
 
+### Atari VLM Environment ⭐ NEW
+```bash
+# Install dependencies
+pip install -r requirements_atari_vlm.txt
+
+# Show VLM recommendations
+python train_atari_vlm.py --show-recommendations
+
+# Run examples
+python examples_atari_vlm.py
+
+# Train with open-source Qwen-VL (free, local)
+python train_atari_vlm.py --game Pong-v5 --vlm qwen-vl --use-icl
+
+# Train with GPT-4V (best performance, requires API key)
+python train_atari_vlm.py --game Breakout-v5 --vlm gpt-4o --api-key YOUR_KEY
+
+# Evaluate agent
+python train_atari_vlm.py --game Pong-v5 --vlm qwen-vl --eval-only
+```
+
 ### For the Curious
 ```bash
 # See examples
 python examples_pretrain.py
+python examples_atari_vlm.py
 
 # Read quick reference
 cat QUICKREF_PRETRAIN.md
 
 # Read full docs
 cat README_PRETRAIN.md
+cat README_ATARI_VLM.md
 ```
 
 ---
@@ -123,6 +197,22 @@ cat README_PRETRAIN.md
    - Quick start guide
    - Simple examples
    - When to use each strategy
+
+### Want to Use VLMs for Games? ⭐ NEW
+1. Start with: **README_ATARI_VLM.md**
+   - Overview of 8 recommended VLMs
+   - Performance comparison
+   - Setup instructions
+
+2. Run: **examples_atari_vlm.py**
+   - 9 interactive examples
+   - Environment basics
+   - Prompt engineering
+
+3. Try: **train_atari_vlm.py**
+   - Train with different VLMs
+   - In-context learning
+   - Performance tracking
 
 ### Ready to Implement?
 3. Review: **QUICKREF_PRETRAIN.md**
