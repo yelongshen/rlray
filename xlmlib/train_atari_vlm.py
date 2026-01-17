@@ -481,4 +481,4 @@ if __name__ == "__main__":
     print("   python train_atari_vlm.py --game Pong-v5 --vlm qwen-vl --eval-only\n")
     
     # Uncomment to run main
-    # main()
+    main()
