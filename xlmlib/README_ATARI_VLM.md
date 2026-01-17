@@ -159,24 +159,61 @@ model = AutoModelForVision2Seq.from_pretrained(
 
 ### Installation
 
+**IMPORTANT: You must install Atari dependencies first!**
+
+#### Step 1: Install Core Dependencies
 ```bash
-# Basic installation
-pip install gymnasium[atari]
+# Option A: Quick install with ROM license acceptance (RECOMMENDED)
+pip install 'gymnasium[atari,accept-rom-license]'
 pip install opencv-python pillow numpy tqdm
 
-# For open-source VLMs
+# Option B: Step-by-step install
+pip install gymnasium ale-py opencv-python pillow numpy tqdm
+pip install autorom
+AutoROM --accept-license
+```
+
+#### Step 2: Verify Atari Installation
+```bash
+# Run the installation checker
+python check_atari_install.py
+
+# Should show:
+# ✓ Gymnasium installed
+# ✓ ALE installed
+# ✓ Atari ROMs installed and working
+```
+
+#### Step 3: Install VLM Dependencies
+```bash
+# For open-source VLMs (like Qwen-VL)
 pip install transformers torch accelerate
 
-# For commercial APIs
+# For commercial APIs (optional)
 pip install openai anthropic google-generativeai
 ```
 
-### Install Atari ROMs
+#### Troubleshooting Installation
+
+If you see: `gymnasium.error.NamespaceNotFound: Namespace ALE not found`
+
+**Solution:**
 ```bash
-pip install gymnasium[accept-rom-license]
-# Or manually:
-# pip install autorom
-# AutoROM --accept-license
+# Install ALE and ROMs
+pip install ale-py
+pip install 'gymnasium[accept-rom-license]'
+
+# Verify with Python
+python -c "import ale_py; import gymnasium as gym; gym.register_envs(ale_py); print('Success!')"
+```
+
+If you see: `ROM file not found`
+
+**Solution:**
+```bash
+# Accept ROM license and download
+pip install autorom
+AutoROM --accept-license
 ```
 
 ### Basic Usage

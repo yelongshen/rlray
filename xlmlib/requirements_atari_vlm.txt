@@ -1,10 +1,34 @@
 # Requirements for Atari VLM Environment
 
-# Core dependencies
-gymnasium[atari]>=0.29.0
-numpy>=1.24.0
+# ============================================================================
+# CRITICAL: Install Atari dependencies FIRST!
+# ============================================================================
+# Run ONE of these commands before installing other dependencies:
+#
+# Option 1 (RECOMMENDED - Quick install):
+#   pip install 'gymnasium[atari,accept-rom-license]'
+#
+# Option 2 (Step-by-step):
+#   pip install gymnasium ale-py
+#   pip install autorom
+#   AutoROM --accept-license
+#
+# Option 3 (Use installation scripts):
+#   bash install_atari_vlm.sh          (Linux/Mac)
+#   powershell install_atari_vlm.ps1   (Windows)
+#
+# Verify installation:
+#   python check_atari_install.py
+# ============================================================================
+
+# Core Atari dependencies
+gymnasium>=0.29.0
+ale-py>=0.8.0
+
+# Vision and processing
 opencv-python>=4.8.0
 pillow>=10.0.0
+numpy>=1.24.0
 tqdm>=4.66.0
 
 # Deep Learning (for open-source VLMs)

@@ -37,26 +37,56 @@ A complete framework for using **Vision-Language Models (VLMs)** to play Atari g
 7. Video-LLaVA - Video specialist
 8. Idefics2 - Lightweight
 
-## 🚀 Quick Start (3 Steps)
+## 🚀 Quick Start (4 Steps)
 
-### Step 1: Install
+### Step 1: Install Atari Dependencies (REQUIRED)
 ```bash
-pip install gymnasium[atari] opencv-python pillow numpy torch transformers
-pip install gymnasium[accept-rom-license]  # Accept Atari ROM license
+# Quick install with ROM license acceptance (RECOMMENDED)
+pip install 'gymnasium[atari,accept-rom-license]'
+
+# OR step-by-step
+pip install gymnasium ale-py
+pip install autorom
+AutoROM --accept-license
 ```
 
-### Step 2: Run Examples
+### Step 2: Verify Installation
 ```bash
+python check_atari_install.py  # Should show all checks passed
+```
+
+### Step 3: Install Other Dependencies
+```bash
+pip install opencv-python pillow numpy torch transformers
+```
+
+### Step 4: Run Examples or Train
+```bash
+# Run examples
 python examples_atari_vlm.py
-```
 
-### Step 3: Train an Agent
-```bash
-# With free open-source Qwen-VL (no API key)
+# Train with free open-source Qwen-VL (no API key)
 python train_atari_vlm.py --game Pong-v5 --vlm qwen-vl --use-icl
 
-# With GPT-4V (requires API key)
+# Train with GPT-4V (requires API key)
 python train_atari_vlm.py --game Pong-v5 --vlm gpt-4o --api-key YOUR_KEY
+```
+
+## ⚠️ Common Installation Issues
+
+### Error: "Namespace ALE not found"
+**Solution:**
+```bash
+pip install ale-py
+pip install 'gymnasium[accept-rom-license]'
+python -c "import ale_py; import gymnasium as gym; gym.register_envs(ale_py)"
+```
+
+### Error: "ROM file not found"
+**Solution:**
+```bash
+pip install autorom
+AutoROM --accept-license
 ```
 
 ## 📊 Expected Performance

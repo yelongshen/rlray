@@ -30,12 +30,74 @@ def normalize_game_name(game_name: str) -> str:
     """Convert game name to proper Gymnasium format.
     
     Handles both old format (Pong-v5) and new format (ALE/Pong-v5).
+    Tries multiple formats to ensure compatibility across Gymnasium versions.
     """
     if game_name.startswith("ALE/"):
         return game_name
     
     # Add ALE/ prefix if not present
     return f"ALE/{game_name}"
+
+
+def check_atari_installation():
+    """Check if Atari environments are properly installed."""
+    try:
+        import ale_py
+        gym.register_envs(ale_py)
+        return True
+    except ImportError:
+        return False
+
+
+def try_create_env(game_name: str, render_mode: str):
+    """Try to create Atari environment with fallback strategies."""
+    errors = []
+    
+    # Strategy 1: Try with ALE/ prefix
+    try:
+        normalized = normalize_game_name(game_name)
+        env = gym.make(normalized, render_mode=render_mode)
+        return env
+    except Exception as e:
+        errors.append(f"ALE format ({normalized}): {str(e)}")
+    
+    # Strategy 2: Try without ALE/ prefix (older Gymnasium versions)
+    try:
+        base_name = game_name.replace("ALE/", "")
+        env = gym.make(base_name, render_mode=render_mode)
+        return env
+    except Exception as e:
+        errors.append(f"Base format ({base_name}): {str(e)}")
+    
+    # Strategy 3: Try NoFrameskip version
+    try:
+        base_name = game_name.replace("ALE/", "").replace("-v5", "NoFrameskip-v4")
+        env = gym.make(base_name, render_mode=render_mode)
+        return env
+    except Exception as e:
+        errors.append(f"NoFrameskip format ({base_name}): {str(e)}")
+    
+    # All strategies failed - provide helpful error message
+    error_msg = "Failed to create Atari environment. Tried multiple formats:\n"
+    for err in errors:
+        error_msg += f"  - {err}\n"
+    
+    error_msg += "\n" + "="*70 + "\n"
+    error_msg += "SOLUTION: Install Atari dependencies:\n"
+    error_msg += "="*70 + "\n"
+    error_msg += "1. Install ALE (Arcade Learning Environment):\n"
+    error_msg += "   pip install gymnasium[atari]\n"
+    error_msg += "   pip install ale-py\n\n"
+    error_msg += "2. Accept ROM license and install ROMs:\n"
+    error_msg += "   pip install gymnasium[accept-rom-license]\n\n"
+    error_msg += "   OR manually:\n"
+    error_msg += "   pip install autorom\n"
+    error_msg += "   AutoROM --accept-license\n\n"
+    error_msg += "3. Verify installation:\n"
+    error_msg += "   python -c 'import ale_py; import gymnasium as gym; gym.register_envs(ale_py)'\n"
+    error_msg += "="*70 + "\n"
+    
+    raise RuntimeError(error_msg)
 
 
 class AtariVLMEnvironment:
@@ -76,11 +138,24 @@ class AtariVLMEnvironment:
         self.grayscale = grayscale
         self.max_episode_steps = max_episode_steps
         
-        # Normalize game name to ALE/ format
-        normalized_game_name = normalize_game_name(game_name)
+        # Check if ALE is installed
+        if not check_atari_installation():
+            print("\n" + "="*70)
+            print("WARNING: ALE (Arcade Learning Environment) not detected!")
+            print("="*70)
+            print("Attempting to register ALE environments...")
+            try:
+                import ale_py
+                gym.register_envs(ale_py)
+                print("✓ Successfully registered ALE environments")
+            except ImportError:
+                print("✗ ALE not installed. Please install with:")
+                print("  pip install gymnasium[atari] ale-py")
+                print("  pip install gymnasium[accept-rom-license]")
+            print("="*70 + "\n")
         
-        # Create Atari environment
-        self.env = gym.make(normalized_game_name, render_mode=render_mode)
+        # Create Atari environment with fallback strategies
+        self.env = try_create_env(game_name, render_mode)
         
         # Frame buffer for stacking
         self.frames = deque(maxlen=frame_stack)
