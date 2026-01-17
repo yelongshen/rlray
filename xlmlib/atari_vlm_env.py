@@ -26,6 +26,18 @@ import io
 import torch
 
 
+def normalize_game_name(game_name: str) -> str:
+    """Convert game name to proper Gymnasium format.
+    
+    Handles both old format (Pong-v5) and new format (ALE/Pong-v5).
+    """
+    if game_name.startswith("ALE/"):
+        return game_name
+    
+    # Add ALE/ prefix if not present
+    return f"ALE/{game_name}"
+
+
 class AtariVLMEnvironment:
     """
     Atari environment wrapper designed for VLM-based RL agents.
@@ -64,8 +76,11 @@ class AtariVLMEnvironment:
         self.grayscale = grayscale
         self.max_episode_steps = max_episode_steps
         
+        # Normalize game name to ALE/ format
+        normalized_game_name = normalize_game_name(game_name)
+        
         # Create Atari environment
-        self.env = gym.make(game_name, render_mode=render_mode)
+        self.env = gym.make(normalized_game_name, render_mode=render_mode)
         
         # Frame buffer for stacking
         self.frames = deque(maxlen=frame_stack)

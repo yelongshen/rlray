@@ -361,12 +361,8 @@ def main():
         '--game',
         type=str,
         default='Pong-v5',
-        choices=[
-            'Pong-v5', 'Breakout-v5', 'SpaceInvaders-v5',
-            'MsPacman-v5', 'Seaquest-v5', 'Qbert-v5',
-            'Asteroids-v5', 'BeamRider-v5', 'Enduro-v5'
-        ],
-        help='Atari game to play'
+        help='Atari game to play (e.g., "Pong-v5", "Breakout-v5", "SpaceInvaders-v5"). '
+             'Can use with or without ALE/ prefix.'
     )
     
     # VLM args
@@ -460,25 +456,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # Example usage
-    print("\n" + "="*70)
-    print("ATARI VLM TRAINING EXAMPLES")
-    print("="*70 + "\n")
-    
-    print("1. Train with open-source Qwen-VL (local, free):")
-    print("   python train_atari_vlm.py --game Pong-v5 --vlm qwen-vl --use-icl\n")
-    
-    print("2. Train with GPT-4V (requires API key):")
-    print("   python train_atari_vlm.py --game Breakout-v5 --vlm gpt-4o --api-key YOUR_KEY\n")
-    
-    print("3. Train with Claude (requires API key):")
-    print("   python train_atari_vlm.py --game SpaceInvaders-v5 --vlm claude --api-key YOUR_KEY\n")
-    
-    print("4. Show VLM recommendations:")
-    print("   python train_atari_vlm.py --show-recommendations\n")
-    
-    print("5. Evaluate trained agent:")
-    print("   python train_atari_vlm.py --game Pong-v5 --vlm qwen-vl --eval-only\n")
-    
-    # Uncomment to run main
     main()
