@@ -96,19 +96,36 @@ def download_pg19(
         print(f"  Approx tokens: {SPLIT_INFO[current_split]['approx_tokens']}")
         print(f"{'='*60}\n")
         
-        if streaming:
-            dataset = load_dataset(
-                PG19_REPO,
-                split=current_split,
-                streaming=True,
-                trust_remote_code=True,
-            )
-        else:
-            dataset = load_dataset(
-                PG19_REPO,
-                split=current_split,
-                trust_remote_code=True,
-            )
+        try:
+            if streaming:
+                dataset = load_dataset(
+                    PG19_REPO,
+                    split=current_split,
+                    streaming=True,
+                )
+            else:
+                dataset = load_dataset(
+                    PG19_REPO,
+                    split=current_split,
+                )
+        except RuntimeError as e:
+            if "Dataset scripts are no longer supported" in str(e):
+                print(f"Warning: {PG19_REPO} uses legacy script format.")
+                print("Trying alternative: emozilla/pg19 (Parquet format)...")
+                alt_repo = "emozilla/pg19"
+                if streaming:
+                    dataset = load_dataset(
+                        alt_repo,
+                        split=current_split,
+                        streaming=True,
+                    )
+                else:
+                    dataset = load_dataset(
+                        alt_repo,
+                        split=current_split,
+                    )
+            else:
+                raise
         
         split_dir = os.path.join(output_dir, current_split)
         Path(split_dir).mkdir(parents=True, exist_ok=True)

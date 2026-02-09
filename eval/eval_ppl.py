@@ -76,7 +76,15 @@ class PG19Dataset(Dataset):
         
         # Load PG19 from HuggingFace
         # PG19 contains ~28K books for training, ~50 for validation, ~100 for test
-        dataset = load_dataset("deepmind/pg19", split=split, trust_remote_code=True)
+        try:
+            dataset = load_dataset("deepmind/pg19", split=split)
+        except RuntimeError as e:
+            if "Dataset scripts are no longer supported" in str(e):
+                print("Warning: deepmind/pg19 uses legacy script format.")
+                print("Using alternative: emozilla/pg19 (Parquet format)...")
+                dataset = load_dataset("emozilla/pg19", split=split)
+            else:
+                raise
         
         total_tokens = 0
         
