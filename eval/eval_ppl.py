@@ -339,10 +339,23 @@ def load_model_and_tokenizer(
     model_path: str,
     device: torch.device,
     dtype: torch.dtype = torch.float16,
+    num_gpus: Optional[int] = None,
+    gpu_ids: Optional[List[int]] = None,
 ) -> Tuple:
-    """Load the qwen-next model and tokenizer."""
+    """Load the qwen-next model and tokenizer.
+    
+    Args:
+        model_path: Path to the model
+        device: Default device
+        dtype: Model dtype (default: float16)
+        num_gpus: Number of GPUs to use (None for auto)
+        gpu_ids: Specific GPU IDs to use (e.g., [0, 1, 2, 3])
+    """
+    from transformers import AutoConfig
+    
     print(f"Loading model from {model_path}...")
 
+    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         model_path,
         trust_remote_code=True,
@@ -352,15 +365,70 @@ def load_model_and_tokenizer(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        trust_remote_code=True,
-        torch_dtype=dtype,
-        device_map="auto" if torch.cuda.device_count() > 1 else None,
-    )
+    # Load config first with trust_remote_code to register custom model type
+    try:
+        config = AutoConfig.from_pretrained(
+            model_path,
+            trust_remote_code=True,
+        )
+        print(f"Model type: {config.model_type}")
+    except Exception as e:
+        print(f"Warning: Could not load config: {e}")
+        print("Attempting to load model directly...")
+        config = None
 
-    if torch.cuda.device_count() <= 1:
+    # Determine device_map for multi-GPU
+    available_gpus = torch.cuda.device_count()
+    print(f"Available GPUs: {available_gpus}")
+    
+    if gpu_ids is not None:
+        # Use specific GPU IDs
+        max_memory = {i: "80GiB" for i in gpu_ids}
+        max_memory["cpu"] = "100GiB"
+        device_map = "auto"
+        print(f"Using specific GPUs: {gpu_ids}")
+    elif num_gpus is not None and num_gpus > 1:
+        # Use first N GPUs
+        max_memory = {i: "80GiB" for i in range(min(num_gpus, available_gpus))}
+        max_memory["cpu"] = "100GiB"
+        device_map = "auto"
+        print(f"Using {min(num_gpus, available_gpus)} GPUs")
+    elif available_gpus > 1:
+        # Auto-use all available GPUs
+        max_memory = {i: "80GiB" for i in range(available_gpus)}
+        max_memory["cpu"] = "100GiB"
+        device_map = "auto"
+        print(f"Auto-using all {available_gpus} GPUs")
+    else:
+        max_memory = None
+        device_map = None
+
+    # Load model
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            trust_remote_code=True,
+            torch_dtype=dtype,
+            device_map=device_map,
+            max_memory=max_memory,
+            config=config,
+            low_cpu_mem_usage=True,
+        )
+    except ValueError as e:
+        if "does not recognize this architecture" in str(e):
+            print("\nError: Model architecture not recognized.")
+            print("Try upgrading transformers:")
+            print("  pip install --upgrade transformers")
+            print("Or install from source:")
+            print("  pip install git+https://github.com/huggingface/transformers.git")
+            raise
+        raise
+
+    if device_map is None and not hasattr(model, 'hf_device_map'):
         model = model.to(device)
+    
+    if hasattr(model, 'hf_device_map'):
+        print(f"Model distributed across devices: {set(model.hf_device_map.values())}")
 
     model.eval()
     print(f"Model loaded successfully. Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -377,6 +445,8 @@ def run_evaluation(
     stride: int = 512,
     split: str = "test",
     output_file: Optional[str] = None,
+    num_gpus: Optional[int] = None,
+    gpu_ids: Optional[List[int]] = None,
 ) -> Dict[str, Dict]:
     """
     Run perplexity evaluation across different token scales.
@@ -390,6 +460,8 @@ def run_evaluation(
         stride: Stride for sliding window (for PG19)
         split: Dataset split for PG19 ("train", "validation", "test")
         output_file: Optional path to save results
+        num_gpus: Number of GPUs to use
+        gpu_ids: Specific GPU IDs to use
 
     Returns:
         Dictionary with evaluation results for each scale
@@ -403,7 +475,9 @@ def run_evaluation(
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
 
     # Load model and tokenizer
-    model, tokenizer = load_model_and_tokenizer(model_path, device)
+    model, tokenizer = load_model_and_tokenizer(
+        model_path, device, num_gpus=num_gpus, gpu_ids=gpu_ids
+    )
 
     # Determine data source
     use_pg19 = data_path is None or data_path.lower() == "pg19"
@@ -559,8 +633,25 @@ def main():
         default=None,
         help="Output file to save results (JSON format)",
     )
+    parser.add_argument(
+        "--num_gpus",
+        type=int,
+        default=None,
+        help="Number of GPUs to use for model loading (default: auto-detect)",
+    )
+    parser.add_argument(
+        "--gpu_ids",
+        type=str,
+        default=None,
+        help="Comma-separated list of GPU IDs to use (e.g., '0,1,2,3')",
+    )
 
     args = parser.parse_args()
+
+    # Parse GPU IDs if provided
+    gpu_ids = None
+    if args.gpu_ids:
+        gpu_ids = [int(x.strip()) for x in args.gpu_ids.split(",")]
 
     # Determine token scales to evaluate
     if args.token_scale == "all":
@@ -578,6 +669,8 @@ def main():
         stride=args.stride,
         split=args.split,
         output_file=args.output,
+        num_gpus=args.num_gpus,
+        gpu_ids=gpu_ids,
     )
 
     return results
