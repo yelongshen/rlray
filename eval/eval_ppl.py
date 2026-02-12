@@ -341,6 +341,9 @@ def load_model_and_tokenizer(
     dtype: torch.dtype = torch.float16,
     num_gpus: Optional[int] = None,
     gpu_ids: Optional[List[int]] = None,
+    load_in_4bit: bool = False,
+    load_in_8bit: bool = False,
+    max_memory_per_gpu: Optional[str] = None,
 ) -> Tuple:
     """Load the qwen-next model and tokenizer.
     
@@ -350,6 +353,9 @@ def load_model_and_tokenizer(
         dtype: Model dtype (default: float16)
         num_gpus: Number of GPUs to use (None for auto)
         gpu_ids: Specific GPU IDs to use (e.g., [0, 1, 2, 3])
+        load_in_4bit: Load model with 4-bit quantization (requires bitsandbytes)
+        load_in_8bit: Load model with 8-bit quantization (requires bitsandbytes)
+        max_memory_per_gpu: Max memory per GPU for device_map='auto', e.g., "40GiB"
     """
     from transformers import AutoConfig
     
@@ -380,22 +386,28 @@ def load_model_and_tokenizer(
     # Determine device_map for multi-GPU
     available_gpus = torch.cuda.device_count()
     print(f"Available GPUs: {available_gpus}")
+
+    # Default per-GPU max memory if not provided (used when device_map='auto')
+    if max_memory_per_gpu is None:
+        # Use a conservative default to reduce OOM risk if the user
+        # did not specify an explicit limit.
+        max_memory_per_gpu = "70GiB"
     
     if gpu_ids is not None:
         # Use specific GPU IDs
-        max_memory = {i: "80GiB" for i in gpu_ids}
+        max_memory = {i: max_memory_per_gpu for i in gpu_ids}
         max_memory["cpu"] = "100GiB"
         device_map = "auto"
         print(f"Using specific GPUs: {gpu_ids}")
     elif num_gpus is not None and num_gpus > 1:
         # Use first N GPUs
-        max_memory = {i: "80GiB" for i in range(min(num_gpus, available_gpus))}
+        max_memory = {i: max_memory_per_gpu for i in range(min(num_gpus, available_gpus))}
         max_memory["cpu"] = "100GiB"
         device_map = "auto"
         print(f"Using {min(num_gpus, available_gpus)} GPUs")
     elif available_gpus > 1:
         # Auto-use all available GPUs
-        max_memory = {i: "80GiB" for i in range(available_gpus)}
+        max_memory = {i: max_memory_per_gpu for i in range(available_gpus)}
         max_memory["cpu"] = "100GiB"
         device_map = "auto"
         print(f"Auto-using all {available_gpus} GPUs")
@@ -403,16 +415,36 @@ def load_model_and_tokenizer(
         max_memory = None
         device_map = None
 
+    # Optional 4/8-bit quantization to reduce GPU memory usage
+    quantization_config = None
+    if load_in_4bit or load_in_8bit:
+        try:
+            from transformers import BitsAndBytesConfig
+        except ImportError as e:
+            raise ImportError(
+                "bitsandbytes and transformers with BitsAndBytesConfig are required "
+                "for --load_in_4bit/--load_in_8bit. Install with: pip install bitsandbytes transformers"
+            ) from e
+
+        if load_in_4bit and load_in_8bit:
+            raise ValueError("Only one of load_in_4bit or load_in_8bit can be True.")
+
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=load_in_4bit,
+            load_in_8bit=load_in_8bit,
+        )
+
     # Load model
     try:
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=True,
-            torch_dtype=dtype,
+            torch_dtype=None if quantization_config is not None else dtype,
             device_map=device_map,
             max_memory=max_memory,
             config=config,
             low_cpu_mem_usage=True,
+            quantization_config=quantization_config,
         )
     except ValueError as e:
         if "does not recognize this architecture" in str(e):
@@ -447,6 +479,9 @@ def run_evaluation(
     output_file: Optional[str] = None,
     num_gpus: Optional[int] = None,
     gpu_ids: Optional[List[int]] = None,
+    load_in_4bit: bool = False,
+    load_in_8bit: bool = False,
+    max_memory_per_gpu: Optional[str] = None,
 ) -> Dict[str, Dict]:
     """
     Run perplexity evaluation across different token scales.
@@ -462,6 +497,9 @@ def run_evaluation(
         output_file: Optional path to save results
         num_gpus: Number of GPUs to use
         gpu_ids: Specific GPU IDs to use
+        load_in_4bit: Load model with 4-bit quantization (requires bitsandbytes)
+        load_in_8bit: Load model with 8-bit quantization (requires bitsandbytes)
+        max_memory_per_gpu: Max memory per GPU for device_map='auto', e.g., "40GiB"
 
     Returns:
         Dictionary with evaluation results for each scale
@@ -476,7 +514,13 @@ def run_evaluation(
 
     # Load model and tokenizer
     model, tokenizer = load_model_and_tokenizer(
-        model_path, device, num_gpus=num_gpus, gpu_ids=gpu_ids
+        model_path,
+        device,
+        num_gpus=num_gpus,
+        gpu_ids=gpu_ids,
+        load_in_4bit=load_in_4bit,
+        load_in_8bit=load_in_8bit,
+        max_memory_per_gpu=max_memory_per_gpu,
     )
 
     # Determine data source
@@ -645,6 +689,22 @@ def main():
         default=None,
         help="Comma-separated list of GPU IDs to use (e.g., '0,1,2,3')",
     )
+    parser.add_argument(
+        "--load_in_4bit",
+        action="store_true",
+        help="Load model with 4-bit quantization using bitsandbytes (reduces GPU memory usage)",
+    )
+    parser.add_argument(
+        "--load_in_8bit",
+        action="store_true",
+        help="Load model with 8-bit quantization using bitsandbytes (reduces GPU memory usage)",
+    )
+    parser.add_argument(
+        "--max_memory_per_gpu",
+        type=str,
+        default=None,
+        help="Max memory per GPU for device_map='auto', e.g., '40GiB' (default: 70GiB)",
+    )
 
     args = parser.parse_args()
 
@@ -652,6 +712,10 @@ def main():
     gpu_ids = None
     if args.gpu_ids:
         gpu_ids = [int(x.strip()) for x in args.gpu_ids.split(",")]
+
+    # Validate quantization options
+    if args.load_in_4bit and args.load_in_8bit:
+        raise ValueError("Only one of --load_in_4bit or --load_in_8bit can be specified.")
 
     # Determine token scales to evaluate
     if args.token_scale == "all":
@@ -671,6 +735,9 @@ def main():
         output_file=args.output,
         num_gpus=args.num_gpus,
         gpu_ids=gpu_ids,
+        load_in_4bit=args.load_in_4bit,
+        load_in_8bit=args.load_in_8bit,
+        max_memory_per_gpu=args.max_memory_per_gpu,
     )
 
     return results
