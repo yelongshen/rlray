@@ -429,9 +429,15 @@ def load_model_and_tokenizer(
         if load_in_4bit and load_in_8bit:
             raise ValueError("Only one of load_in_4bit or load_in_8bit can be True.")
 
+        # For 8-bit, allow fp32 CPU offload so that modules which
+        # cannot fit in GPU memory can still be placed on CPU without
+        # triggering a validation error inside the HF quantizer.
+        llm_int8_enable_fp32_cpu_offload = bool(load_in_8bit)
+
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=load_in_4bit,
             load_in_8bit=load_in_8bit,
+            llm_int8_enable_fp32_cpu_offload=llm_int8_enable_fp32_cpu_offload,
         )
 
     # Load model
