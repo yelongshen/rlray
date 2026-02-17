@@ -15,7 +15,7 @@ Usage:
     python eval_ppl.py --model_path <path_to_model> --token_scale all
     python eval_ppl.py --model_path <path_to_model> --data_path <local_data> --token_scale all
 """
-
+#   "max_position_embeddings": 262144,
 import argparse
 import json
 import math
@@ -534,6 +534,7 @@ def compute_perplexity_streaming_from_dataset(
     model.eval()
     total_loss = 0.0
     total_tokens = 0
+    first_cache_printed = False
     
     with torch.no_grad():
         for idx in tqdm(range(len(dataset)), desc="Processing documents"):
@@ -553,6 +554,8 @@ def compute_perplexity_streaming_from_dataset(
                 continue
             
             past_key_values = None
+            doc_tokens = 0
+            doc_loss = 0.0
             
             for begin_loc in range(0, seq_len, chunk_size):
                 end_loc = min(begin_loc + chunk_size, seq_len)
@@ -609,6 +612,89 @@ def compute_perplexity_streaming_from_dataset(
                 past_key_values = outputs.past_key_values
                 logits = outputs.logits
                 
+                # Print KV cache structure on first inference
+                if not first_cache_printed and past_key_values is not None:
+                    first_cache_printed = True
+                    print("\n" + "="*70)
+                    print("CACHE STRUCTURE (first inference) - Hybrid GDN Architecture")
+                    print("="*70)
+                    print(f"Cache type: {type(past_key_values).__name__}")
+                    print(f"Cache class: {type(past_key_values)}")
+                    
+                    # List all attributes of the cache object
+                    cache_attrs = [attr for attr in dir(past_key_values) if not attr.startswith('_')]
+                    print(f"\nAvailable attributes: {cache_attrs}")
+                    
+                    # Check for standard KV cache attributes
+                    if hasattr(past_key_values, 'key_cache'):
+                        print(f"\n[KV Cache]")
+                        print(f"  Number of layers with KV: {len(past_key_values.key_cache)}")
+                        if len(past_key_values.key_cache) > 0:
+                            k0 = past_key_values.key_cache[0]
+                            v0 = past_key_values.value_cache[0]
+                            print(f"  Key shape per layer: {k0.shape}  (batch, num_heads, seq_len, head_dim)")
+                            print(f"  Value shape per layer: {v0.shape}")
+                            print(f"  Key dtype: {k0.dtype}, device: {k0.device}")
+                            seq_len_cached = past_key_values.get_seq_length() if hasattr(past_key_values, 'get_seq_length') else k0.size(2)
+                            print(f"  Cached sequence length: {seq_len_cached}")
+                            mem_per_layer = (k0.numel() + v0.numel()) * k0.element_size()
+                            kv_mem = mem_per_layer * len(past_key_values.key_cache)
+                            print(f"  KV cache memory: {kv_mem / 1e9:.2f} GB")
+                    
+                    # Check for SSM/GDN state attributes (common names in hybrid models)
+                    ssm_attrs = ['ssm_state', 'ssm_states', 'conv_state', 'conv_states', 
+                                 'gdn_state', 'gdn_states', 'recurrent_state', 'state',
+                                 'mamba_state', 'delta_state', 'hidden_state', 'hidden_states']
+                    
+                    found_ssm = False
+                    for attr in ssm_attrs:
+                        if hasattr(past_key_values, attr):
+                            state = getattr(past_key_values, attr)
+                            if state is not None:
+                                found_ssm = True
+                                print(f"\n[SSM/GDN State: {attr}]")
+                                if isinstance(state, torch.Tensor):
+                                    print(f"  Shape: {state.shape}")
+                                    print(f"  Dtype: {state.dtype}, device: {state.device}")
+                                    print(f"  Memory: {state.numel() * state.element_size() / 1e9:.4f} GB")
+                                elif isinstance(state, (list, tuple)):
+                                    print(f"  Type: {type(state).__name__}, Length: {len(state)}")
+                                    if len(state) > 0:
+                                        s0 = state[0]
+                                        if isinstance(s0, torch.Tensor):
+                                            print(f"  First element shape: {s0.shape}")
+                                            print(f"  First element dtype: {s0.dtype}, device: {s0.device}")
+                                            total_mem = sum(s.numel() * s.element_size() for s in state if isinstance(s, torch.Tensor))
+                                            print(f"  Total SSM state memory: {total_mem / 1e9:.4f} GB")
+                                        elif isinstance(s0, (list, tuple)) and len(s0) > 0:
+                                            # Nested structure (e.g., per-layer states)
+                                            print(f"  Nested structure with {len(s0)} elements per layer")
+                                            if isinstance(s0[0], torch.Tensor):
+                                                print(f"  Inner tensor shape: {s0[0].shape}")
+                                else:
+                                    print(f"  Type: {type(state)}")
+                    
+                    # Check for any other tensor attributes we might have missed
+                    print(f"\n[All Tensor Attributes]")
+                    total_cache_mem = 0
+                    for attr in cache_attrs:
+                        try:
+                            val = getattr(past_key_values, attr)
+                            if isinstance(val, torch.Tensor):
+                                mem = val.numel() * val.element_size()
+                                total_cache_mem += mem
+                                print(f"  {attr}: shape={val.shape}, dtype={val.dtype}, mem={mem/1e6:.1f}MB")
+                            elif isinstance(val, (list, tuple)) and len(val) > 0:
+                                if isinstance(val[0], torch.Tensor):
+                                    mem = sum(v.numel() * v.element_size() for v in val if isinstance(v, torch.Tensor))
+                                    total_cache_mem += mem
+                                    print(f"  {attr}: list[{len(val)}], first_shape={val[0].shape}, total_mem={mem/1e6:.1f}MB")
+                        except:
+                            pass
+                    
+                    print(f"\n[Total Cache Memory: {total_cache_mem / 1e9:.2f} GB]")
+                    print("="*70 + "\n")
+                
                 if begin_loc == 0:
                     shift_logits = logits[..., :-1, :].contiguous()
                     shift_labels = chunk_input_ids[..., 1:].contiguous()
@@ -621,11 +707,41 @@ def compute_perplexity_streaming_from_dataset(
                 shift_labels = shift_labels.view(-1)
                 
                 loss = F.cross_entropy(shift_logits, shift_labels, reduction="none")
-                total_loss += loss.sum().item()
-                total_tokens += shift_labels.size(0)
+                chunk_loss = loss.sum().item()
+                chunk_tokens = shift_labels.size(0)
+                
+                total_loss += chunk_loss
+                total_tokens += chunk_tokens
+                doc_loss += chunk_loss
+                doc_tokens += chunk_tokens
+                
+                # Print PPL progress every chunk
+                if total_tokens > 0:
+                    current_ppl = math.exp(total_loss / total_tokens)
+                    chunk_ppl = math.exp(chunk_loss / chunk_tokens) if chunk_tokens > 0 else float('inf')
+                    
+                    # Get cache length for display
+                    cache_len = 0
+                    if past_key_values is not None:
+                        if hasattr(past_key_values, 'get_seq_length'):
+                            cache_len = past_key_values.get_seq_length()
+                        elif isinstance(past_key_values, tuple) and len(past_key_values) > 0:
+                            cache_len = past_key_values[0][0].size(2)
+                    
+                    print(f"  [Doc {idx+1}] pos={end_loc:,}/{seq_len:,} | "
+                          f"chunk_ppl={chunk_ppl:.2f} | "
+                          f"doc_ppl={math.exp(doc_loss/doc_tokens):.2f} | "
+                          f"total_ppl={current_ppl:.4f} | "
+                          f"tokens={total_tokens:,} | "
+                          f"cache_len={cache_len:,}")
                 
                 if max_tokens and total_tokens >= max_tokens:
                     break
+            
+            # Print document summary
+            if doc_tokens > 0:
+                doc_ppl = math.exp(doc_loss / doc_tokens)
+                print(f"  >> Doc {idx+1} complete: {doc_tokens:,} tokens, PPL={doc_ppl:.4f}")
             
             # Clear cache between documents
             past_key_values = None
@@ -790,7 +906,7 @@ def run_evaluation(
     load_in_8bit: bool = False,
     max_memory_per_gpu: Optional[str] = None,
     streaming: bool = False,
-    chunk_size: int = 2048,
+    chunk_size: Optional[int] = None,
     max_cache_length: Optional[int] = None,
 ) -> Dict[str, Dict]:
     """
@@ -811,7 +927,7 @@ def run_evaluation(
         load_in_8bit: Load model with 8-bit quantization (requires bitsandbytes)
         max_memory_per_gpu: Max memory per GPU for device_map='auto', e.g., "40GiB"
         streaming: Use streaming PPL with KV cache to leverage previous context
-        chunk_size: Number of new tokens to process per iteration in streaming mode
+        chunk_size: Number of new tokens per iteration (None = auto-detect from model config)
         max_cache_length: Maximum KV cache length for streaming mode (memory management)
 
     Returns:
@@ -835,6 +951,16 @@ def run_evaluation(
         load_in_8bit=load_in_8bit,
         max_memory_per_gpu=max_memory_per_gpu,
     )
+
+    # Auto-detect chunk_size from model config if not specified
+    if chunk_size is None:
+        if hasattr(model.config, 'max_position_embeddings'):
+            # Use model's native attention window, capped at 32K for memory efficiency
+            chunk_size = min(model.config.max_position_embeddings, 32768)
+            print(f"Auto-detected chunk_size={chunk_size} from model's max_position_embeddings={model.config.max_position_embeddings}")
+        else:
+            chunk_size = 2048
+            print(f"Using default chunk_size={chunk_size} (model config not available)")
 
     # Determine data source
     use_pg19 = data_path is None or data_path.lower() == "pg19"
@@ -1041,8 +1167,9 @@ def main():
     parser.add_argument(
         "--chunk_size",
         type=int,
-        default=2048,
-        help="Number of new tokens to process per iteration in streaming mode (default: 2048)",
+        default=None,
+        help="Number of new tokens to process per iteration in streaming mode. "
+             "Default: auto-detect from model's max_position_embeddings (e.g., 32K for Qwen3-Next)",
     )
     parser.add_argument(
         "--max_cache_length",
