@@ -628,23 +628,40 @@ def compute_perplexity_streaming_from_dataset(
                     # Check for standard KV cache attributes
                     if hasattr(past_key_values, 'key_cache'):
                         print(f"\n[KV Cache]")
-                        print(f"  Number of layers with KV: {len(past_key_values.key_cache)}")
-                        if len(past_key_values.key_cache) > 0:
-                            k0 = past_key_values.key_cache[0]
-                            v0 = past_key_values.value_cache[0]
+                        print(f"  Number of layers in key_cache: {len(past_key_values.key_cache)}")
+                        
+                        # Find first non-None entry (hybrid models may have None for SSM layers)
+                        k0, v0 = None, None
+                        kv_layer_count = 0
+                        for i, k in enumerate(past_key_values.key_cache):
+                            if k is not None:
+                                if k0 is None:
+                                    k0 = k
+                                    v0 = past_key_values.value_cache[i]
+                                kv_layer_count += 1
+                        
+                        print(f"  Layers with actual KV data: {kv_layer_count} (others are SSM/GDN layers)")
+                        
+                        if k0 is not None:
                             print(f"  Key shape per layer: {k0.shape}  (batch, num_heads, seq_len, head_dim)")
                             print(f"  Value shape per layer: {v0.shape}")
                             print(f"  Key dtype: {k0.dtype}, device: {k0.device}")
                             seq_len_cached = past_key_values.get_seq_length() if hasattr(past_key_values, 'get_seq_length') else k0.size(2)
                             print(f"  Cached sequence length: {seq_len_cached}")
                             mem_per_layer = (k0.numel() + v0.numel()) * k0.element_size()
-                            kv_mem = mem_per_layer * len(past_key_values.key_cache)
-                            print(f"  KV cache memory: {kv_mem / 1e9:.2f} GB")
+                            kv_mem = mem_per_layer * kv_layer_count
+                            print(f"  KV cache memory (attention layers only): {kv_mem / 1e9:.2f} GB")
+                        
+                        # Show layer type pattern if available
+                        if hasattr(past_key_values, 'layer_types'):
+                            print(f"  Layer types: {past_key_values.layer_types}")
+                        if hasattr(past_key_values, 'transformer_layers'):
+                            print(f"  Transformer (attention) layer indices: {past_key_values.transformer_layers}")
                     
                     # Check for SSM/GDN state attributes (common names in hybrid models)
                     ssm_attrs = ['ssm_state', 'ssm_states', 'conv_state', 'conv_states', 
-                                 'gdn_state', 'gdn_states', 'recurrent_state', 'state',
-                                 'mamba_state', 'delta_state', 'hidden_state', 'hidden_states']
+                                 'gdn_state', 'gdn_states', 'recurrent_state', 'recurrent_states',
+                                 'state', 'mamba_state', 'delta_state', 'hidden_state', 'hidden_states']
                     
                     found_ssm = False
                     for attr in ssm_attrs:
@@ -658,19 +675,29 @@ def compute_perplexity_streaming_from_dataset(
                                     print(f"  Dtype: {state.dtype}, device: {state.device}")
                                     print(f"  Memory: {state.numel() * state.element_size() / 1e9:.4f} GB")
                                 elif isinstance(state, (list, tuple)):
-                                    print(f"  Type: {type(state).__name__}, Length: {len(state)}")
-                                    if len(state) > 0:
-                                        s0 = state[0]
+                                    # Count non-None entries
+                                    non_none_count = sum(1 for s in state if s is not None)
+                                    print(f"  Type: {type(state).__name__}, Length: {len(state)}, Non-None: {non_none_count}")
+                                    
+                                    # Find first non-None element
+                                    s0 = None
+                                    for s in state:
+                                        if s is not None:
+                                            s0 = s
+                                            break
+                                    
+                                    if s0 is not None:
                                         if isinstance(s0, torch.Tensor):
-                                            print(f"  First element shape: {s0.shape}")
-                                            print(f"  First element dtype: {s0.dtype}, device: {s0.device}")
-                                            total_mem = sum(s.numel() * s.element_size() for s in state if isinstance(s, torch.Tensor))
+                                            print(f"  First non-None element shape: {s0.shape}")
+                                            print(f"  First non-None element dtype: {s0.dtype}, device: {s0.device}")
+                                            total_mem = sum(s.numel() * s.element_size() for s in state if s is not None and isinstance(s, torch.Tensor))
                                             print(f"  Total SSM state memory: {total_mem / 1e9:.4f} GB")
                                         elif isinstance(s0, (list, tuple)) and len(s0) > 0:
                                             # Nested structure (e.g., per-layer states)
-                                            print(f"  Nested structure with {len(s0)} elements per layer")
-                                            if isinstance(s0[0], torch.Tensor):
-                                                print(f"  Inner tensor shape: {s0[0].shape}")
+                                            print(f"  Nested structure with {len(s0)} elements per entry")
+                                            inner = s0[0] if s0[0] is not None else (s0[1] if len(s0) > 1 else None)
+                                            if inner is not None and isinstance(inner, torch.Tensor):
+                                                print(f"  Inner tensor shape: {inner.shape}")
                                 else:
                                     print(f"  Type: {type(state)}")
                     
@@ -685,10 +712,17 @@ def compute_perplexity_streaming_from_dataset(
                                 total_cache_mem += mem
                                 print(f"  {attr}: shape={val.shape}, dtype={val.dtype}, mem={mem/1e6:.1f}MB")
                             elif isinstance(val, (list, tuple)) and len(val) > 0:
-                                if isinstance(val[0], torch.Tensor):
-                                    mem = sum(v.numel() * v.element_size() for v in val if isinstance(v, torch.Tensor))
+                                # Find first non-None tensor
+                                first_tensor = None
+                                for v in val:
+                                    if v is not None and isinstance(v, torch.Tensor):
+                                        first_tensor = v
+                                        break
+                                if first_tensor is not None:
+                                    mem = sum(v.numel() * v.element_size() for v in val if v is not None and isinstance(v, torch.Tensor))
                                     total_cache_mem += mem
-                                    print(f"  {attr}: list[{len(val)}], first_shape={val[0].shape}, total_mem={mem/1e6:.1f}MB")
+                                    non_none = sum(1 for v in val if v is not None)
+                                    print(f"  {attr}: list[{len(val)}], non_none={non_none}, first_shape={first_tensor.shape}, total_mem={mem/1e6:.1f}MB")
                         except:
                             pass
                     
