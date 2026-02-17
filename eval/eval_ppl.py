@@ -335,6 +335,278 @@ def compute_perplexity(
     return perplexity, total_tokens
 
 
+def compute_perplexity_streaming(
+    model,
+    tokenizer,
+    text: str,
+    device: torch.device,
+    chunk_size: int = 2048,
+    max_tokens: Optional[int] = None,
+    max_cache_length: Optional[int] = None,
+) -> Tuple[float, int]:
+    """
+    Compute perplexity using streaming with KV cache to leverage previous context.
+    
+    This method processes text sequentially while maintaining KV cache from previous
+    chunks, allowing the model to use full context history for predictions.
+
+    Args:
+        model: The language model
+        tokenizer: Tokenizer for the model
+        text: Full text to evaluate
+        device: Device to run evaluation on
+        chunk_size: Number of new tokens to process per iteration
+        max_tokens: Maximum total tokens to evaluate (optional)
+        max_cache_length: Maximum KV cache length to maintain (optional, for memory management)
+
+    Returns:
+        Tuple of (perplexity, total_tokens_evaluated)
+    """
+    model.eval()
+    
+    # Tokenize the full text
+    encodings = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=False,
+        add_special_tokens=True,
+    )
+    input_ids = encodings["input_ids"].to(device)
+    seq_len = input_ids.size(1)
+    
+    if max_tokens:
+        seq_len = min(seq_len, max_tokens)
+        input_ids = input_ids[:, :seq_len]
+    
+    print(f"Streaming PPL evaluation on {seq_len:,} tokens with chunk_size={chunk_size}")
+    
+    total_loss = 0.0
+    total_tokens = 0
+    past_key_values = None
+    prev_end_loc = 0
+    
+    with torch.no_grad():
+        pbar = tqdm(total=seq_len, desc="Streaming PPL")
+        
+        for begin_loc in range(0, seq_len, chunk_size):
+            end_loc = min(begin_loc + chunk_size, seq_len)
+            
+            # Get the current chunk
+            if past_key_values is None:
+                # First chunk: process from the beginning
+                chunk_input_ids = input_ids[:, :end_loc]
+                position_ids = None
+            else:
+                # Subsequent chunks: only process new tokens, use KV cache for context
+                chunk_input_ids = input_ids[:, begin_loc:end_loc]
+                # Position IDs need to continue from where we left off
+                position_ids = torch.arange(
+                    begin_loc, end_loc, dtype=torch.long, device=device
+                ).unsqueeze(0)
+            
+            # Manage cache length to prevent OOM
+            if max_cache_length and past_key_values is not None:
+                cache_len = past_key_values[0][0].size(2)
+                if cache_len > max_cache_length:
+                    # Trim the cache (keep most recent tokens)
+                    trim_amount = cache_len - max_cache_length
+                    past_key_values = tuple(
+                        tuple(kv[:, :, trim_amount:, :] for kv in layer_kv)
+                        for layer_kv in past_key_values
+                    )
+            
+            # Forward pass with KV cache
+            try:
+                outputs = model(
+                    input_ids=chunk_input_ids,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    use_cache=True,
+                )
+            except TypeError:
+                # Some models don't support position_ids with past_key_values
+                outputs = model(
+                    input_ids=chunk_input_ids,
+                    past_key_values=past_key_values,
+                    use_cache=True,
+                )
+            
+            # Update KV cache for next iteration
+            past_key_values = outputs.past_key_values
+            
+            # Compute loss on this chunk
+            logits = outputs.logits
+            
+            if past_key_values is None or begin_loc == 0:
+                # First chunk: compute loss on all tokens except first
+                shift_logits = logits[..., :-1, :].contiguous()
+                shift_labels = chunk_input_ids[..., 1:].contiguous()
+            else:
+                # Subsequent chunks: compute loss on all new tokens
+                # logits shape: [batch, chunk_size, vocab]
+                # We predict token[i+1] from logits[i]
+                # For new chunk starting at begin_loc, we predict tokens [begin_loc, end_loc)
+                # from logits at positions [0, chunk_size)
+                
+                # Get the target tokens (the ones we're predicting)
+                target_start = begin_loc
+                target_end = end_loc
+                target_ids = input_ids[:, target_start:target_end]
+                
+                # The logits at position i predict token i+1 relative to the chunk
+                # But since we have past KV, the last token of prev chunk predicts first token of this chunk
+                # Actually, logits[i] predicts input[i+1], but with past_key_values,
+                # we need to align properly
+                
+                # With past_key_values, outputs.logits has shape [batch, new_tokens, vocab]
+                # logits[0] predicts the token after input_ids[begin_loc], which is input_ids[begin_loc+1]
+                # So we use all logits except the last one to predict tokens [begin_loc+1, end_loc]
+                shift_logits = logits[..., :-1, :].contiguous()
+                shift_labels = target_ids[..., 1:].contiguous()
+            
+            # Flatten and compute loss
+            shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+            shift_labels = shift_labels.view(-1)
+            
+            loss = F.cross_entropy(shift_logits, shift_labels, reduction="none")
+            chunk_loss = loss.sum().item()
+            chunk_tokens = shift_labels.size(0)
+            
+            total_loss += chunk_loss
+            total_tokens += chunk_tokens
+            
+            pbar.update(end_loc - prev_end_loc)
+            prev_end_loc = end_loc
+            
+            # Report intermediate PPL every 10 chunks
+            if (begin_loc // chunk_size) % 10 == 0 and total_tokens > 0:
+                current_ppl = math.exp(total_loss / total_tokens)
+                pbar.set_postfix({"PPL": f"{current_ppl:.4f}", "tokens": total_tokens})
+        
+        pbar.close()
+    
+    # Compute final perplexity
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else float("inf")
+    perplexity = math.exp(avg_loss)
+    
+    return perplexity, total_tokens
+
+
+def compute_perplexity_streaming_from_dataset(
+    model,
+    tokenizer,
+    dataset,
+    device: torch.device,
+    chunk_size: int = 2048,
+    max_tokens: Optional[int] = None,
+    max_cache_length: Optional[int] = None,
+) -> Tuple[float, int]:
+    """
+    Compute streaming perplexity across multiple documents/samples.
+    
+    Each document is processed with its own KV cache context.
+
+    Args:
+        model: The language model
+        tokenizer: Tokenizer for the model
+        dataset: Dataset with tokenized samples
+        device: Device to run evaluation on
+        chunk_size: Number of new tokens to process per iteration  
+        max_tokens: Maximum total tokens to evaluate
+        max_cache_length: Maximum KV cache length per document
+
+    Returns:
+        Tuple of (perplexity, total_tokens_evaluated)
+    """
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+    
+    with torch.no_grad():
+        for idx in tqdm(range(len(dataset)), desc="Processing documents"):
+            if max_tokens and total_tokens >= max_tokens:
+                break
+                
+            sample = dataset[idx]
+            input_ids = sample["input_ids"].to(device)
+            
+            if input_ids.dim() == 1:
+                input_ids = input_ids.unsqueeze(0)
+            
+            seq_len = input_ids.size(1)
+            
+            # Skip very short sequences
+            if seq_len < 2:
+                continue
+            
+            past_key_values = None
+            
+            for begin_loc in range(0, seq_len, chunk_size):
+                end_loc = min(begin_loc + chunk_size, seq_len)
+                
+                if past_key_values is None:
+                    chunk_input_ids = input_ids[:, :end_loc]
+                    position_ids = None
+                else:
+                    chunk_input_ids = input_ids[:, begin_loc:end_loc]
+                    position_ids = torch.arange(
+                        begin_loc, end_loc, dtype=torch.long, device=device
+                    ).unsqueeze(0)
+                
+                # Manage cache length
+                if max_cache_length and past_key_values is not None:
+                    cache_len = past_key_values[0][0].size(2)
+                    if cache_len > max_cache_length:
+                        trim_amount = cache_len - max_cache_length
+                        past_key_values = tuple(
+                            tuple(kv[:, :, trim_amount:, :] for kv in layer_kv)
+                            for layer_kv in past_key_values
+                        )
+                
+                try:
+                    outputs = model(
+                        input_ids=chunk_input_ids,
+                        position_ids=position_ids,
+                        past_key_values=past_key_values,
+                        use_cache=True,
+                    )
+                except TypeError:
+                    outputs = model(
+                        input_ids=chunk_input_ids,
+                        past_key_values=past_key_values,
+                        use_cache=True,
+                    )
+                
+                past_key_values = outputs.past_key_values
+                logits = outputs.logits
+                
+                if begin_loc == 0:
+                    shift_logits = logits[..., :-1, :].contiguous()
+                    shift_labels = chunk_input_ids[..., 1:].contiguous()
+                else:
+                    target_ids = input_ids[:, begin_loc:end_loc]
+                    shift_logits = logits[..., :-1, :].contiguous()
+                    shift_labels = target_ids[..., 1:].contiguous()
+                
+                shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+                shift_labels = shift_labels.view(-1)
+                
+                loss = F.cross_entropy(shift_logits, shift_labels, reduction="none")
+                total_loss += loss.sum().item()
+                total_tokens += shift_labels.size(0)
+                
+                if max_tokens and total_tokens >= max_tokens:
+                    break
+            
+            # Clear cache between documents
+            past_key_values = None
+    
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else float("inf")
+    perplexity = math.exp(avg_loss)
+    
+    return perplexity, total_tokens
+
+
 def load_model_and_tokenizer(
     model_path: str,
     device: torch.device,
@@ -488,6 +760,9 @@ def run_evaluation(
     load_in_4bit: bool = False,
     load_in_8bit: bool = False,
     max_memory_per_gpu: Optional[str] = None,
+    streaming: bool = False,
+    chunk_size: int = 2048,
+    max_cache_length: Optional[int] = None,
 ) -> Dict[str, Dict]:
     """
     Run perplexity evaluation across different token scales.
@@ -506,6 +781,9 @@ def run_evaluation(
         load_in_4bit: Load model with 4-bit quantization (requires bitsandbytes)
         load_in_8bit: Load model with 8-bit quantization (requires bitsandbytes)
         max_memory_per_gpu: Max memory per GPU for device_map='auto', e.g., "40GiB"
+        streaming: Use streaming PPL with KV cache to leverage previous context
+        chunk_size: Number of new tokens to process per iteration in streaming mode
+        max_cache_length: Maximum KV cache length for streaming mode (memory management)
 
     Returns:
         Dictionary with evaluation results for each scale
@@ -575,9 +853,21 @@ def run_evaluation(
 
         # Compute perplexity
         start_time = time.time()
-        perplexity, tokens_evaluated = compute_perplexity(
-            model, dataloader, device, max_tokens=max_tokens
-        )
+        if streaming:
+            print(f"Using streaming PPL with chunk_size={chunk_size}, max_cache_length={max_cache_length}")
+            perplexity, tokens_evaluated = compute_perplexity_streaming_from_dataset(
+                model=model,
+                tokenizer=tokenizer,
+                dataset=dataset,
+                device=device,
+                chunk_size=chunk_size,
+                max_tokens=max_tokens,
+                max_cache_length=max_cache_length,
+            )
+        else:
+            perplexity, tokens_evaluated = compute_perplexity(
+                model, dataloader, device, max_tokens=max_tokens
+            )
         elapsed_time = time.time() - start_time
 
         results[scale] = {
@@ -620,6 +910,9 @@ def run_evaluation(
                 "max_length": max_length,
                 "stride": stride if use_pg19 else None,
                 "split": split if use_pg19 else None,
+                "streaming": streaming,
+                "chunk_size": chunk_size if streaming else None,
+                "max_cache_length": max_cache_length if streaming else None,
             },
         }
         with open(output_file, "w") as f:
@@ -661,8 +954,8 @@ def main():
     parser.add_argument(
         "--max_length",
         type=int,
-        default=2048,
-        help="Maximum sequence length (default: 2048)",
+        default=10_000_000,
+        help="Maximum sequence length / context length (default: 10M tokens)",
     )
     parser.add_argument(
         "--stride",
@@ -711,6 +1004,23 @@ def main():
         default=None,
         help="Max memory per GPU for device_map='auto', e.g., '40GiB' (default: 70GiB)",
     )
+    parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="Use streaming PPL calculation with KV cache to leverage previous context",
+    )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=2048,
+        help="Number of new tokens to process per iteration in streaming mode (default: 2048)",
+    )
+    parser.add_argument(
+        "--max_cache_length",
+        type=int,
+        default=None,
+        help="Maximum KV cache length for streaming mode (default: unlimited, set to limit memory)",
+    )
 
     args = parser.parse_args()
 
@@ -744,6 +1054,9 @@ def main():
         load_in_4bit=args.load_in_4bit,
         load_in_8bit=args.load_in_8bit,
         max_memory_per_gpu=args.max_memory_per_gpu,
+        streaming=args.streaming,
+        chunk_size=args.chunk_size,
+        max_cache_length=args.max_cache_length,
     )
 
     return results
