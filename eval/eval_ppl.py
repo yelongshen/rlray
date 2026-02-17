@@ -406,14 +406,27 @@ def compute_perplexity_streaming(
             
             # Manage cache length to prevent OOM
             if max_cache_length and past_key_values is not None:
-                cache_len = past_key_values[0][0].size(2)
-                if cache_len > max_cache_length:
-                    # Trim the cache (keep most recent tokens)
-                    trim_amount = cache_len - max_cache_length
-                    past_key_values = tuple(
-                        tuple(kv[:, :, trim_amount:, :] for kv in layer_kv)
-                        for layer_kv in past_key_values
-                    )
+                # Handle different cache formats (DynamicCache vs tuple)
+                if hasattr(past_key_values, 'get_seq_length'):
+                    # DynamicCache object (newer transformers)
+                    cache_len = past_key_values.get_seq_length()
+                    if cache_len > max_cache_length:
+                        if hasattr(past_key_values, 'crop'):
+                            past_key_values.crop(max_cache_length)
+                        else:
+                            trim_amount = cache_len - max_cache_length
+                            for layer_idx in range(len(past_key_values.key_cache)):
+                                past_key_values.key_cache[layer_idx] = past_key_values.key_cache[layer_idx][:, :, trim_amount:, :]
+                                past_key_values.value_cache[layer_idx] = past_key_values.value_cache[layer_idx][:, :, trim_amount:, :]
+                elif isinstance(past_key_values, tuple):
+                    # Legacy tuple format
+                    cache_len = past_key_values[0][0].size(2)
+                    if cache_len > max_cache_length:
+                        trim_amount = cache_len - max_cache_length
+                        past_key_values = tuple(
+                            tuple(kv[:, :, trim_amount:, :] for kv in layer_kv)
+                            for layer_kv in past_key_values
+                        )
             
             # Forward pass with KV cache
             try:
@@ -555,13 +568,29 @@ def compute_perplexity_streaming_from_dataset(
                 
                 # Manage cache length
                 if max_cache_length and past_key_values is not None:
-                    cache_len = past_key_values[0][0].size(2)
-                    if cache_len > max_cache_length:
-                        trim_amount = cache_len - max_cache_length
-                        past_key_values = tuple(
-                            tuple(kv[:, :, trim_amount:, :] for kv in layer_kv)
-                            for layer_kv in past_key_values
-                        )
+                    # Handle different cache formats (DynamicCache vs tuple)
+                    if hasattr(past_key_values, 'get_seq_length'):
+                        # DynamicCache object (newer transformers)
+                        cache_len = past_key_values.get_seq_length()
+                        if cache_len > max_cache_length:
+                            # DynamicCache supports crop method in some versions
+                            if hasattr(past_key_values, 'crop'):
+                                past_key_values.crop(max_cache_length)
+                            else:
+                                # Manual trimming for DynamicCache
+                                trim_amount = cache_len - max_cache_length
+                                for layer_idx in range(len(past_key_values.key_cache)):
+                                    past_key_values.key_cache[layer_idx] = past_key_values.key_cache[layer_idx][:, :, trim_amount:, :]
+                                    past_key_values.value_cache[layer_idx] = past_key_values.value_cache[layer_idx][:, :, trim_amount:, :]
+                    elif isinstance(past_key_values, tuple):
+                        # Legacy tuple format
+                        cache_len = past_key_values[0][0].size(2)
+                        if cache_len > max_cache_length:
+                            trim_amount = cache_len - max_cache_length
+                            past_key_values = tuple(
+                                tuple(kv[:, :, trim_amount:, :] for kv in layer_kv)
+                                for layer_kv in past_key_values
+                            )
                 
                 try:
                     outputs = model(
