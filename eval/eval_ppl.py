@@ -513,11 +513,12 @@ def compute_perplexity_streaming_from_dataset(
     chunk_size: int = 2048,
     max_tokens: Optional[int] = None,
     max_cache_length: Optional[int] = None,
+    concat_docs: bool = False,
 ) -> Tuple[float, int]:
     """
     Compute streaming perplexity across multiple documents/samples.
     
-    Each document is processed with its own KV cache context.
+    Each document is processed with its own KV cache context, unless concat_docs=True.
 
     Args:
         model: The language model
@@ -527,6 +528,8 @@ def compute_perplexity_streaming_from_dataset(
         chunk_size: Number of new tokens to process per iteration  
         max_tokens: Maximum total tokens to evaluate
         max_cache_length: Maximum KV cache length per document
+        concat_docs: If True, concatenate all documents into one continuous context
+                     (cache is NOT cleared between documents)
 
     Returns:
         Tuple of (perplexity, total_tokens_evaluated)
@@ -535,6 +538,11 @@ def compute_perplexity_streaming_from_dataset(
     total_loss = 0.0
     total_tokens = 0
     first_cache_printed = False
+    global_position = 0  # Track position across all documents when concat_docs=True
+    past_key_values = None  # Move outside loop for concat_docs mode
+    
+    if concat_docs:
+        print("Mode: Concatenating all documents into continuous context")
     
     with torch.no_grad():
         for idx in tqdm(range(len(dataset)), desc="Processing documents"):
@@ -553,20 +561,31 @@ def compute_perplexity_streaming_from_dataset(
             if seq_len < 2:
                 continue
             
-            past_key_values = None
+            if not concat_docs:
+                past_key_values = None  # Reset cache for each document
+                global_position = 0
+            
             doc_tokens = 0
             doc_loss = 0.0
             
             for begin_loc in range(0, seq_len, chunk_size):
                 end_loc = min(begin_loc + chunk_size, seq_len)
                 
+                # Calculate positions (local for this chunk, or global if concat_docs)
+                if concat_docs:
+                    chunk_start_pos = global_position + begin_loc
+                    chunk_end_pos = global_position + end_loc
+                else:
+                    chunk_start_pos = begin_loc
+                    chunk_end_pos = end_loc
+                
                 if past_key_values is None:
                     chunk_input_ids = input_ids[:, :end_loc]
-                    position_ids = None
+                    position_ids = None  # Model will infer positions 0 to end_loc-1
                 else:
                     chunk_input_ids = input_ids[:, begin_loc:end_loc]
                     position_ids = torch.arange(
-                        begin_loc, end_loc, dtype=torch.long, device=device
+                        chunk_start_pos, chunk_end_pos, dtype=torch.long, device=device
                     ).unsqueeze(0)
                 
                 # Manage cache length
@@ -777,8 +796,13 @@ def compute_perplexity_streaming_from_dataset(
                 doc_ppl = math.exp(doc_loss / doc_tokens)
                 print(f"  >> Doc {idx+1} complete: {doc_tokens:,} tokens, PPL={doc_ppl:.4f}")
             
-            # Clear cache between documents
-            past_key_values = None
+            # Update global position for concat_docs mode
+            if concat_docs:
+                global_position += seq_len
+                # Don't clear cache - keep it for next document
+            else:
+                # Clear cache between documents
+                past_key_values = None
     
     avg_loss = total_loss / total_tokens if total_tokens > 0 else float("inf")
     perplexity = math.exp(avg_loss)
@@ -942,6 +966,7 @@ def run_evaluation(
     streaming: bool = False,
     chunk_size: Optional[int] = None,
     max_cache_length: Optional[int] = None,
+    concat_docs: bool = False,
 ) -> Dict[str, Dict]:
     """
     Run perplexity evaluation across different token scales.
@@ -963,6 +988,7 @@ def run_evaluation(
         streaming: Use streaming PPL with KV cache to leverage previous context
         chunk_size: Number of new tokens per iteration (None = auto-detect from model config)
         max_cache_length: Maximum KV cache length for streaming mode (memory management)
+        concat_docs: If True, concatenate all documents into one continuous context
 
     Returns:
         Dictionary with evaluation results for each scale
@@ -1043,7 +1069,7 @@ def run_evaluation(
         # Compute perplexity
         start_time = time.time()
         if streaming:
-            print(f"Using streaming PPL with chunk_size={chunk_size}, max_cache_length={max_cache_length}")
+            print(f"Using streaming PPL with chunk_size={chunk_size}, max_cache_length={max_cache_length}, concat_docs={concat_docs}")
             perplexity, tokens_evaluated = compute_perplexity_streaming_from_dataset(
                 model=model,
                 tokenizer=tokenizer,
@@ -1052,6 +1078,7 @@ def run_evaluation(
                 chunk_size=chunk_size,
                 max_tokens=max_tokens,
                 max_cache_length=max_cache_length,
+                concat_docs=concat_docs,
             )
         else:
             perplexity, tokens_evaluated = compute_perplexity(
@@ -1102,6 +1129,7 @@ def run_evaluation(
                 "streaming": streaming,
                 "chunk_size": chunk_size if streaming else None,
                 "max_cache_length": max_cache_length if streaming else None,
+                "concat_docs": concat_docs if streaming else None,
             },
         }
         with open(output_file, "w") as f:
@@ -1211,6 +1239,11 @@ def main():
         default=None,
         help="Maximum KV cache length for streaming mode (default: unlimited, set to limit memory)",
     )
+    parser.add_argument(
+        "--concat_docs",
+        action="store_true",
+        help="Concatenate all documents into one continuous context (don't clear cache between docs)",
+    )
 
     args = parser.parse_args()
 
@@ -1247,6 +1280,7 @@ def main():
         streaming=args.streaming,
         chunk_size=args.chunk_size,
         max_cache_length=args.max_cache_length,
+        concat_docs=args.concat_docs,
     )
 
     return results
