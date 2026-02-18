@@ -514,6 +514,7 @@ def compute_perplexity_streaming_from_dataset(
     max_tokens: Optional[int] = None,
     max_cache_length: Optional[int] = None,
     concat_docs: bool = False,
+    max_position_embeddings: Optional[int] = None,
 ) -> Tuple[float, int]:
     """
     Compute streaming perplexity across multiple documents/samples.
@@ -530,6 +531,7 @@ def compute_perplexity_streaming_from_dataset(
         max_cache_length: Maximum KV cache length per document
         concat_docs: If True, concatenate all documents into one continuous context
                      (cache is NOT cleared between documents)
+        max_position_embeddings: Model's max position embeddings (for auto-limiting cache)
 
     Returns:
         Tuple of (perplexity, total_tokens_evaluated)
@@ -542,7 +544,10 @@ def compute_perplexity_streaming_from_dataset(
     past_key_values = None  # Move outside loop for concat_docs mode
     
     if concat_docs:
-        print("Mode: Concatenating all documents into continuous context")
+        print(f"Mode: Concatenating all documents into continuous context")
+        if max_position_embeddings:
+            print(f"  max_position_embeddings={max_position_embeddings}")
+            print(f"  Cache will be auto-trimmed to ensure: cache_len + chunk_len <= {max_position_embeddings}")
     
     with torch.no_grad():
         for idx in tqdm(range(len(dataset)), desc="Processing documents"):
@@ -567,11 +572,15 @@ def compute_perplexity_streaming_from_dataset(
             
             doc_tokens = 0
             doc_loss = 0.0
+            # position_offset persists across documents when concat_docs=True (initialized outside loop)
             
             for begin_loc in range(0, seq_len, chunk_size):
                 end_loc = min(begin_loc + chunk_size, seq_len)
                 
                 # Calculate positions (local for this chunk, or global if concat_docs)
+                # NOTE: For RoPE, position_ids should be the TRUE absolute position.
+                # Cached K/V already have RoPE applied at their original positions,
+                # so trimming the cache doesn't affect position calculations.
                 if concat_docs:
                     chunk_start_pos = global_position + begin_loc
                     chunk_end_pos = global_position + end_loc
@@ -588,31 +597,46 @@ def compute_perplexity_streaming_from_dataset(
                         chunk_start_pos, chunk_end_pos, dtype=torch.long, device=device
                     ).unsqueeze(0)
                 
-                # Manage cache length
-                if max_cache_length and past_key_values is not None:
+                # Trim cache BEFORE forward pass to ensure:
+                # len(chunk_input_ids) + len(past_key_values) <= max_position_embeddings
+                chunk_len = chunk_input_ids.size(1)
+                if past_key_values is not None and max_position_embeddings is not None:
+                    # Calculate maximum allowed cache length
+                    max_allowed_cache = max_position_embeddings - chunk_len
+                    
                     # Handle different cache formats (DynamicCache vs tuple)
                     if hasattr(past_key_values, 'get_seq_length'):
                         # DynamicCache object (newer transformers)
                         cache_len = past_key_values.get_seq_length()
-                        if cache_len > max_cache_length:
+                        if cache_len > max_allowed_cache:
+                            trim_amount = cache_len - max_allowed_cache
                             # DynamicCache supports crop method in some versions
                             if hasattr(past_key_values, 'crop'):
-                                past_key_values.crop(max_cache_length)
+                                past_key_values.crop(max_allowed_cache)
                             else:
                                 # Manual trimming for DynamicCache
-                                trim_amount = cache_len - max_cache_length
                                 for layer_idx in range(len(past_key_values.key_cache)):
-                                    past_key_values.key_cache[layer_idx] = past_key_values.key_cache[layer_idx][:, :, trim_amount:, :]
-                                    past_key_values.value_cache[layer_idx] = past_key_values.value_cache[layer_idx][:, :, trim_amount:, :]
+                                    if past_key_values.key_cache[layer_idx] is not None:
+                                        past_key_values.key_cache[layer_idx] = past_key_values.key_cache[layer_idx][:, :, trim_amount:, :]
+                                    if past_key_values.value_cache[layer_idx] is not None:
+                                        past_key_values.value_cache[layer_idx] = past_key_values.value_cache[layer_idx][:, :, trim_amount:, :]
+                            if concat_docs:
+                                print(f"  [Cache trimmed] cache_len={cache_len} + chunk_len={chunk_len} > {max_position_embeddings}, trimmed {trim_amount} tokens")
                     elif isinstance(past_key_values, tuple):
                         # Legacy tuple format
                         cache_len = past_key_values[0][0].size(2)
-                        if cache_len > max_cache_length:
-                            trim_amount = cache_len - max_cache_length
+                        if cache_len > max_allowed_cache:
+                            trim_amount = cache_len - max_allowed_cache
                             past_key_values = tuple(
                                 tuple(kv[:, :, trim_amount:, :] for kv in layer_kv)
                                 for layer_kv in past_key_values
                             )
+                            if concat_docs:
+                                print(f"  [Cache trimmed] cache_len={cache_len} + chunk_len={chunk_len} > {max_position_embeddings}, trimmed {trim_amount} tokens")
+                
+                # Note: We don't need to adjust position_ids after trimming.
+                # Cached K/V already have RoPE applied at their original positions.
+                # New tokens just need their true positions, regardless of cache trimming.
                 
                 try:
                     outputs = model(
@@ -1069,6 +1093,8 @@ def run_evaluation(
         # Compute perplexity
         start_time = time.time()
         if streaming:
+            # Get max_position_embeddings for cache limiting
+            model_max_pos = getattr(model.config, 'max_position_embeddings', None)
             print(f"Using streaming PPL with chunk_size={chunk_size}, max_cache_length={max_cache_length}, concat_docs={concat_docs}")
             perplexity, tokens_evaluated = compute_perplexity_streaming_from_dataset(
                 model=model,
@@ -1079,6 +1105,7 @@ def run_evaluation(
                 max_tokens=max_tokens,
                 max_cache_length=max_cache_length,
                 concat_docs=concat_docs,
+                max_position_embeddings=model_max_pos,
             )
         else:
             perplexity, tokens_evaluated = compute_perplexity(
