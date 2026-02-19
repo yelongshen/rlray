@@ -28,8 +28,10 @@ import time
 
 # Add xlmlib to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm_engine import LLMEngine, Sequence
+# Conditional imports - LLMEngine only needed for non-simple mode
+# from llm_engine import LLMEngine, Sequence  # Defer this import
 from math_util import process_math_prompt, safe_math_answer_timeout
 
 # ============================================================================
@@ -167,6 +169,9 @@ class AIME24Evaluator:
         temperature: float = 0.6,
         prompt_type: str = "v11"  # boxed format for math
     ):
+        # Import LLMEngine here to avoid import errors when using simple mode
+        from llm_engine import LLMEngine, Sequence
+        
         self.device = device
         self.max_gen_len = max_gen_len
         self.temperature = temperature
