@@ -490,6 +490,10 @@ def main():
                 print(f"  Correct: {result.correct}")
                 print(f"  Time: {elapsed:.2f}s")
                 print(f"  Running Accuracy: {accuracy:.2f}%")
+                print(f"  Response:")
+                print("-" * 50)
+                print(result.response)
+                print("-" * 50)
                 
                 # Save result
                 f.write(json.dumps({
