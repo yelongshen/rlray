@@ -55,6 +55,7 @@ class AIME24Result:
     gold_answer: str
     predicted_answer: str
     response: str
+    reward: float
     correct: bool
 
 # ============================================================================
@@ -235,6 +236,7 @@ class AIME24Evaluator:
             gold_answer=problem.answer,
             predicted_answer=predicted_answer,
             response=response,
+            reward=reward,
             correct=(reward > 0.5)
         )
     
@@ -275,6 +277,7 @@ class AIME24Evaluator:
                     gold_answer=problem.answer,
                     predicted_answer=predicted_answer,
                     response=response,
+                    reward=reward,
                     correct=(reward > 0.5)
                 ))
         
@@ -373,6 +376,7 @@ class AIME24SimpleEvaluator:
             gold_answer=problem.answer,
             predicted_answer=predicted_answer,
             response=response,
+            reward=reward,
             correct=(reward > 0.5)
         )
 
@@ -461,6 +465,7 @@ def main():
                 print(f"\n[{i+1}/{len(problems)}] Problem ID: {problem.id}")
                 print(f"  Gold Answer: {problem.answer}")
                 print(f"  Predicted: {result.predicted_answer}")
+                print(f"  Reward: {result.reward:.4f}")
                 print(f"  Correct: {result.correct}")
                 print(f"  Time: {elapsed:.2f}s")
                 print(f"  Running Accuracy: {accuracy:.2f}%")
@@ -472,6 +477,7 @@ def main():
                     'gold_answer': result.gold_answer,
                     'predicted_answer': result.predicted_answer,
                     'response': result.response,
+                    'reward': result.reward,
                     'correct': result.correct
                 }, ensure_ascii=False) + '\n')
                 f.flush()
@@ -494,7 +500,7 @@ def main():
     print(f"\nDetailed Results:")
     for r in results:
         status = "✓" if r.correct else "✗"
-        print(f"  [{status}] ID {r.id}: Gold={r.gold_answer}, Pred={r.predicted_answer}")
+        print(f"  [{status}] ID {r.id}: Gold={r.gold_answer}, Pred={r.predicted_answer}, Reward={r.reward:.4f}")
 
 if __name__ == "__main__":
     main()
