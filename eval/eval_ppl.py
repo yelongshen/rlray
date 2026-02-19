@@ -78,9 +78,10 @@ class PG19Dataset(Dataset):
         # PG19 contains ~28K books for training, ~50 for validation, ~100 for test
         try:
             dataset = load_dataset("deepmind/pg19", split=split)
-        except RuntimeError as e:
-            if "Dataset scripts are no longer supported" in str(e):
-                print("Warning: deepmind/pg19 uses legacy script format.")
+        except (RuntimeError, FileNotFoundError) as e:
+            err_msg = str(e)
+            if "Dataset scripts are no longer supported" in err_msg or "Couldn't find file" in err_msg:
+                print("Warning: deepmind/pg19 uses legacy script format or is unavailable.")
                 print("Using alternative: emozilla/pg19 (Parquet format)...")
                 dataset = load_dataset("emozilla/pg19", split=split)
             else:
