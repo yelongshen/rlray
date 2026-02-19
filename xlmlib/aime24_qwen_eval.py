@@ -484,6 +484,10 @@ def main():
                 
                 # Log progress
                 print(f"\n[{i+1}/{len(problems)}] Problem ID: {problem.id}")
+                print(f"  Problem:")
+                print("-" * 50)
+                print(problem.problem)
+                print("-" * 50)
                 print(f"  Gold Answer: {problem.answer}")
                 print(f"  Predicted: {result.predicted_answer}")
                 print(f"  Reward: {result.reward:.4f}")
