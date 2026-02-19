@@ -17,8 +17,44 @@ try:
     from math_evaluation import is_equiv
 except ImportError as error:
     logger.warning(
-        f"`math_evaluation` package not found, consider installing for better performance: {error}."
+        f"`math_evaluation` package not found, using fallback is_equiv: {error}."
     )
+    
+    def is_equiv(gold: str, pred: str) -> bool:
+        """Fallback is_equiv for when math_evaluation is not installed.
+        
+        Works well for AIME problems (integer answers 0-999).
+        """
+        gold = str(gold).strip()
+        pred = str(pred).strip()
+        
+        # Direct string match
+        if gold == pred:
+            return True
+        
+        # Try numeric comparison
+        try:
+            # Handle fractions like "1/2"
+            if '/' in gold and '/' not in pred:
+                num, den = gold.split('/')
+                gold_val = float(num) / float(den)
+            else:
+                gold_val = float(gold)
+            
+            if '/' in pred and '/' not in gold:
+                num, den = pred.split('/')
+                pred_val = float(num) / float(den)
+            else:
+                pred_val = float(pred)
+            
+            return abs(gold_val - pred_val) < 1e-6
+        except (ValueError, ZeroDivisionError):
+            pass
+        
+        # Normalize and compare (remove spaces, lowercase)
+        gold_norm = gold.lower().replace(' ', '').replace('$', '')
+        pred_norm = pred.lower().replace(' ', '').replace('$', '')
+        return gold_norm == pred_norm
 
 def math_verify(gold, answer):
     escaped_answer = answer.replace("\n","\\n").replace("\r","\\r").replace("\\", "\\\\").replace('"', '\\"')
