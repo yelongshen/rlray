@@ -337,15 +337,21 @@ class AIME24SimpleEvaluator:
     
     def solve(self, problem: AIME24Problem) -> AIME24Result:
         """Solve single problem using HF generate."""
+        import sys
+        
+        print(f"  [DEBUG] Building prompt...", flush=True)
         prompt = process_math_prompt(problem.problem, prompt_type=self.prompt_type)
         
+        print(f"  [DEBUG] Tokenizing (prompt len: {len(prompt)} chars)...", flush=True)
         inputs = self.tokenizer(
             prompt,
             return_tensors="pt",
             truncation=True,
             max_length=2048
         ).to(self.device)
+        print(f"  [DEBUG] Input tokens: {inputs['input_ids'].shape[1]}", flush=True)
         
+        print(f"  [DEBUG] Starting generation (max_new_tokens={self.max_new_tokens})...", flush=True)
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -356,12 +362,15 @@ class AIME24SimpleEvaluator:
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
             )
+        print(f"  [DEBUG] Generation done. Output tokens: {outputs.shape[1]}", flush=True)
         
         response = self.tokenizer.decode(
             outputs[0][inputs['input_ids'].shape[1]:],
             skip_special_tokens=True
         )
+        print(f"  [DEBUG] Response length: {len(response)} chars", flush=True)
         
+        print(f"  [DEBUG] Verifying answer...", flush=True)
         _, predicted_answer, reward = safe_math_answer_timeout(
             response,
             [problem.answer],
@@ -369,6 +378,7 @@ class AIME24SimpleEvaluator:
             prompt_type=self.prompt_type,
             timeout=30
         )
+        print(f"  [DEBUG] Verification done. Predicted: {predicted_answer}, Reward: {reward}", flush=True)
         
         return AIME24Result(
             id=problem.id,
