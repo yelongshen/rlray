@@ -352,6 +352,8 @@ class AIME24SimpleEvaluator:
         print(f"  [DEBUG] Input tokens: {inputs['input_ids'].shape[1]}", flush=True)
         
         print(f"  [DEBUG] Starting generation (max_new_tokens={self.max_new_tokens})...", flush=True)
+        import time
+        start_time = time.time()
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -361,8 +363,11 @@ class AIME24SimpleEvaluator:
                 top_p=0.95,
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
+                use_cache=True,  # Explicit KV cache for faster generation
             )
-        print(f"  [DEBUG] Generation done. Output tokens: {outputs.shape[1]}", flush=True)
+        gen_time = time.time() - start_time
+        new_tokens = outputs.shape[1] - inputs['input_ids'].shape[1]
+        print(f"  [DEBUG] Generation done in {gen_time:.1f}s. New tokens: {new_tokens} ({new_tokens/gen_time:.1f} tok/s)", flush=True)
         
         response = self.tokenizer.decode(
             outputs[0][inputs['input_ids'].shape[1]:],
@@ -411,7 +416,8 @@ def main():
                        help="Max samples to evaluate (-1 for all)")
     
     # Generation
-    parser.add_argument("--max_gen_len", type=int, default=4096)
+    parser.add_argument("--max_gen_len", type=int, default=1024,
+                       help="Max new tokens to generate (1024 is usually plenty for math)")
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--prompt_type", type=str, default="v11",
                        choices=["v8", "v9", "v10", "v11", "v12"])
