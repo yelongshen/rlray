@@ -191,13 +191,22 @@ class AIME24Evaluator:
         print("LLM Engine initialized!")
     
     def _build_prompt(self, problem: str) -> str:
-        """Build prompt for AIME problem."""
+        """Build prompt for AIME problem with chat template."""
         # Use math prompt formatting
-        return process_math_prompt(problem, prompt_type=self.prompt_type)
+        prompt = process_math_prompt(problem, prompt_type=self.prompt_type)
+        
+        # Apply chat template for instruction-tuned models
+        messages = [{"role": "user", "content": prompt}]
+        text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        return text
     
     def _tokenize(self, prompt: str) -> List[int]:
         """Tokenize prompt."""
-        return self.tokenizer.encode(prompt, add_special_tokens=True)
+        return self.tokenizer.encode(prompt, add_special_tokens=False)  # Template already added special tokens
     
     def _decode(self, token_ids: List[int]) -> str:
         """Decode token ids to text."""
