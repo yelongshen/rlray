@@ -291,21 +291,37 @@ class AIME24SimpleEvaluator:
         device: str = "cuda",
         max_new_tokens: int = 4096,
         temperature: float = 0.7,
-        prompt_type: str = "v11"
+        prompt_type: str = "v11",
+        gpu_ids: Optional[str] = None
     ):
         from transformers import AutoModelForCausalLM, AutoTokenizer
         
-        self.device = device
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.prompt_type = prompt_type
         
+        # Handle device mapping
+        if gpu_ids is not None:
+            # Use specific GPUs with device_map
+            gpu_list = [int(g.strip()) for g in gpu_ids.split(',')]
+            if len(gpu_list) == 1:
+                self.device = f"cuda:{gpu_list[0]}"
+                device_map = {"": self.device}
+            else:
+                self.device = "cuda:0"  # First GPU for inputs
+                device_map = "auto"  # Let transformers handle multi-GPU
+        else:
+            self.device = device
+            device_map = "auto"
+        
         print(f"Loading model from {model_path}...")
+        print(f"Device: {self.device}, Device map: {device_map}")
+        
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path,
             torch_dtype=torch.bfloat16,
-            device_map="auto",
+            device_map=device_map,
             trust_remote_code=True
         )
         self.model.eval()
@@ -366,6 +382,8 @@ def main():
     parser.add_argument("--model_path", type=str, default="Qwen/Qwen3-Coder-Next")
     parser.add_argument("--use_simple", action="store_true", 
                        help="Use simple HF evaluator instead of LLMEngine")
+    parser.add_argument("--gpu_ids", type=str, default=None,
+                       help="Comma-separated GPU IDs to use (e.g., '0,1,2')")
     
     # Data
     parser.add_argument("--data_path", type=str, default="../eval/aime24_test.jsonl")
@@ -382,6 +400,11 @@ def main():
     
     args = parser.parse_args()
     
+    # Set GPU devices if specified
+    if args.gpu_ids is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
+        print(f"Using GPUs: {args.gpu_ids}")
+    
     # Load dataset
     print(f"\nLoading AIME24 dataset from {args.data_path}...")
     problems = load_aime24_dataset(args.data_path)
@@ -396,7 +419,8 @@ def main():
             model_path=args.model_path,
             max_new_tokens=args.max_gen_len,
             temperature=args.temperature,
-            prompt_type=args.prompt_type
+            prompt_type=args.prompt_type,
+            gpu_ids=args.gpu_ids
         )
     else:
         print("\nUsing In-house LLM Engine Evaluator...")
