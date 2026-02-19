@@ -344,13 +344,16 @@ class AIME24SimpleEvaluator:
         print(f"  [DEBUG] Building prompt...", flush=True)
         prompt = process_math_prompt(problem.problem, prompt_type=self.prompt_type)
         
-        print(f"  [DEBUG] Tokenizing (prompt len: {len(prompt)} chars)...", flush=True)
-        inputs = self.tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=2048
-        ).to(self.device)
+        # Apply chat template for instruction-tuned models
+        messages = [{"role": "user", "content": prompt}]
+        text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        
+        print(f"  [DEBUG] Tokenizing (prompt len: {len(text)} chars)...", flush=True)
+        inputs = self.tokenizer([text], return_tensors="pt").to(self.device)
         print(f"  [DEBUG] Input tokens: {inputs['input_ids'].shape[1]}", flush=True)
         
         print(f"  [DEBUG] Starting generation (max_new_tokens={self.max_new_tokens})...", flush=True)
