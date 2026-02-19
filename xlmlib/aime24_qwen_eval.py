@@ -221,12 +221,13 @@ class AIME24Evaluator:
         # Decode response
         response = self._decode(output_ids)
         
-        # Extract answer and verify
+        # Extract answer and verify (use simpler algs without math_verify)
         _, predicted_answer, reward = safe_math_answer_timeout(
             response,
             [problem.answer],
             self.tokenizer,
             prompt_type=self.prompt_type,
+            alg=['is_equiv', 'text'],
             timeout=30
         )
         
@@ -268,6 +269,7 @@ class AIME24Evaluator:
                     [problem.answer],
                     self.tokenizer,
                     prompt_type=self.prompt_type,
+                    alg=['is_equiv', 'text'],
                     timeout=30
                 )
                 
@@ -376,11 +378,14 @@ class AIME24SimpleEvaluator:
         print(f"  [DEBUG] Response length: {len(response)} chars", flush=True)
         
         print(f"  [DEBUG] Verifying answer...", flush=True)
+        # Use simpler algorithms that don't require external math_verify package
+        # AIME answers are integers 0-999, so is_equiv and text matching suffice
         _, predicted_answer, reward = safe_math_answer_timeout(
             response,
             [problem.answer],
             self.tokenizer,
             prompt_type=self.prompt_type,
+            alg=['is_equiv', 'text'],  # Skip math_verify which requires external package
             timeout=30
         )
         print(f"  [DEBUG] Verification done. Predicted: {predicted_answer}, Reward: {reward}", flush=True)
