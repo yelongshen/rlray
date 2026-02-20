@@ -286,16 +286,166 @@ class Qwen3NextRMSNormGated(nn.Module):
 
 
 # ============================================================================
-# Linear Attention (Gated DeltaNet)
+# Linear Attention (Gated DeltaNet) - Helper Functions
+# ============================================================================
+
+def apply_mask_to_padding_states(hidden_states, attention_mask):
+    """Tunes out the hidden states for padding tokens."""
+    if attention_mask is not None and attention_mask.shape[1] > 1 and attention_mask.shape[0] > 1:
+        dtype = hidden_states.dtype
+        hidden_states = (hidden_states * attention_mask[:, :, None]).to(dtype)
+    return hidden_states
+
+
+def l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6):
+    """L2 normalization matching FLA library."""
+    inv_norm = torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
+    return x * inv_norm
+
+
+def torch_chunk_gated_delta_rule(
+    query, key, value, g, beta,
+    chunk_size=64,
+    initial_state=None,
+    output_final_state=False,
+    use_qk_l2norm_in_kernel=False,
+):
+    """Pure PyTorch implementation of chunked gated delta rule."""
+    initial_dtype = query.dtype
+    if use_qk_l2norm_in_kernel:
+        query = l2norm(query, dim=-1, eps=1e-6)
+        key = l2norm(key, dim=-1, eps=1e-6)
+    
+    query, key, value, beta, g = [
+        x.transpose(1, 2).contiguous().to(torch.float32) for x in (query, key, value, beta, g)
+    ]
+
+    batch_size, num_heads, sequence_length, k_head_dim = key.shape
+    v_head_dim = value.shape[-1]
+
+    pad_size = (chunk_size - sequence_length % chunk_size) % chunk_size
+    query = F.pad(query, (0, 0, 0, pad_size))
+    key = F.pad(key, (0, 0, 0, pad_size))
+    value = F.pad(value, (0, 0, 0, pad_size))
+    beta = F.pad(beta, (0, pad_size))
+    g = F.pad(g, (0, pad_size))
+    total_sequence_length = sequence_length + pad_size
+
+    scale = 1 / (query.shape[-1] ** 0.5)
+    query = query * scale
+
+    v_beta = value * beta.unsqueeze(-1)
+    k_beta = key * beta.unsqueeze(-1)
+
+    # reshape to chunks
+    query, key, value, k_beta, v_beta = [
+        x.reshape(x.shape[0], x.shape[1], -1, chunk_size, x.shape[-1]) 
+        for x in (query, key, value, k_beta, v_beta)
+    ]
+    g = g.reshape(g.shape[0], g.shape[1], -1, chunk_size)
+    mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=0)
+
+    # chunk decay
+    g = g.cumsum(dim=-1)
+    decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().float()).tril()
+    attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
+
+    for i in range(1, chunk_size):
+        row = attn[..., i, :i].clone()
+        sub = attn[..., :i, :i].clone()
+        attn[..., i, :i] = row + (row.unsqueeze(-1) * sub).sum(-2)
+    attn = attn + torch.eye(chunk_size, dtype=attn.dtype, device=attn.device)
+
+    value = attn @ v_beta
+    k_cumdecay = attn @ (k_beta * g.exp().unsqueeze(-1))
+
+    last_recurrent_state = (
+        torch.zeros(batch_size, num_heads, k_head_dim, v_head_dim).to(value)
+        if initial_state is None
+        else initial_state.to(value)
+    )
+
+    core_attn_out = torch.zeros_like(value)
+    mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=1)
+
+    # for each chunk
+    for i in range(0, total_sequence_length // chunk_size):
+        q_i, k_i, v_i = query[:, :, i], key[:, :, i], value[:, :, i]
+        attn = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
+        v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
+        v_new = v_i - v_prime
+        attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
+        core_attn_out[:, :, i] = attn_inter + attn @ v_new
+        last_recurrent_state = (
+            last_recurrent_state * g[:, :, i, -1, None, None].exp()
+            + (k_i * (g[:, :, i, -1, None] - g[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
+        )
+
+    if not output_final_state:
+        last_recurrent_state = None
+
+    core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1, core_attn_out.shape[-1])
+    core_attn_out = core_attn_out[:, :, :sequence_length]
+    core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
+    return core_attn_out, last_recurrent_state
+
+
+def torch_recurrent_gated_delta_rule(
+    query, key, value, g, beta, 
+    initial_state, 
+    output_final_state,
+    use_qk_l2norm_in_kernel=False
+):
+    """Pure PyTorch implementation of recurrent gated delta rule (for single token generation)."""
+    initial_dtype = query.dtype
+    if use_qk_l2norm_in_kernel:
+        query = l2norm(query, dim=-1, eps=1e-6)
+        key = l2norm(key, dim=-1, eps=1e-6)
+    
+    query, key, value, beta, g = [
+        x.transpose(1, 2).contiguous().to(torch.float32) for x in (query, key, value, beta, g)
+    ]
+
+    batch_size, num_heads, sequence_length, k_head_dim = key.shape
+    v_head_dim = value.shape[-1]
+    scale = 1 / (query.shape[-1] ** 0.5)
+    query = query * scale
+
+    core_attn_out = torch.zeros(batch_size, num_heads, sequence_length, v_head_dim).to(value)
+    last_recurrent_state = (
+        torch.zeros(batch_size, num_heads, k_head_dim, v_head_dim).to(value)
+        if initial_state is None
+        else initial_state.to(value)
+    )
+
+    for i in range(sequence_length):
+        q_t = query[:, :, i]
+        k_t = key[:, :, i]
+        v_t = value[:, :, i]
+        g_t = g[:, :, i].exp().unsqueeze(-1).unsqueeze(-1)
+        beta_t = beta[:, :, i].unsqueeze(-1)
+
+        last_recurrent_state = last_recurrent_state * g_t
+        kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
+        delta = (v_t - kv_mem) * beta_t
+        last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
+        core_attn_out[:, :, i] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
+
+    if not output_final_state:
+        last_recurrent_state = None
+    core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
+    return core_attn_out, last_recurrent_state
+
+
+# ============================================================================
+# Linear Attention (Gated DeltaNet) - Main Module
 # ============================================================================
 
 class Qwen3NextGatedDeltaNetForEngine(nn.Module):
     """
     Gated DeltaNet linear attention for Qwen3-Next.
     
-    This implements a recurrent linear attention mechanism with:
-    - Causal convolution for local context
-    - Gated delta rule for recurrent state updates
+    This implements the exact same logic as HuggingFace's Qwen3NextGatedDeltaNet.
     """
     def __init__(self, config, layer_idx: int, use_tp: bool = False):
         super().__init__()
@@ -303,9 +453,9 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         self.layer_idx = layer_idx
         self.use_tp = use_tp
         
-        # Get dimensions from config with fallbacks
+        # Get dimensions from config
         self.num_v_heads = getattr(config, 'linear_num_value_heads', 32)
-        self.num_k_heads = getattr(config, 'linear_num_key_heads', 4)
+        self.num_k_heads = getattr(config, 'linear_num_key_heads', 16)
         self.head_k_dim = getattr(config, 'linear_key_head_dim', 128)
         self.head_v_dim = getattr(config, 'linear_value_head_dim', 128)
         self.conv_kernel_size = getattr(config, 'linear_conv_kernel_dim', 4)
@@ -313,16 +463,8 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         self.key_dim = self.head_k_dim * self.num_k_heads
         self.value_dim = self.head_v_dim * self.num_v_heads
         self.conv_dim = self.key_dim * 2 + self.value_dim
-        
-        # Projections
-        projection_size_qkvz = self.key_dim * 2 + self.value_dim * 2
-        projection_size_ba = self.num_v_heads * 2
-        
-        # Note: GatedDeltaNet doesn't use TP sharding - weights are replicated
-        # This is because the dimensions are complex and interleaved
-        self.in_proj_qkvz = nn.Linear(self.hidden_size, projection_size_qkvz, bias=False)
-        self.in_proj_ba = nn.Linear(self.hidden_size, projection_size_ba, bias=False)
-        self.out_proj = nn.Linear(self.value_dim, self.hidden_size, bias=False)
+        self.layer_norm_epsilon = getattr(config, 'rms_norm_eps', 1e-6)
+        self.activation = getattr(config, 'hidden_act', 'silu')
         
         # Causal convolution
         self.conv1d = nn.Conv1d(
@@ -334,103 +476,183 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             padding=self.conv_kernel_size - 1,
         )
         
-        # Learnable parameters
+        # Projections (exactly as HF)
+        projection_size_qkvz = self.key_dim * 2 + self.value_dim * 2
+        projection_size_ba = self.num_v_heads * 2
+        self.in_proj_qkvz = nn.Linear(self.hidden_size, projection_size_qkvz, bias=False)
+        self.in_proj_ba = nn.Linear(self.hidden_size, projection_size_ba, bias=False)
+        
+        # Time step projection parameters
         self.dt_bias = nn.Parameter(torch.ones(self.num_v_heads))
-        self.A_log = nn.Parameter(torch.zeros(self.num_v_heads))
+        A = torch.empty(self.num_v_heads).uniform_(0, 16)
+        self.A_log = nn.Parameter(torch.log(A))
         
         # Output norm with gating
-        self.norm = Qwen3NextRMSNormGated(self.head_v_dim, eps=get_rms_norm_eps(config))
+        self.norm = Qwen3NextRMSNormGated(self.head_v_dim, eps=self.layer_norm_epsilon)
         
-        # Recurrent state (for inference)
-        self.conv_state = None
-        self.recurrent_state = None
+        # Output projection
+        self.out_proj = nn.Linear(self.value_dim, self.hidden_size, bias=False)
+        
+        # Delta rule functions (use pure torch for now)
+        self.chunk_gated_delta_rule = torch_chunk_gated_delta_rule
+        self.recurrent_gated_delta_rule = torch_recurrent_gated_delta_rule
+    
+    def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
+        """
+        Derives query, key, value, z, b, a tensors from mixed projections.
+        This matches HF's implementation exactly.
+        """
+        # Reshape to [B, L, num_k_heads, interleaved_dim]
+        new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
+            self.num_k_heads,
+            2 * self.head_k_dim + 2 * self.head_v_dim * self.num_v_heads // self.num_k_heads,
+        )
+        new_tensor_shape_ba = mixed_ba.size()[:-1] + (
+            self.num_k_heads, 
+            2 * self.num_v_heads // self.num_k_heads
+        )
+
+        mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
+        mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
+
+        split_arg_list_qkvz = [
+            self.head_k_dim,
+            self.head_k_dim,
+            (self.num_v_heads // self.num_k_heads * self.head_v_dim),
+            (self.num_v_heads // self.num_k_heads * self.head_v_dim),
+        ]
+        split_arg_list_ba = [
+            self.num_v_heads // self.num_k_heads, 
+            self.num_v_heads // self.num_k_heads
+        ]
+
+        query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=3)
+        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=3)
+
+        # [B, L, num_k_heads, (num_v_heads/num_k_heads) * head_v_dim] -> [B, L, num_v_heads, head_v_dim]
+        value = value.reshape(value.size(0), value.size(1), -1, self.head_v_dim)
+        z = z.reshape(z.size(0), z.size(1), -1, self.head_v_dim)
+        b = b.reshape(b.size(0), b.size(1), self.num_v_heads)
+        a = a.reshape(a.size(0), a.size(1), self.num_v_heads)
+
+        return query, key, value, z, b, a
     
     def forward(
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         inference_mode: bool = False,
+        cache_params = None,
+        cache_position: Optional[torch.LongTensor] = None,
     ) -> torch.Tensor:
+        # Apply padding mask
+        hidden_states = apply_mask_to_padding_states(hidden_states, attention_mask)
+        
         batch_size, seq_len, _ = hidden_states.shape
         
-        # Project to QKVZ and BA
-        projected_qkvz = self.in_proj_qkvz(hidden_states)
-        projected_ba = self.in_proj_ba(hidden_states)
+        use_precomputed_states = (
+            cache_params is not None
+            and hasattr(cache_params, 'has_previous_state')
+            and cache_params.has_previous_state
+            and seq_len == 1
+            and cache_position is not None
+        )
         
-        # Split projections
-        query, key, value, z = self._split_qkvz(projected_qkvz)
-        beta, alpha = self._split_ba(projected_ba)
+        # Get conv/recurrent states from cache if exists
+        conv_state = None
+        recurrent_state = None
+        if cache_params is not None and hasattr(cache_params, 'conv_states'):
+            conv_state = cache_params.conv_states[self.layer_idx]
+            recurrent_state = cache_params.recurrent_states[self.layer_idx]
         
-        # Apply causal conv1d
-        qkv_cat = torch.cat([query, key, value], dim=-1)
-        qkv_cat = qkv_cat.transpose(1, 2)  # [B, D, L]
-        qkv_cat = F.silu(self.conv1d(qkv_cat)[:, :, :seq_len])
-        qkv_cat = qkv_cat.transpose(1, 2)  # [B, L, D]
+        # Project hidden states
+        projected_states_qkvz = self.in_proj_qkvz(hidden_states)
+        projected_states_ba = self.in_proj_ba(hidden_states)
         
-        query, key, value = torch.split(qkv_cat, [self.key_dim, self.key_dim, self.value_dim], dim=-1)
+        # Unpack projections
+        query, key, value, z, b, a = self.fix_query_key_value_ordering(
+            projected_states_qkvz, projected_states_ba
+        )
         
-        # Reshape for attention
-        query = query.view(batch_size, seq_len, self.num_k_heads, self.head_k_dim)
-        key = key.view(batch_size, seq_len, self.num_k_heads, self.head_k_dim)
-        value = value.view(batch_size, seq_len, self.num_v_heads, self.head_v_dim)
-        z = z.view(batch_size, seq_len, self.num_v_heads, self.head_v_dim)
+        # Flatten Q, K, V for conv
+        query, key, value = (x.reshape(x.shape[0], x.shape[1], -1) for x in (query, key, value))
         
-        # Compute gated delta rule (simplified version)
-        output = self._gated_delta_rule(query, key, value, beta, alpha)
+        # Concatenate and apply causal conv
+        mixed_qkv = torch.cat((query, key, value), dim=-1)
+        mixed_qkv = mixed_qkv.transpose(1, 2)  # [B, D, L]
         
-        # Apply gated norm and output projection
-        output = self.norm(output, z)
-        output = output.reshape(batch_size, seq_len, -1)
-        output = self.out_proj(output)
+        if use_precomputed_states and conv_state is not None:
+            # For single token generation, update conv state
+            state_len = conv_state.shape[-1]
+            hidden_states_new = torch.cat([conv_state, mixed_qkv], dim=-1).to(self.conv1d.weight.dtype)
+            if cache_params is not None:
+                cache_params.conv_states[self.layer_idx] = hidden_states_new[:, :, -state_len:]
+            out = F.conv1d(hidden_states_new, self.conv1d.weight.squeeze(1).unsqueeze(-1), 
+                          None, padding=0, groups=self.conv_dim)
+            mixed_qkv = F.silu(out[:, :, -seq_len:]).to(hidden_states.dtype)
+        else:
+            # Standard conv path
+            if cache_params is not None and hasattr(cache_params, 'conv_states'):
+                conv_state = F.pad(mixed_qkv, (self.conv_kernel_size - mixed_qkv.shape[-1], 0))
+                cache_params.conv_states[self.layer_idx] = conv_state
+            mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
         
-        return output
-    
-    def _split_qkvz(self, mixed):
-        """Split mixed projection into Q, K, V, Z."""
-        # Shape: [B, L, projection_size_qkvz]
-        q_size = self.key_dim
-        k_size = self.key_dim
-        v_size = self.value_dim
-        z_size = self.value_dim
-        query, key, value, z = torch.split(mixed, [q_size, k_size, v_size, z_size], dim=-1)
-        return query, key, value, z
-    
-    def _split_ba(self, mixed):
-        """Split mixed projection into beta and alpha."""
-        beta, alpha = torch.chunk(mixed, 2, dim=-1)
-        return beta, alpha
-    
-    def _gated_delta_rule(self, query, key, value, beta, alpha):
-        """
-        Simplified gated delta rule computation.
-        This is a basic implementation - the full FLA library version is more efficient.
-        """
-        batch_size, seq_len, num_v_heads, head_v_dim = value.shape
-        num_k_heads = query.shape[2]
-        head_k_dim = query.shape[3]
+        mixed_qkv = mixed_qkv.transpose(1, 2)  # [B, L, D]
         
-        # Expand K heads to match V heads
-        kv_ratio = num_v_heads // num_k_heads
-        query = query.repeat_interleave(kv_ratio, dim=2)
-        key = key.repeat_interleave(kv_ratio, dim=2)
+        # Split back to Q, K, V
+        query, key, value = torch.split(
+            mixed_qkv,
+            [self.key_dim, self.key_dim, self.value_dim],
+            dim=-1,
+        )
         
-        # Compute gate
-        g = -F.softplus(-self.A_log.view(1, 1, -1, 1) - alpha.unsqueeze(-1))
-        beta = torch.sigmoid(beta + self.dt_bias.view(1, 1, -1)).unsqueeze(-1)
+        # Reshape
+        query = query.reshape(query.shape[0], query.shape[1], -1, self.head_k_dim)
+        key = key.reshape(key.shape[0], key.shape[1], -1, self.head_k_dim)
+        value = value.reshape(value.shape[0], value.shape[1], -1, self.head_v_dim)
         
-        # Scale query
-        scale = 1.0 / (head_k_dim ** 0.5)
-        query = query * scale
+        # Compute beta and g (gate)
+        beta = b.sigmoid()
+        # If the model is loaded in fp16, without the .float() here, A might be -inf
+        g = -self.A_log.float().exp() * F.softplus(a.float() + self.dt_bias)
         
-        # Simple linear attention (not full delta rule for efficiency)
-        # Full implementation would use recurrent state
-        output = torch.zeros(batch_size, seq_len, num_v_heads, head_v_dim, 
-                           device=value.device, dtype=value.dtype)
+        # Expand K heads to V heads if needed
+        if self.num_v_heads // self.num_k_heads > 1:
+            query = query.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
+            key = key.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
         
-        # Causal linear attention approximation
-        kv = torch.einsum('bsnk,bsnv->bsnkv', key, value * beta)
-        kv_cumsum = kv.cumsum(dim=1)
-        output = torch.einsum('bsnk,bsnkv->bsnv', query, kv_cumsum)
+        # Apply gated delta rule
+        if not use_precomputed_states:
+            core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
+                query, key, value,
+                g=g, beta=beta,
+                initial_state=None,
+                output_final_state=cache_params is not None,
+                use_qk_l2norm_in_kernel=True,
+            )
+        else:
+            core_attn_out, last_recurrent_state = self.recurrent_gated_delta_rule(
+                query, key, value,
+                g=g, beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=cache_params is not None,
+                use_qk_l2norm_in_kernel=True,
+            )
+        
+        # Update cache
+        if cache_params is not None and hasattr(cache_params, 'recurrent_states'):
+            cache_params.recurrent_states[self.layer_idx] = last_recurrent_state
+        
+        # Apply gated norm
+        z_shape_og = z.shape
+        core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
+        z = z.reshape(-1, z.shape[-1])
+        core_attn_out = self.norm(core_attn_out, z)
+        core_attn_out = core_attn_out.reshape(z_shape_og)
+        core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
+        
+        # Output projection
+        output = self.out_proj(core_attn_out)
         
         return output
 
@@ -837,7 +1059,7 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
     Hybrid decoder layer for Qwen3-Next.
     
     - Full attention layers: use our implementation (for paged attention support)
-    - Linear attention layers: use HF's modules (GatedDeltaNet is complex)
+    - Linear attention layers: use our implementation (matches HF's GatedDeltaNet)
     """
     def __init__(self, config, layer_idx: int, use_tp: bool = False):
         super().__init__()
@@ -853,13 +1075,30 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
             self.layer_type = "full_attention"
         
         if self.layer_type == "linear_attention":
-            # Linear attention - use HF's modules (will be assigned during weight copy)
-            self.linear_attn = None
+            # Linear attention - use our GatedDeltaNet implementation
+            self.linear_attn = Qwen3NextGatedDeltaNetForEngine(config, layer_idx, use_tp=use_tp)
             self.self_attn = None
-            self.input_layernorm = None
-            self.post_attention_layernorm = None
-            self.mlp = None
-            self._use_hf_layer = True
+            self._use_hf_layer = False
+            
+            # LayerNorms
+            self.input_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
+            self.post_attention_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
+            
+            # MLP - determine if MoE or dense (same logic as full attention)
+            num_experts = getattr(config, 'num_experts', 0)
+            decoder_sparse_step = getattr(config, 'decoder_sparse_step', 1)
+            mlp_only_layers = getattr(config, 'mlp_only_layers', [])
+            
+            use_moe = (num_experts > 0 and 
+                      (layer_idx + 1) % decoder_sparse_step == 0 and 
+                      layer_idx not in mlp_only_layers)
+            
+            if use_moe:
+                self.mlp = Qwen3NextSparseMoeBlockForEngine(config, use_tp=use_tp)
+                self.is_moe = True
+            else:
+                self.mlp = Qwen3NextMLPForEngine(config, use_tp=use_tp)
+                self.is_moe = False
         else:
             # Full attention - use our implementation
             self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx, use_tp=use_tp)
@@ -898,34 +1137,31 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         cur_pos: int = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
-        # Linear attention - use HF modules directly
-        if self._use_hf_layer and self.linear_attn is not None:
-            residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
-            hidden_states = self.linear_attn(hidden_states)[0]
-            hidden_states = residual + hidden_states
-            
-            residual = hidden_states
-            hidden_states = self.post_attention_layernorm(hidden_states)
-            hidden_states = self.mlp(hidden_states)
-            hidden_states = residual + hidden_states
-            
-            return hidden_states, None, None
-        
-        # Full attention - use our implementation
+        # Token mixer
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         
-        hidden_states, k_cache, v_cache = self.self_attn(
-            hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            cos=cos,
-            sin=sin,
-            inference_mode=inference_mode,
-            max_generation=max_generation,
-            cur_pos=cur_pos,
-        )
+        if self.layer_type == "linear_attention" and self.linear_attn is not None:
+            # Linear attention
+            hidden_states = self.linear_attn(
+                hidden_states,
+                attention_mask=attention_mask,
+                inference_mode=inference_mode,
+            )
+            k_cache, v_cache = None, None
+        else:
+            # Full attention
+            hidden_states, k_cache, v_cache = self.self_attn(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                cos=cos,
+                sin=sin,
+                inference_mode=inference_mode,
+                max_generation=max_generation,
+                cur_pos=cur_pos,
+            )
+        
         hidden_states = residual + hidden_states
         
         # MLP
@@ -1297,19 +1533,12 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
         
         # ========== ATTENTION WEIGHTS ==========
         if has_gated_deltanet or detected_type == "linear_attention":
-            # Linear attention - use HF's full layer modules directly
+            # Linear attention - copy GatedDeltaNet weights to our implementation
             if is_main and layer_idx < 3:
-                print(f"    Layer {layer_idx}: Using HF's full layer modules directly (linear_attention)", flush=True)
+                print(f"    Layer {layer_idx}: Copying GatedDeltaNet weights to our implementation", flush=True)
             
-            engine_layer.input_layernorm = hf_layer.input_layernorm.to(device=target_device, dtype=target_dtype)
-            engine_layer.linear_attn = hf_attn.to(device=target_device, dtype=target_dtype)
-            engine_layer.post_attention_layernorm = hf_layer.post_attention_layernorm.to(device=target_device, dtype=target_dtype)
-            engine_layer.mlp = hf_layer.mlp.to(device=target_device, dtype=target_dtype)
-            engine_layer._use_hf_layer = True
-            
-            # Skip separate MLP/layernorm weight copy
-            has_moe = False
-            has_dense_mlp = False
+            _copy_gated_deltanet_weights(hf_attn, engine_layer.linear_attn,
+                                        config, use_tp, tp_rank, tp_world_size, layer_idx)
             
         elif has_k_proj or detected_type == "full_attention":
             # Full attention - copy weights to our implementation
@@ -1332,11 +1561,7 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
                         hf_layer.mlp.gate_proj is not None and
                         not has_moe)
         
-        # Skip if we used HF's layer directly (linear_attention)
-        if engine_layer._use_hf_layer:
-            if is_main and layer_idx < 3:
-                print(f"    Layer {layer_idx}: MLP/MoE already copied with HF layer", flush=True)
-        elif has_moe:
+        if has_moe:
             if is_main and layer_idx < 3:
                 print(f"    Layer {layer_idx}: Copying MoE weights", flush=True)
             _copy_moe_weights(hf_layer.mlp, engine_layer.mlp, config, 
@@ -1347,16 +1572,14 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
             _copy_dense_mlp_weights(hf_layer.mlp, engine_layer.mlp, config,
                                    use_tp, tp_rank, tp_world_size, layer_idx)
         else:
-            if is_main and not engine_layer._use_hf_layer:
+            if is_main:
                 print(f"  Layer {layer_idx}: SKIPPING MLP (unknown type)")
         
         # ========== LAYER NORMS ==========
-        # Skip if we used HF's layer directly (linear_attention)
-        if not engine_layer._use_hf_layer:
-            if hasattr(hf_layer, 'input_layernorm') and hf_layer.input_layernorm is not None:
-                _copy_to_device(hf_layer.input_layernorm.weight.data, engine_layer.input_layernorm.weight)
-            if hasattr(hf_layer, 'post_attention_layernorm') and hf_layer.post_attention_layernorm is not None:
-                _copy_to_device(hf_layer.post_attention_layernorm.weight.data, engine_layer.post_attention_layernorm.weight)
+        if hasattr(hf_layer, 'input_layernorm') and hf_layer.input_layernorm is not None:
+            _copy_to_device(hf_layer.input_layernorm.weight.data, engine_layer.input_layernorm.weight)
+        if hasattr(hf_layer, 'post_attention_layernorm') and hf_layer.post_attention_layernorm is not None:
+            _copy_to_device(hf_layer.post_attention_layernorm.weight.data, engine_layer.post_attention_layernorm.weight)
         
         # Free HF layer to save CPU memory
         hf_model.model.layers[layer_idx] = None
@@ -1374,11 +1597,10 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
         print(f"    LM head weight abs sum: {lmhead_sum:.4f}", flush=True)
         # Check first attention layer weights
         for layer in engine_model.model.layers:
-            if layer._use_hf_layer and layer.linear_attn is not None:
-                # Linear attention uses HF module directly
-                if hasattr(layer.linear_attn, 'in_proj_qkvz'):
-                    qkvz_sum = layer.linear_attn.in_proj_qkvz.weight.data.abs().sum().item()
-                    print(f"    First linear attention in_proj_qkvz abs sum: {qkvz_sum:.4f}", flush=True)
+            if layer.linear_attn is not None:
+                # Linear attention uses our GatedDeltaNet implementation
+                qkvz_sum = layer.linear_attn.in_proj_qkvz.weight.data.abs().sum().item()
+                print(f"    First linear attention in_proj_qkvz abs sum: {qkvz_sum:.4f}", flush=True)
                 break
             elif layer.self_attn is not None:
                 # Full attention uses our implementation
@@ -1744,10 +1966,14 @@ if __name__ == "__main__":
             ln_diff = (engine_hidden_ln - hf_hidden_ln).abs().max().item()
             print(f"  After input_layernorm: max diff = {ln_diff:.8f}")
             
-            # Linear attention output (both use HF modules now)
+            # Linear attention output
             if engine_layer0.linear_attn is not None:
-                engine_attn_out = engine_layer0.linear_attn(engine_hidden_ln)[0]
-                hf_attn_out = hf_layer0.linear_attn(hf_hidden_ln)[0]
+                # Our implementation returns just the tensor, HF returns tuple
+                engine_attn_out = engine_layer0.linear_attn(engine_hidden_ln)
+                hf_attn_out = hf_layer0.linear_attn(hf_hidden_ln)
+                # HF returns output directly now (not wrapped)
+                if isinstance(hf_attn_out, tuple):
+                    hf_attn_out = hf_attn_out[0]
                 attn_diff = (engine_attn_out - hf_attn_out).abs().max().item()
                 print(f"  After linear_attn: max diff = {attn_diff:.8f}")
                 print(f"    Engine: mean={engine_attn_out.mean().item():.6f}, std={engine_attn_out.std().item():.6f}")
