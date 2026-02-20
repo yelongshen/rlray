@@ -830,7 +830,9 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         
         # Token mixer (attention)
         if self.layer_type == "linear_attention":
-            self.linear_attn = Qwen3NextGatedDeltaNetForEngine(config, layer_idx, use_tp=use_tp)
+            # For linear attention, we'll use HF's module directly
+            # It will be assigned later during weight copy
+            self.linear_attn = None  # Placeholder, will be replaced with HF module
             self.self_attn = None
         else:  # full_attention
             self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx, use_tp=use_tp)
@@ -872,11 +874,9 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         
         # Token mixer
         if self.layer_type == "linear_attention" and self.linear_attn is not None:
-            hidden_states = self.linear_attn(
-                hidden_states,
-                attention_mask=attention_mask,
-                inference_mode=inference_mode,
-            )
+            # Use HF's linear_attn module directly
+            # HF module returns just the output tensor
+            hidden_states = self.linear_attn(hidden_states)[0]
             k_cache, v_cache = None, None
         else:
             hidden_states, k_cache, v_cache = self.self_attn(
@@ -1261,12 +1261,12 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
         # ========== ATTENTION WEIGHTS ==========
         # Engine model always uses self_attn for full attention, linear_attn for linear attention
         if has_gated_deltanet or detected_type == "linear_attention":
-            # Linear attention (GatedDeltaNet) layer
-            engine_attn = engine_layer.linear_attn if hasattr(engine_layer, 'linear_attn') and engine_layer.linear_attn is not None else engine_layer.self_attn
+            # Linear attention (GatedDeltaNet) layer - use HF's module directly
             if is_main and layer_idx < 3:
-                print(f"    Layer {layer_idx}: Copying GatedDeltaNet weights", flush=True)
-            _copy_gated_deltanet_weights(hf_attn, engine_attn,
-                                        config, use_tp, tp_rank, tp_world_size, layer_idx)
+                print(f"    Layer {layer_idx}: Using HF's linear_attn module directly", flush=True)
+            # Move HF's linear_attn to target device and assign to engine layer
+            hf_attn_module = hf_attn.to(device=target_device, dtype=target_dtype)
+            engine_layer.linear_attn = hf_attn_module
         elif has_k_proj or detected_type == "full_attention":
             # Full attention layer
             engine_attn = engine_layer.self_attn if hasattr(engine_layer, 'self_attn') and engine_layer.self_attn is not None else engine_layer.linear_attn
@@ -1325,15 +1325,18 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
         lmhead_sum = engine_model.lm_head.weight.data.abs().sum().item()
         print(f"    Embedding weight abs sum: {embed_sum:.4f}", flush=True)
         print(f"    LM head weight abs sum: {lmhead_sum:.4f}", flush=True)
-        # Check first layer attention weights
-        first_attn_layer = None
+        # Check first attention layer weights (could be full attention or linear attention)
         for layer in engine_model.model.layers:
             if layer.self_attn is not None:
-                first_attn_layer = layer.self_attn
+                q_sum = layer.self_attn.q_proj.weight.data.abs().sum().item()
+                print(f"    First full attention q_proj abs sum: {q_sum:.4f}", flush=True)
                 break
-        if first_attn_layer is not None:
-            q_sum = first_attn_layer.q_proj.weight.data.abs().sum().item()
-            print(f"    First attention q_proj abs sum: {q_sum:.4f}", flush=True)
+            elif layer.linear_attn is not None:
+                # Linear attention uses HF module directly
+                if hasattr(layer.linear_attn, 'in_proj_qkvz'):
+                    qkvz_sum = layer.linear_attn.in_proj_qkvz.weight.data.abs().sum().item()
+                    print(f"    First linear attention in_proj_qkvz abs sum: {qkvz_sum:.4f}", flush=True)
+                break
     
     if is_main:
         print("  Weight copy complete!", flush=True)
