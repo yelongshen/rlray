@@ -8,17 +8,27 @@ The in-house LLMEngine expects:
 - model(input_ids=..., position_ids=..., inference_mode=True, logits_to_keep=...) -> (_, logits, _, _)
 - Attention layers with k_cache and v_cache attributes for paged attention
 
+Supports tensor parallelism for multi-GPU inference.
+
 Usage:
     from qwen3_next_engine import Qwen3NextForLLMEngine, load_qwen3_next_for_engine
     
+    # Single GPU
     model, tokenizer, config = load_qwen3_next_for_engine("Qwen/Qwen3-Coder-Next")
     engine = LLMEngine(model, config, "cuda")
+    
+    # Tensor Parallel (run with torchrun --nproc_per_node=2)
+    model, tokenizer, config = load_qwen3_next_for_engine(
+        "Qwen/Qwen3-Coder-Next", 
+        tensor_parallel_size=2
+    )
 """
 
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 from typing import Optional, Tuple, List, Union
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 
@@ -48,6 +58,148 @@ except ImportError:
     def reset_context(): pass
 
 
+# ============================================================================
+# Tensor Parallel Utilities
+# ============================================================================
+
+_TENSOR_PARALLEL_GROUP = None
+_TENSOR_PARALLEL_WORLD_SIZE = 1
+_TENSOR_PARALLEL_RANK = 0
+
+
+def init_tensor_parallel(tensor_parallel_size: int = 1):
+    """Initialize tensor parallel group."""
+    global _TENSOR_PARALLEL_GROUP, _TENSOR_PARALLEL_WORLD_SIZE, _TENSOR_PARALLEL_RANK
+    
+    if tensor_parallel_size <= 1:
+        _TENSOR_PARALLEL_WORLD_SIZE = 1
+        _TENSOR_PARALLEL_RANK = 0
+        return
+    
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+    
+    world_size = dist.get_world_size()
+    rank = dist.get_rank()
+    
+    assert world_size % tensor_parallel_size == 0, \
+        f"World size {world_size} must be divisible by tensor_parallel_size {tensor_parallel_size}"
+    
+    num_tp_groups = world_size // tensor_parallel_size
+    
+    for i in range(num_tp_groups):
+        ranks = list(range(i * tensor_parallel_size, (i + 1) * tensor_parallel_size))
+        group = dist.new_group(ranks)
+        if rank in ranks:
+            _TENSOR_PARALLEL_GROUP = group
+            _TENSOR_PARALLEL_WORLD_SIZE = tensor_parallel_size
+            _TENSOR_PARALLEL_RANK = rank - i * tensor_parallel_size
+    
+    print(f"Initialized TP: rank={_TENSOR_PARALLEL_RANK}/{_TENSOR_PARALLEL_WORLD_SIZE}")
+
+
+def get_tp_world_size() -> int:
+    return _TENSOR_PARALLEL_WORLD_SIZE
+
+
+def get_tp_rank() -> int:
+    return _TENSOR_PARALLEL_RANK
+
+
+def get_tp_group():
+    return _TENSOR_PARALLEL_GROUP
+
+
+class _ReduceFromTP(torch.autograd.Function):
+    """All-reduce in tensor parallel group."""
+    @staticmethod
+    def forward(ctx, input_):
+        if get_tp_world_size() == 1:
+            return input_
+        dist.all_reduce(input_, group=get_tp_group())
+        return input_
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output
+
+
+def reduce_from_tp(input_):
+    return _ReduceFromTP.apply(input_)
+
+
+class _AllGatherFromTP(torch.autograd.Function):
+    """All-gather in tensor parallel group."""
+    @staticmethod
+    def forward(ctx, input_):
+        if get_tp_world_size() == 1:
+            return input_
+        world_size = get_tp_world_size()
+        output_list = [torch.empty_like(input_) for _ in range(world_size)]
+        dist.all_gather(output_list, input_, group=get_tp_group())
+        return torch.cat(output_list, dim=-1)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        world_size = get_tp_world_size()
+        rank = get_tp_rank()
+        dim_size = grad_output.shape[-1] // world_size
+        return grad_output[..., rank * dim_size:(rank + 1) * dim_size]
+
+
+def all_gather_from_tp(input_):
+    return _AllGatherFromTP.apply(input_)
+
+
+class ColumnParallelLinear(nn.Module):
+    """Column-parallel linear layer for tensor parallelism."""
+    def __init__(self, input_size: int, output_size: int, bias: bool = False, gather_output: bool = True):
+        super().__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        self.gather_output = gather_output
+        
+        world_size = get_tp_world_size()
+        self.output_size_per_partition = output_size // world_size
+        
+        self.weight = nn.Parameter(torch.empty(self.output_size_per_partition, input_size))
+        if bias:
+            self.bias = nn.Parameter(torch.empty(self.output_size_per_partition))
+        else:
+            self.register_parameter('bias', None)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output = F.linear(x, self.weight, self.bias)
+        if self.gather_output:
+            output = all_gather_from_tp(output)
+        return output
+
+
+class RowParallelLinear(nn.Module):
+    """Row-parallel linear layer for tensor parallelism."""
+    def __init__(self, input_size: int, output_size: int, bias: bool = False, input_is_parallel: bool = True):
+        super().__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        self.input_is_parallel = input_is_parallel
+        
+        world_size = get_tp_world_size()
+        self.input_size_per_partition = input_size // world_size
+        
+        self.weight = nn.Parameter(torch.empty(output_size, self.input_size_per_partition))
+        if bias:
+            self.bias = nn.Parameter(torch.empty(output_size))
+        else:
+            self.register_parameter('bias', None)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output = F.linear(x, self.weight)
+        output = reduce_from_tp(output)
+        if self.bias is not None:
+            output = output + self.bias
+        return output
+
+
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
@@ -71,6 +223,11 @@ def store_kvcache(key_states: torch.Tensor, value_states: torch.Tensor,
     """Store key/value states into paged KV cache."""
     k_cache.index_copy_(0, slot_mapping, key_states)
     v_cache.index_copy_(0, slot_mapping, value_states)
+
+
+def get_rms_norm_eps(config):
+    """Get RMS norm epsilon from config with fallback."""
+    return getattr(config, 'rms_norm_eps', getattr(config, 'layer_norm_eps', 1e-6))
 
 
 class Qwen3NextRMSNorm(nn.Module):
@@ -122,11 +279,13 @@ class Qwen3NextAttentionForEngine(nn.Module):
     - Uses paged attention with external k_cache/v_cache
     - Supports inference_mode parameter
     - Uses flash_attn_varlen_func and flash_attn_with_kvcache
+    - Supports tensor parallelism
     """
-    def __init__(self, config, layer_idx: int):
+    def __init__(self, config, layer_idx: int, use_tp: bool = False):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
+        self.use_tp = use_tp
         
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
@@ -134,15 +293,48 @@ class Qwen3NextAttentionForEngine(nn.Module):
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         
-        # Projections (Qwen3-Next uses combined q_proj that outputs q and gate)
-        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim * 2, bias=False)
-        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
+        # For tensor parallel, split heads across GPUs
+        tp_world_size = get_tp_world_size() if use_tp else 1
+        self.num_heads_per_partition = self.num_heads // tp_world_size
+        self.num_kv_heads_per_partition = self.num_key_value_heads // tp_world_size
+        
+        if use_tp and tp_world_size > 1:
+            # Projections with tensor parallelism
+            # q_proj outputs q and gate concatenated, so output is num_heads * head_dim * 2
+            self.q_proj = ColumnParallelLinear(
+                self.hidden_size, 
+                self.num_heads * self.head_dim * 2, 
+                bias=False, 
+                gather_output=False
+            )
+            self.k_proj = ColumnParallelLinear(
+                self.hidden_size, 
+                self.num_key_value_heads * self.head_dim, 
+                bias=False, 
+                gather_output=False
+            )
+            self.v_proj = ColumnParallelLinear(
+                self.hidden_size, 
+                self.num_key_value_heads * self.head_dim, 
+                bias=False, 
+                gather_output=False
+            )
+            self.o_proj = RowParallelLinear(
+                self.num_heads * self.head_dim, 
+                self.hidden_size, 
+                bias=False, 
+                input_is_parallel=True
+            )
+        else:
+            # Standard projections
+            self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim * 2, bias=False)
+            self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
+            self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
+            self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
         
         # QK norm (Qwen3-Next specific)
-        self.q_norm = Qwen3NextRMSNorm(self.head_dim, eps=config.rms_norm_eps)
-        self.k_norm = Qwen3NextRMSNorm(self.head_dim, eps=config.rms_norm_eps)
+        self.q_norm = Qwen3NextRMSNorm(self.head_dim, eps=get_rms_norm_eps(config))
+        self.k_norm = Qwen3NextRMSNorm(self.head_dim, eps=get_rms_norm_eps(config))
         
         # KV cache for paged attention (will be set by LLMEngine)
         self.k_cache = None
@@ -161,13 +353,17 @@ class Qwen3NextAttentionForEngine(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         bsz, q_len, _ = hidden_states.size()
         
+        # Use partition sizes for TP
+        num_heads = self.num_heads_per_partition if self.use_tp else self.num_heads
+        num_kv_heads = self.num_kv_heads_per_partition if self.use_tp else self.num_key_value_heads
+        
         # Compute Q, K, V (Qwen3-Next has q_proj output q and gate concatenated)
         qg = self.q_proj(hidden_states)
         query_states, gate = torch.chunk(qg, 2, dim=-1)
         
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim)
-        key_states = self.k_proj(hidden_states).view(bsz, q_len, self.num_key_value_heads, self.head_dim)
-        value_states = self.v_proj(hidden_states).view(bsz, q_len, self.num_key_value_heads, self.head_dim)
+        query_states = query_states.view(bsz, q_len, num_heads, self.head_dim)
+        key_states = self.k_proj(hidden_states).view(bsz, q_len, num_kv_heads, self.head_dim)
+        value_states = self.v_proj(hidden_states).view(bsz, q_len, num_kv_heads, self.head_dim)
         
         # Apply QK norm
         query_states = self.q_norm(query_states)
@@ -199,9 +395,9 @@ class Qwen3NextAttentionForEngine(nn.Module):
             value_cache = None
             context = get_context()
             
-            query_states = query_states.view(-1, self.num_heads, self.head_dim).contiguous()
-            key_states = key_states.view(-1, self.num_key_value_heads, self.head_dim).contiguous()
-            value_states = value_states.view(-1, self.num_key_value_heads, self.head_dim).contiguous()
+            query_states = query_states.view(-1, num_heads, self.head_dim).contiguous()
+            key_states = key_states.view(-1, num_kv_heads, self.head_dim).contiguous()
+            value_states = value_states.view(-1, num_kv_heads, self.head_dim).contiguous()
             
             store_kvcache(key_states, value_states, self.k_cache, self.v_cache, context.slot_mapping)
             page_attention = True
@@ -258,14 +454,32 @@ class Qwen3NextAttentionForEngine(nn.Module):
 
 
 class Qwen3NextMLPForEngine(nn.Module):
-    """MLP for Qwen3-Next."""
-    def __init__(self, config):
+    """MLP for Qwen3-Next with tensor parallelism support."""
+    def __init__(self, config, use_tp: bool = False):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.use_tp = use_tp
+        
+        tp_world_size = get_tp_world_size() if use_tp else 1
+        
+        if use_tp and tp_world_size > 1:
+            # gate_proj and up_proj are column parallel
+            self.gate_proj = ColumnParallelLinear(
+                self.hidden_size, self.intermediate_size, bias=False, gather_output=False
+            )
+            self.up_proj = ColumnParallelLinear(
+                self.hidden_size, self.intermediate_size, bias=False, gather_output=False
+            )
+            # down_proj is row parallel
+            self.down_proj = RowParallelLinear(
+                self.intermediate_size, self.hidden_size, bias=False, input_is_parallel=True
+            )
+        else:
+            self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+            self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+            self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        
         self.act_fn = nn.SiLU()
 
     def forward(self, x):
@@ -273,14 +487,14 @@ class Qwen3NextMLPForEngine(nn.Module):
 
 
 class Qwen3NextDecoderLayerForEngine(nn.Module):
-    """Decoder layer adapted for LLM Engine (full attention only)."""
-    def __init__(self, config, layer_idx: int):
+    """Decoder layer adapted for LLM Engine (full attention only) with TP support."""
+    def __init__(self, config, layer_idx: int, use_tp: bool = False):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx)
-        self.mlp = Qwen3NextMLPForEngine(config)
-        self.input_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx, use_tp=use_tp)
+        self.mlp = Qwen3NextMLPForEngine(config, use_tp=use_tp)
+        self.input_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
+        self.post_attention_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
 
     def forward(
         self,
@@ -317,20 +531,29 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
 
 
 class Qwen3NextModelForEngine(nn.Module):
-    """Qwen3-Next Model backbone adapted for LLM Engine."""
-    def __init__(self, config):
+    """Qwen3-Next Model backbone adapted for LLM Engine with TP support."""
+    def __init__(self, config, use_tp: bool = False):
         super().__init__()
         self.config = config
+        self.use_tp = use_tp
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([
-            Qwen3NextDecoderLayerForEngine(config, layer_idx)
+            Qwen3NextDecoderLayerForEngine(config, layer_idx, use_tp=use_tp)
             for layer_idx in range(config.num_hidden_layers)
         ])
-        self.norm = Qwen3NextRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
+        
+        # Get rope_theta with fallback (Qwen3-Next may use different attribute names)
+        rope_theta = getattr(config, 'rope_theta', None)
+        if rope_theta is None:
+            rope_theta = getattr(config, 'rope_base', None)
+        if rope_theta is None:
+            rope_theta = getattr(config, 'rotary_pct_base', 1000000.0)  # Default
+        
         self.rotary_emb = Qwen3NextRotaryEmbedding(
             config.hidden_size // config.num_attention_heads,
-            max_position_embeddings=config.max_position_embeddings,
-            base=config.rope_theta,
+            max_position_embeddings=getattr(config, 'max_position_embeddings', 131072),
+            base=rope_theta,
         )
         
     def forward(
@@ -377,12 +600,23 @@ class Qwen3NextForLLMEngine(nn.Module):
     
     Key interface requirement for LLMEngine:
     - forward(input_ids, position_ids, inference_mode=True, logits_to_keep=...) -> (_, logits, _, _)
+    
+    Supports tensor parallelism for multi-GPU inference.
     """
-    def __init__(self, config):
+    def __init__(self, config, use_tp: bool = False):
         super().__init__()
         self.config = config
-        self.model = Qwen3NextModelForEngine(config)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.use_tp = use_tp
+        self.model = Qwen3NextModelForEngine(config, use_tp=use_tp)
+        
+        # lm_head can be column parallel or regular
+        tp_world_size = get_tp_world_size() if use_tp else 1
+        if use_tp and tp_world_size > 1:
+            self.lm_head = ColumnParallelLinear(
+                config.hidden_size, config.vocab_size, bias=False, gather_output=True
+            )
+        else:
+            self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         
     def forward(
         self,
@@ -422,17 +656,37 @@ class Qwen3NextForLLMEngine(nn.Module):
         return None, logits, None, next_cache
 
 
-def load_qwen3_next_for_engine(model_path: str, device: str = "cuda", torch_dtype=torch.bfloat16):
+def load_qwen3_next_for_engine(
+    model_path: str, 
+    device: str = "cuda", 
+    torch_dtype=torch.bfloat16,
+    tensor_parallel_size: int = 1
+):
     """
     Load Qwen3-Next model and convert to LLMEngine-compatible format.
     
     This loads the HuggingFace model and copies weights to our custom model.
+    Supports tensor parallelism for multi-GPU inference.
+    
+    Args:
+        model_path: HuggingFace model path or local path
+        device: Device to load model to (e.g., "cuda", "cuda:0")
+        torch_dtype: Data type for model weights
+        tensor_parallel_size: Number of GPUs for tensor parallelism
     
     Returns:
         model: Qwen3NextForLLMEngine instance
         tokenizer: AutoTokenizer instance
         llm_config: Config object for LLMEngine
     """
+    # Initialize tensor parallelism if needed
+    use_tp = tensor_parallel_size > 1
+    if use_tp:
+        init_tensor_parallel(tensor_parallel_size)
+        rank = get_tp_rank()
+        device = f"cuda:{rank}"
+        print(f"Tensor parallel enabled: rank {rank}/{tensor_parallel_size}, device {device}")
+    
     print(f"Loading Qwen3-Next from {model_path}...")
     
     # Load HuggingFace model
@@ -445,12 +699,12 @@ def load_qwen3_next_for_engine(model_path: str, device: str = "cuda", torch_dtyp
         trust_remote_code=True
     )
     
-    # Create our engine-compatible model
-    model = Qwen3NextForLLMEngine(hf_config)
+    # Create our engine-compatible model with TP support
+    model = Qwen3NextForLLMEngine(hf_config, use_tp=use_tp)
     
-    # Copy weights from HuggingFace model
+    # Copy weights from HuggingFace model (handles TP sharding)
     print("Copying weights to engine-compatible model...")
-    _copy_weights(hf_model, model, hf_config)
+    _copy_weights(hf_model, model, hf_config, use_tp=use_tp)
     
     # Move to device
     model = model.to(device=device, dtype=torch_dtype)
@@ -466,6 +720,7 @@ def load_qwen3_next_for_engine(model_path: str, device: str = "cuda", torch_dtyp
     llm_config.num_key_value_heads = hf_config.num_key_value_heads
     llm_config.num_hidden_layers = hf_config.num_hidden_layers
     llm_config.eos_token_id = tokenizer.eos_token_id
+    llm_config.tensor_parallel_size = tensor_parallel_size
     
     # Clean up HF model
     del hf_model
@@ -475,16 +730,28 @@ def load_qwen3_next_for_engine(model_path: str, device: str = "cuda", torch_dtyp
     return model, tokenizer, llm_config
 
 
-def _copy_weights(hf_model, engine_model, config):
-    """Copy weights from HuggingFace model to our engine-compatible model."""
+def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
+    """Copy weights from HuggingFace model to our engine-compatible model.
     
-    # Copy embeddings
+    For tensor parallelism, this shards the weights across GPUs.
+    """
+    tp_rank = get_tp_rank() if use_tp else 0
+    tp_world_size = get_tp_world_size() if use_tp else 1
+    
+    # Copy embeddings (replicated across all ranks)
     engine_model.model.embed_tokens.weight.data.copy_(hf_model.model.embed_tokens.weight.data)
     
-    # Copy lm_head
-    engine_model.lm_head.weight.data.copy_(hf_model.lm_head.weight.data)
+    # Copy lm_head (sharded if TP)
+    if use_tp and tp_world_size > 1:
+        vocab_size = config.vocab_size
+        shard_size = vocab_size // tp_world_size
+        start = tp_rank * shard_size
+        end = start + shard_size
+        engine_model.lm_head.weight.data.copy_(hf_model.lm_head.weight.data[start:end])
+    else:
+        engine_model.lm_head.weight.data.copy_(hf_model.lm_head.weight.data)
     
-    # Copy final norm
+    # Copy final norm (replicated)
     engine_model.model.norm.weight.data.copy_(hf_model.model.norm.weight.data)
     
     # Copy layers
@@ -496,13 +763,49 @@ def _copy_weights(hf_model, engine_model, config):
         layer_type = config.layer_types[layer_idx] if hasattr(config, 'layer_types') else "full_attention"
         
         if layer_type == "full_attention" and hasattr(hf_layer, 'self_attn'):
-            # Attention weights
-            engine_layer.self_attn.q_proj.weight.data.copy_(hf_layer.self_attn.q_proj.weight.data)
-            engine_layer.self_attn.k_proj.weight.data.copy_(hf_layer.self_attn.k_proj.weight.data)
-            engine_layer.self_attn.v_proj.weight.data.copy_(hf_layer.self_attn.v_proj.weight.data)
-            engine_layer.self_attn.o_proj.weight.data.copy_(hf_layer.self_attn.o_proj.weight.data)
+            # Get attention dimensions
+            num_heads = config.num_attention_heads
+            num_kv_heads = config.num_key_value_heads
+            head_dim = config.hidden_size // num_heads
             
-            # QK norm
+            if use_tp and tp_world_size > 1:
+                # Shard attention weights across TP ranks
+                heads_per_rank = num_heads // tp_world_size
+                kv_heads_per_rank = num_kv_heads // tp_world_size
+                
+                # q_proj: [num_heads * head_dim * 2, hidden_size] -> shard output dim
+                q_start = tp_rank * heads_per_rank * head_dim * 2
+                q_end = q_start + heads_per_rank * head_dim * 2
+                engine_layer.self_attn.q_proj.weight.data.copy_(
+                    hf_layer.self_attn.q_proj.weight.data[q_start:q_end]
+                )
+                
+                # k_proj: [num_kv_heads * head_dim, hidden_size] -> shard output dim
+                k_start = tp_rank * kv_heads_per_rank * head_dim
+                k_end = k_start + kv_heads_per_rank * head_dim
+                engine_layer.self_attn.k_proj.weight.data.copy_(
+                    hf_layer.self_attn.k_proj.weight.data[k_start:k_end]
+                )
+                
+                # v_proj: same as k_proj
+                engine_layer.self_attn.v_proj.weight.data.copy_(
+                    hf_layer.self_attn.v_proj.weight.data[k_start:k_end]
+                )
+                
+                # o_proj: [hidden_size, num_heads * head_dim] -> shard input dim
+                o_start = tp_rank * heads_per_rank * head_dim
+                o_end = o_start + heads_per_rank * head_dim
+                engine_layer.self_attn.o_proj.weight.data.copy_(
+                    hf_layer.self_attn.o_proj.weight.data[:, o_start:o_end]
+                )
+            else:
+                # No TP - copy full weights
+                engine_layer.self_attn.q_proj.weight.data.copy_(hf_layer.self_attn.q_proj.weight.data)
+                engine_layer.self_attn.k_proj.weight.data.copy_(hf_layer.self_attn.k_proj.weight.data)
+                engine_layer.self_attn.v_proj.weight.data.copy_(hf_layer.self_attn.v_proj.weight.data)
+                engine_layer.self_attn.o_proj.weight.data.copy_(hf_layer.self_attn.o_proj.weight.data)
+            
+            # QK norm (replicated across ranks)
             if hasattr(hf_layer.self_attn, 'q_norm'):
                 engine_layer.self_attn.q_norm.weight.data.copy_(hf_layer.self_attn.q_norm.weight.data)
             if hasattr(hf_layer.self_attn, 'k_norm'):
@@ -510,11 +813,32 @@ def _copy_weights(hf_model, engine_model, config):
         
         # MLP weights (for non-MoE layers)
         if hasattr(hf_layer, 'mlp') and hasattr(hf_layer.mlp, 'gate_proj'):
-            engine_layer.mlp.gate_proj.weight.data.copy_(hf_layer.mlp.gate_proj.weight.data)
-            engine_layer.mlp.up_proj.weight.data.copy_(hf_layer.mlp.up_proj.weight.data)
-            engine_layer.mlp.down_proj.weight.data.copy_(hf_layer.mlp.down_proj.weight.data)
+            intermediate_size = config.intermediate_size
+            
+            if use_tp and tp_world_size > 1:
+                # Shard MLP weights
+                mlp_shard = intermediate_size // tp_world_size
+                mlp_start = tp_rank * mlp_shard
+                mlp_end = mlp_start + mlp_shard
+                
+                # gate_proj & up_proj: [intermediate_size, hidden_size] -> shard output dim
+                engine_layer.mlp.gate_proj.weight.data.copy_(
+                    hf_layer.mlp.gate_proj.weight.data[mlp_start:mlp_end]
+                )
+                engine_layer.mlp.up_proj.weight.data.copy_(
+                    hf_layer.mlp.up_proj.weight.data[mlp_start:mlp_end]
+                )
+                
+                # down_proj: [hidden_size, intermediate_size] -> shard input dim
+                engine_layer.mlp.down_proj.weight.data.copy_(
+                    hf_layer.mlp.down_proj.weight.data[:, mlp_start:mlp_end]
+                )
+            else:
+                engine_layer.mlp.gate_proj.weight.data.copy_(hf_layer.mlp.gate_proj.weight.data)
+                engine_layer.mlp.up_proj.weight.data.copy_(hf_layer.mlp.up_proj.weight.data)
+                engine_layer.mlp.down_proj.weight.data.copy_(hf_layer.mlp.down_proj.weight.data)
         
-        # Layer norms
+        # Layer norms (replicated across ranks)
         engine_layer.input_layernorm.weight.data.copy_(hf_layer.input_layernorm.weight.data)
         engine_layer.post_attention_layernorm.weight.data.copy_(hf_layer.post_attention_layernorm.weight.data)
 
@@ -528,22 +852,34 @@ if __name__ == "__main__":
     parser.add_argument("--test_engine", action="store_true", help="Test with LLMEngine")
     parser.add_argument("--prompt", type=str, default="What is 2+2?")
     parser.add_argument("--gpu_ids", type=str, default=None, help="GPU IDs to use (e.g., '0' or '2,3')")
+    parser.add_argument("--tensor_parallel", type=int, default=1, help="Tensor parallel size (use with torchrun)")
     args = parser.parse_args()
     
-    # Set GPU
-    if args.gpu_ids is not None:
+    # Set GPU for single-GPU mode
+    if args.gpu_ids is not None and args.tensor_parallel == 1:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
         print(f"Using GPUs: {args.gpu_ids}")
-    device = "cuda:0"
+    
+    # For TP mode, device is set by init_tensor_parallel
+    device = "cuda:0" if args.tensor_parallel == 1 else "cuda"
     
     print(f"Testing load_qwen3_next_for_engine with {args.model_path}")
-    model, tokenizer, config = load_qwen3_next_for_engine(args.model_path, device=device)
+    print(f"Tensor parallel size: {args.tensor_parallel}")
+    
+    model, tokenizer, config = load_qwen3_next_for_engine(
+        args.model_path, 
+        device=device,
+        tensor_parallel_size=args.tensor_parallel
+    )
     print(f"Model loaded: {type(model)}")
     print(f"Config: hidden_size={config.hidden_size}, num_layers={config.num_hidden_layers}")
     
+    # Get the actual device model is on
+    model_device = next(model.parameters()).device
+    
     # Test 1: Direct forward pass
     print("\n=== Test 1: Direct Forward Pass ===")
-    test_input = tokenizer.encode("Hello", return_tensors="pt").to(device)
+    test_input = tokenizer.encode("Hello", return_tensors="pt").to(model_device)
     with torch.no_grad():
         _, logits, _, _ = model(test_input, inference_mode=False)
     print(f"Input shape: {test_input.shape}")
@@ -556,7 +892,7 @@ if __name__ == "__main__":
         from llm_engine import LLMEngine
         
         config.eos_token_id = tokenizer.eos_token_id
-        engine = LLMEngine(model, config, device)
+        engine = LLMEngine(model, config, str(model_device))
         
         # Prepare prompt with chat template
         messages = [{"role": "user", "content": args.prompt}]
