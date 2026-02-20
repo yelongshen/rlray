@@ -1125,27 +1125,35 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
         layer_types = getattr(config, 'layer_types', None)
         layer_type = layer_types[layer_idx] if layer_types and layer_idx < len(layer_types) else "full_attention"
         
-        # Detect layer type from structure if config is ambiguous
+        # Detect layer type from structure - check actual weight sizes
         has_k_proj = (hasattr(hf_layer, 'self_attn') and 
                      hasattr(hf_layer.self_attn, 'k_proj') and 
                      hf_layer.self_attn.k_proj is not None and
-                     hasattr(hf_layer.self_attn.k_proj, 'weight'))
+                     hasattr(hf_layer.self_attn.k_proj, 'weight') and
+                     hf_layer.self_attn.k_proj.weight.numel() > 0)  # Check actual size
         
         has_gated_deltanet = (hasattr(hf_layer, 'self_attn') and 
                              hasattr(hf_layer.self_attn, 'in_proj_qkvz') and 
-                             hf_layer.self_attn.in_proj_qkvz is not None)
+                             hf_layer.self_attn.in_proj_qkvz is not None and
+                             hasattr(hf_layer.self_attn.in_proj_qkvz, 'weight') and
+                             hf_layer.self_attn.in_proj_qkvz.weight.numel() > 0)  # Check actual size
         
         # ========== ATTENTION WEIGHTS ==========
-        if has_k_proj and layer_type == "full_attention":
+        # Prioritize structure detection over config (config may be wrong for some layers)
+        if has_gated_deltanet and not has_k_proj:
+            # Linear attention (GatedDeltaNet) layer - detected by structure
+            _copy_gated_deltanet_weights(hf_layer.self_attn, engine_layer.self_attn,
+                                        config, use_tp, tp_rank, tp_world_size, layer_idx)
+        elif has_k_proj:
             # Full attention layer
             _copy_full_attention_weights(hf_layer.self_attn, engine_layer.self_attn, 
                                         config, use_tp, tp_rank, tp_world_size, layer_idx)
-        elif has_gated_deltanet or layer_type == "linear_attention":
-            # Linear attention (GatedDeltaNet) layer
+        elif layer_type == "linear_attention":
+            # Fallback to config-based detection
             _copy_gated_deltanet_weights(hf_layer.self_attn, engine_layer.self_attn,
                                         config, use_tp, tp_rank, tp_world_size, layer_idx)
         else:
-            print(f"  Layer {layer_idx}: Skipping attention (unknown type)")
+            print(f"  Layer {layer_idx}: Skipping attention (unknown type, has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet})")
         
         # ========== MLP/MoE WEIGHTS ==========
         # Detect if this is MoE or dense MLP
