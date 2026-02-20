@@ -1120,6 +1120,9 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
     tp_world_size = get_tp_world_size() if use_tp else 1
     is_main = tp_rank == 0
     
+    if is_main:
+        print(f"  TP rank: {tp_rank}, world_size: {tp_world_size}", flush=True)
+    
     # Copy embeddings (replicated across all ranks)
     if is_main:
         print("  Copying embeddings...", flush=True)
