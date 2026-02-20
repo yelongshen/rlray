@@ -6,6 +6,7 @@ This script evaluates Qwen-Next model on AIME24 math competition problems.
 Supports multiple inference backends:
 - HuggingFace generate() - Simple, works with any HF model
 - vLLM API - Fast inference via vLLM server (OpenAI-compatible API)
+- In-house LLMEngine - Custom engine with paged attention
 
 Usage:
     # Option 1: Direct HuggingFace inference
@@ -20,6 +21,12 @@ Usage:
     python aime24_qwen_eval.py \
         --use_vllm \
         --vllm_url http://localhost:8000/v1 \
+        --model_path Qwen/Qwen3-Coder-Next \
+        --data_path ../eval/aime24_test.jsonl
+    
+    # Option 3: In-house LLMEngine (custom paged attention)
+    python aime24_qwen_eval.py \
+        --use_engine \
         --model_path Qwen/Qwen3-Coder-Next \
         --data_path ../eval/aime24_test.jsonl
 """
@@ -278,6 +285,116 @@ class AIME24Evaluator:
         )
 
 # ============================================================================
+# AIME24 Evaluator using In-house LLMEngine
+# ============================================================================
+
+class AIME24LLMEngineEvaluator:
+    """
+    Fast evaluator using in-house LLMEngine with paged attention.
+    
+    This uses the custom Qwen3-Next adapter that implements the LLMEngine interface.
+    """
+    
+    def __init__(
+        self,
+        model_path: str = "Qwen/Qwen3-Coder-Next",
+        device: str = "cuda",
+        max_new_tokens: int = 1024,
+        temperature: float = 0.6,
+        prompt_type: str = "v11",
+        gpu_ids: Optional[str] = None
+    ):
+        # Import engine components
+        from llm_engine import LLMEngine
+        from qwen3_next_engine import load_qwen3_next_for_engine
+        from transformers import AutoTokenizer
+        
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+        self.prompt_type = prompt_type
+        
+        # Handle device
+        if gpu_ids is not None:
+            gpu_list = [int(g.strip()) for g in gpu_ids.split(',')]
+            self.device = f"cuda:{gpu_list[0]}"
+        else:
+            self.device = device
+        
+        print(f"Loading Qwen3-Next model with LLMEngine adapter...")
+        print(f"Device: {self.device}")
+        
+        # Load custom model adapter
+        self.model, self.tokenizer, self.config = load_qwen3_next_for_engine(
+            model_path, device=self.device
+        )
+        
+        # Set EOS token ID in config
+        self.config.eos_token_id = self.tokenizer.eos_token_id
+        
+        # Initialize LLMEngine
+        self.engine = LLMEngine(self.model, self.config, self.device)
+        self.engine.model_runner.temperature = self.temperature
+        print("LLMEngine initialized!")
+    
+    def solve(self, problem: AIME24Problem) -> AIME24Result:
+        """Solve single problem using LLMEngine."""
+        import time
+        
+        print(f"  [DEBUG] Building prompt...", flush=True)
+        prompt = process_math_prompt(problem.problem, prompt_type=self.prompt_type)
+        
+        # Apply chat template
+        messages = [{"role": "user", "content": prompt}]
+        text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        
+        print(f"  [DEBUG] Tokenizing (prompt len: {len(text)} chars)...", flush=True)
+        input_ids = self.tokenizer.encode(text)  # Returns list of ints
+        print(f"  [DEBUG] Input tokens: {len(input_ids)}", flush=True)
+        
+        print(f"  [DEBUG] Starting LLMEngine generation (max_tokens={self.max_new_tokens})...", flush=True)
+        start_time = time.time()
+        
+        # Use LLMEngine for generation
+        # LLMEngine.generate() expects List[List[int]] and returns List[List[int]]
+        output_ids_list = self.engine.generate([input_ids])
+        output_ids = output_ids_list[0]  # Get first (and only) result
+        
+        gen_time = time.time() - start_time
+        new_tokens = len(output_ids) - len(input_ids)
+        print(f"  [DEBUG] Generation done in {gen_time:.1f}s. New tokens: {new_tokens} ({new_tokens/gen_time:.1f} tok/s)", flush=True)
+        
+        response = self.tokenizer.decode(
+            output_ids[len(input_ids):],
+            skip_special_tokens=True
+        )
+        print(f"  [DEBUG] Response length: {len(response)} chars", flush=True)
+        
+        print(f"  [DEBUG] Verifying answer...", flush=True)
+        _, predicted_answer, reward = safe_math_answer_timeout(
+            response,
+            [problem.answer],
+            self.tokenizer,
+            prompt_type=self.prompt_type,
+            alg=['is_equiv', 'text'],
+            timeout=30
+        )
+        print(f"  [DEBUG] Verification done. Predicted: {predicted_answer}, Reward: {reward}", flush=True)
+        
+        return AIME24Result(
+            id=problem.id,
+            problem=problem.problem,
+            gold_answer=problem.answer,
+            predicted_answer=predicted_answer,
+            response=response,
+            reward=reward,
+            correct=(reward > 0.5)
+        )
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -294,6 +411,8 @@ def main():
                        help="Use vLLM server for fast inference (requires running vLLM server)")
     parser.add_argument("--vllm_url", type=str, default="http://localhost:8000/v1",
                        help="vLLM server URL (default: http://localhost:8000/v1)")
+    parser.add_argument("--use_engine", action="store_true",
+                       help="Use in-house LLMEngine with paged attention")
     
     # Data
     parser.add_argument("--data_path", type=str, default="../eval/aime24_test.jsonl")
@@ -331,6 +450,15 @@ def main():
             max_tokens=args.max_gen_len,
             temperature=args.temperature,
             prompt_type=args.prompt_type
+        )
+    elif args.use_engine:
+        print("\nUsing In-house LLMEngine with paged attention...")
+        evaluator = AIME24LLMEngineEvaluator(
+            model_path=args.model_path,
+            max_new_tokens=args.max_gen_len,
+            temperature=args.temperature,
+            prompt_type=args.prompt_type,
+            gpu_ids=args.gpu_ids
         )
     else:
         print("\nUsing HuggingFace Evaluator...")
