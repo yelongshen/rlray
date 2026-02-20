@@ -857,9 +857,13 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
             # Use HF's linear_attn module directly
             hidden_states = self.linear_attn(hidden_states)[0]
         elif self.self_attn is not None:
-            # Use HF's self_attn module directly with position_embeddings
+            # Use HF's self_attn module directly with required arguments
             position_embeddings = (cos, sin) if cos is not None else None
-            hidden_states = self.self_attn(hidden_states, position_embeddings=position_embeddings)[0]
+            hidden_states = self.self_attn(
+                hidden_states, 
+                attention_mask=attention_mask,
+                position_embeddings=position_embeddings
+            )[0]
         
         hidden_states = residual + hidden_states
         
