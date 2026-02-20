@@ -1255,16 +1255,20 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
         if has_gated_deltanet or detected_type == "linear_attention":
             # Linear attention (GatedDeltaNet) layer
             engine_attn = engine_layer.linear_attn if hasattr(engine_layer, 'linear_attn') and engine_layer.linear_attn is not None else engine_layer.self_attn
+            if is_main and layer_idx < 3:
+                print(f"    Layer {layer_idx}: Copying GatedDeltaNet weights", flush=True)
             _copy_gated_deltanet_weights(hf_attn, engine_attn,
                                         config, use_tp, tp_rank, tp_world_size, layer_idx)
         elif has_k_proj or detected_type == "full_attention":
             # Full attention layer
             engine_attn = engine_layer.self_attn if hasattr(engine_layer, 'self_attn') and engine_layer.self_attn is not None else engine_layer.linear_attn
+            if is_main and layer_idx < 3:
+                print(f"    Layer {layer_idx}: Copying full attention weights", flush=True)
             _copy_full_attention_weights(hf_attn, engine_attn, 
                                         config, use_tp, tp_rank, tp_world_size, layer_idx)
         else:
             if is_main:
-                print(f"  Layer {layer_idx}: Skipping attention (unknown type, has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet})")
+                print(f"  Layer {layer_idx}: SKIPPING attention (unknown type, has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet})")
         
         # ========== MLP/MoE WEIGHTS ==========
         # Detect if this is MoE or dense MLP
@@ -1279,15 +1283,19 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
         
         if has_moe:
             # MoE layer
+            if is_main and layer_idx < 3:
+                print(f"    Layer {layer_idx}: Copying MoE weights", flush=True)
             _copy_moe_weights(hf_layer.mlp, engine_layer.mlp, config, 
                              use_tp, tp_rank, tp_world_size, layer_idx)
         elif has_dense_mlp:
             # Dense MLP layer
+            if is_main and layer_idx < 3:
+                print(f"    Layer {layer_idx}: Copying dense MLP weights", flush=True)
             _copy_dense_mlp_weights(hf_layer.mlp, engine_layer.mlp, config,
                                    use_tp, tp_rank, tp_world_size, layer_idx)
         else:
             if is_main:
-                print(f"  Layer {layer_idx}: Skipping MLP (unknown type)")
+                print(f"  Layer {layer_idx}: SKIPPING MLP (unknown type)")
         
         # ========== LAYER NORMS ==========
         if hasattr(hf_layer, 'input_layernorm') and hf_layer.input_layernorm is not None:
@@ -1539,6 +1547,7 @@ if __name__ == "__main__":
     parser.add_argument("--prompt", type=str, default="What is 2+2?")
     parser.add_argument("--gpu_ids", type=str, default=None, help="GPU IDs to use (e.g., '0' or '2,3')")
     parser.add_argument("--tensor_parallel", type=int, default=1, help="Tensor parallel size (use with torchrun)")
+    parser.add_argument("--compare_hf", action="store_true", help="Compare with HF model output")
     args = parser.parse_args()
     
     # Set GPU for single-GPU mode
@@ -1556,6 +1565,49 @@ if __name__ == "__main__":
     if rank_env == 0:
         print(f"Testing load_qwen3_next_for_engine with {args.model_path}")
         print(f"Tensor parallel size: {args.tensor_parallel}")
+    
+    # Test 0: Compare with HF model (before weight transfer cleanup)
+    if args.compare_hf:
+        print("\n=== Test 0: Compare HF vs Engine Model ===")
+        
+        # Load HF model for comparison
+        hf_config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+        hf_model = AutoModelForCausalLM.from_pretrained(
+            args.model_path,
+            torch_dtype=torch.bfloat16,
+            device_map="cuda:0",
+            trust_remote_code=True
+        )
+        hf_model.eval()
+        
+        test_input_text = "Hello"
+        test_input = tokenizer.encode(test_input_text, return_tensors="pt").to("cuda:0")
+        
+        # HF model forward
+        with torch.no_grad():
+            hf_output = hf_model(test_input)
+            hf_logits = hf_output.logits
+            hf_next_token_id = hf_logits[0, -1, :].argmax().item()
+            hf_next_token = tokenizer.decode([hf_next_token_id])
+        
+        print(f"HF model predicted next token: '{hf_next_token}' (id={hf_next_token_id})")
+        print(f"HF logits shape: {hf_logits.shape}")
+        print(f"HF logits last position stats: min={hf_logits[0,-1].min().item():.4f}, max={hf_logits[0,-1].max().item():.4f}, mean={hf_logits[0,-1].mean().item():.4f}")
+        
+        # HF model greedy generation
+        hf_generated = hf_model.generate(
+            test_input, 
+            max_new_tokens=20, 
+            do_sample=False,
+            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id
+        )
+        hf_generated_text = tokenizer.decode(hf_generated[0], skip_special_tokens=True)
+        print(f"HF model generated: {hf_generated_text}")
+        
+        # Cleanup HF model
+        del hf_model
+        torch.cuda.empty_cache()
     
     model, tokenizer, config = load_qwen3_next_for_engine(
         args.model_path, 
@@ -1582,10 +1634,11 @@ if __name__ == "__main__":
         print(f"Input string: {test_input_text}")
         print(f"Input shape: {test_input.shape}")
         print(f"Output logits shape: {logits.shape}")
+        print(f"Engine logits last position stats: min={logits[0,-1].min().item():.4f}, max={logits[0,-1].max().item():.4f}, mean={logits[0,-1].mean().item():.4f}")
         # Get predicted next token
         next_token_id = logits[0, -1, :].argmax().item()
         next_token = tokenizer.decode([next_token_id])
-        print(f"Predicted next token: {next_token}")
+        print(f"Predicted next token: '{next_token}' (id={next_token_id})")
         print("Direct forward pass: OK")
     
     # Test 1.5: Simple greedy generation (without LLMEngine)
