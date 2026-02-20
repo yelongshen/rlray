@@ -1474,6 +1474,7 @@ if __name__ == "__main__":
         
         if is_main:
             print(f"Prompt: {args.prompt}")
+            print(f"Input string: {text}")
             print(f"Input tokens: {len(input_ids)}")
         
         import time
@@ -1484,6 +1485,8 @@ if __name__ == "__main__":
         if is_main:
             new_tokens = len(output_ids) - len(input_ids)
             response = tokenizer.decode(output_ids[len(input_ids):], skip_special_tokens=True)
+            full_output = tokenizer.decode(output_ids, skip_special_tokens=True)
             print(f"Generated {new_tokens} tokens in {elapsed:.2f}s ({new_tokens/elapsed:.1f} tok/s)")
+            print(f"Output string: {full_output}")
             print(f"Response: {response}")
 
