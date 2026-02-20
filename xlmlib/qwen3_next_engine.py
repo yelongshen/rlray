@@ -1125,32 +1125,42 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
         layer_types = getattr(config, 'layer_types', None)
         layer_type = layer_types[layer_idx] if layer_types and layer_idx < len(layer_types) else "full_attention"
         
-        # Detect layer type from structure - check actual weight sizes
-        has_k_proj = (hasattr(hf_layer, 'self_attn') and 
-                     hasattr(hf_layer.self_attn, 'k_proj') and 
-                     hf_layer.self_attn.k_proj is not None and
-                     hasattr(hf_layer.self_attn.k_proj, 'weight') and
-                     hf_layer.self_attn.k_proj.weight.numel() > 0)  # Check actual size
+        # HF model uses different attribute names: self_attn for full_attention, linear_attn for linear_attention
+        hf_attn = None
+        if hasattr(hf_layer, 'self_attn') and hf_layer.self_attn is not None:
+            hf_attn = hf_layer.self_attn
+            detected_type = "full_attention"
+        elif hasattr(hf_layer, 'linear_attn') and hf_layer.linear_attn is not None:
+            hf_attn = hf_layer.linear_attn
+            detected_type = "linear_attention"
+        else:
+            print(f"  Layer {layer_idx}: No attention module found")
+            detected_type = None
         
-        has_gated_deltanet = (hasattr(hf_layer, 'self_attn') and 
-                             hasattr(hf_layer.self_attn, 'in_proj_qkvz') and 
-                             hf_layer.self_attn.in_proj_qkvz is not None and
-                             hasattr(hf_layer.self_attn.in_proj_qkvz, 'weight') and
-                             hf_layer.self_attn.in_proj_qkvz.weight.numel() > 0)  # Check actual size
+        # Detect layer type from structure - check actual weight sizes
+        has_k_proj = (hf_attn is not None and 
+                     hasattr(hf_attn, 'k_proj') and 
+                     hf_attn.k_proj is not None and
+                     hasattr(hf_attn.k_proj, 'weight') and
+                     hf_attn.k_proj.weight.numel() > 0)
+        
+        has_gated_deltanet = (hf_attn is not None and 
+                             hasattr(hf_attn, 'in_proj_qkvz') and 
+                             hf_attn.in_proj_qkvz is not None and
+                             hasattr(hf_attn.in_proj_qkvz, 'weight') and
+                             hf_attn.in_proj_qkvz.weight.numel() > 0)
         
         # ========== ATTENTION WEIGHTS ==========
-        # Prioritize structure detection over config (config may be wrong for some layers)
-        if has_gated_deltanet and not has_k_proj:
-            # Linear attention (GatedDeltaNet) layer - detected by structure
-            _copy_gated_deltanet_weights(hf_layer.self_attn, engine_layer.self_attn,
+        # Engine model always uses self_attn for full attention, linear_attn for linear attention
+        if has_gated_deltanet or detected_type == "linear_attention":
+            # Linear attention (GatedDeltaNet) layer
+            engine_attn = engine_layer.linear_attn if hasattr(engine_layer, 'linear_attn') and engine_layer.linear_attn is not None else engine_layer.self_attn
+            _copy_gated_deltanet_weights(hf_attn, engine_attn,
                                         config, use_tp, tp_rank, tp_world_size, layer_idx)
-        elif has_k_proj:
+        elif has_k_proj or detected_type == "full_attention":
             # Full attention layer
-            _copy_full_attention_weights(hf_layer.self_attn, engine_layer.self_attn, 
-                                        config, use_tp, tp_rank, tp_world_size, layer_idx)
-        elif layer_type == "linear_attention":
-            # Fallback to config-based detection
-            _copy_gated_deltanet_weights(hf_layer.self_attn, engine_layer.self_attn,
+            engine_attn = engine_layer.self_attn if hasattr(engine_layer, 'self_attn') and engine_layer.self_attn is not None else engine_layer.linear_attn
+            _copy_full_attention_weights(hf_attn, engine_attn, 
                                         config, use_tp, tp_rank, tp_world_size, layer_idx)
         else:
             print(f"  Layer {layer_idx}: Skipping attention (unknown type, has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet})")
