@@ -1545,6 +1545,31 @@ if __name__ == "__main__":
         print(f"Predicted next token: {next_token}")
         print("Direct forward pass: OK")
     
+    # Test 1.5: Simple greedy generation (without LLMEngine)
+    if is_main:
+        print("\n=== Test 1.5: Simple Greedy Generation ===")
+    max_new_tokens = 50
+    generated_ids = test_input.clone()
+    eos_token_id = tokenizer.eos_token_id
+    
+    with torch.no_grad():
+        for step in range(max_new_tokens):
+            # Forward pass
+            _, logits, _, _ = model(generated_ids, inference_mode=False)
+            # Get next token (greedy)
+            next_token_id = logits[0, -1, :].argmax().item()
+            # Check for EOS
+            if next_token_id == eos_token_id:
+                break
+            # Append to sequence
+            next_token_tensor = torch.tensor([[next_token_id]], device=model_device)
+            generated_ids = torch.cat([generated_ids, next_token_tensor], dim=1)
+    
+    if is_main:
+        generated_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+        print(f"Input: {test_input_text}")
+        print(f"Generated ({generated_ids.shape[1] - test_input.shape[1]} new tokens): {generated_text}")
+    
     # Test 2: With LLMEngine
     if args.test_engine:
         if is_main:
