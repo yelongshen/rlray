@@ -3,16 +3,25 @@ AIME24 Evaluation with Qwen-Next
 
 This script evaluates Qwen-Next model on AIME24 math competition problems.
 
+Supports multiple inference backends:
+- HuggingFace generate() - Simple, works with any HF model
+- vLLM API - Fast inference via vLLM server (OpenAI-compatible API)
+
 Usage:
-    # Run evaluation with nohup (keeps running after terminal close)
-    nohup python aime24_qwen_eval.py \
+    # Option 1: Direct HuggingFace inference
+    python aime24_qwen_eval.py \
         --model_path Qwen/Qwen3-Coder-Next \
-        --data_path ../eval/aime24_test.jsonl \
-        --output_path ./aime24_results.jsonl \
-        > aime24_eval.log 2>&1 &
+        --data_path ../eval/aime24_test.jsonl
     
-    # Monitor progress
-    tail -f aime24_eval.log
+    # Option 2: vLLM server (faster)
+    # First start vLLM server:
+    #   vllm serve Qwen/Qwen3-Coder-Next --port 8000 --tensor-parallel-size 2
+    # Then run evaluation:
+    python aime24_qwen_eval.py \
+        --use_vllm \
+        --vllm_url http://localhost:8000/v1 \
+        --model_path Qwen/Qwen3-Coder-Next \
+        --data_path ../eval/aime24_test.jsonl
 """
 
 import os
@@ -73,6 +82,85 @@ def load_aime24_dataset(data_path: str) -> List[AIME24Problem]:
                 url=data.get('url', '')
             ))
     return problems
+
+# ============================================================================
+# AIME24 Evaluator using vLLM API (Fast Inference)
+# ============================================================================
+
+class AIME24VLLMEvaluator:
+    """
+    Fast evaluator using vLLM server via OpenAI-compatible API.
+    
+    Start vLLM server first:
+        vllm serve Qwen/Qwen3-Coder-Next --port 8000 --tensor-parallel-size 2
+    """
+    
+    def __init__(
+        self,
+        model_path: str = "Qwen/Qwen3-Coder-Next",
+        vllm_url: str = "http://localhost:8000/v1",
+        max_tokens: int = 1024,
+        temperature: float = 0.6,
+        prompt_type: str = "v11",
+    ):
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise ImportError("Please install openai: pip install openai")
+        
+        self.client = OpenAI(base_url=vllm_url, api_key="dummy")
+        self.model_path = model_path
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.prompt_type = prompt_type
+        
+        # Load tokenizer for answer verification
+        from transformers import AutoTokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        
+        print(f"Connected to vLLM server at {vllm_url}")
+        print(f"Model: {model_path}")
+    
+    def solve(self, problem: AIME24Problem) -> AIME24Result:
+        """Solve single problem using vLLM API."""
+        prompt = process_math_prompt(problem.problem, prompt_type=self.prompt_type)
+        
+        print(f"  [DEBUG] Calling vLLM API...", flush=True)
+        start_time = time.time()
+        
+        response = self.client.chat.completions.create(
+            model=self.model_path,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            top_p=0.95,
+        )
+        
+        gen_time = time.time() - start_time
+        response_text = response.choices[0].message.content
+        tokens_generated = response.usage.completion_tokens if response.usage else len(response_text) // 4
+        
+        print(f"  [DEBUG] vLLM response in {gen_time:.1f}s. ~{tokens_generated} tokens ({tokens_generated/gen_time:.1f} tok/s)", flush=True)
+        
+        # Verify answer
+        _, predicted_answer, reward = safe_math_answer_timeout(
+            response_text,
+            [problem.answer],
+            self.tokenizer,
+            prompt_type=self.prompt_type,
+            alg=['is_equiv', 'text'],
+            timeout=30
+        )
+        
+        return AIME24Result(
+            id=problem.id,
+            problem=problem.problem,
+            gold_answer=problem.answer,
+            predicted_answer=predicted_answer,
+            response=response_text,
+            reward=reward,
+            correct=(reward > 0.5)
+        )
 
 # ============================================================================
 # AIME24 Evaluator using HuggingFace
@@ -201,6 +289,12 @@ def main():
     parser.add_argument("--gpu_ids", type=str, default=None,
                        help="Comma-separated GPU IDs to use (e.g., '0,1,2')")
     
+    # Inference backend
+    parser.add_argument("--use_vllm", action="store_true",
+                       help="Use vLLM server for fast inference (requires running vLLM server)")
+    parser.add_argument("--vllm_url", type=str, default="http://localhost:8000/v1",
+                       help="vLLM server URL (default: http://localhost:8000/v1)")
+    
     # Data
     parser.add_argument("--data_path", type=str, default="../eval/aime24_test.jsonl")
     parser.add_argument("--output_path", type=str, default="./aime24_results.jsonl")
@@ -216,8 +310,8 @@ def main():
     
     args = parser.parse_args()
     
-    # Set GPU devices if specified
-    if args.gpu_ids is not None:
+    # Set GPU devices if specified (only for HuggingFace mode)
+    if args.gpu_ids is not None and not args.use_vllm:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
         print(f"Using GPUs: {args.gpu_ids}")
     
@@ -229,14 +323,24 @@ def main():
     print(f"Loaded {len(problems)} problems")
     
     # Initialize evaluator
-    print("\nInitializing AIME24 Evaluator...")
-    evaluator = AIME24Evaluator(
-        model_path=args.model_path,
-        max_new_tokens=args.max_gen_len,
-        temperature=args.temperature,
-        prompt_type=args.prompt_type,
-        gpu_ids=args.gpu_ids
-    )
+    if args.use_vllm:
+        print(f"\nUsing vLLM server at {args.vllm_url}...")
+        evaluator = AIME24VLLMEvaluator(
+            model_path=args.model_path,
+            vllm_url=args.vllm_url,
+            max_tokens=args.max_gen_len,
+            temperature=args.temperature,
+            prompt_type=args.prompt_type
+        )
+    else:
+        print("\nUsing HuggingFace Evaluator...")
+        evaluator = AIME24Evaluator(
+            model_path=args.model_path,
+            max_new_tokens=args.max_gen_len,
+            temperature=args.temperature,
+            prompt_type=args.prompt_type,
+            gpu_ids=args.gpu_ids
+        )
     
     # Evaluate
     results = []
