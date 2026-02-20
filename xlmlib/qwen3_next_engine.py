@@ -523,9 +523,9 @@ class Qwen3NextSparseMoeBlockForEngine(nn.Module):
         self.gate = Qwen3NextTopKRouter(config, use_tp=use_tp)
         self.experts = Qwen3NextExpertsForEngine(config, use_tp=use_tp)
         
-        # Shared expert
+        # Shared expert uses shared_expert_intermediate_size
         shared_intermediate = getattr(config, 'shared_expert_intermediate_size', config.intermediate_size)
-        self.shared_expert = Qwen3NextMLPForEngine(config, use_tp=use_tp)
+        self.shared_expert = Qwen3NextMLPForEngine(config, use_tp=use_tp, intermediate_size=shared_intermediate)
         self.shared_expert_gate = nn.Linear(config.hidden_size, 1, bias=False)
     
     def forward(self, hidden_states):
@@ -758,10 +758,10 @@ class Qwen3NextAttentionForEngine(nn.Module):
 
 class Qwen3NextMLPForEngine(nn.Module):
     """MLP for Qwen3-Next with tensor parallelism support."""
-    def __init__(self, config, use_tp: bool = False):
+    def __init__(self, config, use_tp: bool = False, intermediate_size: int = None):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.intermediate_size = config.intermediate_size
+        self.intermediate_size = intermediate_size if intermediate_size is not None else config.intermediate_size
         self.use_tp = use_tp
         
         tp_world_size = get_tp_world_size() if use_tp else 1
