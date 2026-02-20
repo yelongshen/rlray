@@ -1170,11 +1170,15 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
     # Copy embeddings (replicated across all ranks)
     if is_main:
         print("  Copying embeddings...", flush=True)
+        print(f"    HF embed shape: {hf_model.model.embed_tokens.weight.shape}", flush=True)
+        print(f"    Engine embed shape: {engine_model.model.embed_tokens.weight.shape}", flush=True)
     _copy_to_device(hf_model.model.embed_tokens.weight.data, engine_model.model.embed_tokens.weight)
     
     # Copy lm_head (sharded if TP)
     if is_main:
         print("  Copying lm_head...", flush=True)
+        print(f"    HF lm_head shape: {hf_model.lm_head.weight.shape}", flush=True)
+        print(f"    Engine lm_head shape: {engine_model.lm_head.weight.shape}", flush=True)
     if use_tp and tp_world_size > 1:
         vocab_size = config.vocab_size
         shard_size = vocab_size // tp_world_size
@@ -1204,6 +1208,11 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
         hf_layer = hf_model.model.layers[layer_idx]
         engine_layer = engine_model.model.layers[layer_idx]
         
+        # Debug: print HF layer structure for first layer
+        if is_main and layer_idx == 0:
+            print(f"  DEBUG: HF layer 0 attributes: {[n for n in dir(hf_layer) if not n.startswith('_')]}", flush=True)
+            print(f"  DEBUG: HF layer 0 modules: {list(hf_layer._modules.keys())}", flush=True)
+        
         # Get layer type from config
         layer_types = getattr(config, 'layer_types', None)
         layer_type = layer_types[layer_idx] if layer_types and layer_idx < len(layer_types) else "full_attention"
@@ -1218,7 +1227,8 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
             detected_type = "linear_attention"
         else:
             if is_main:
-                print(f"  Layer {layer_idx}: No attention module found")
+                print(f"  Layer {layer_idx}: No attention module found (config says: {layer_type})")
+                print(f"    Available: {list(hf_layer._modules.keys())}")
             detected_type = None
         
         # Detect layer type from structure - check actual weight sizes
@@ -1233,6 +1243,12 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
                              hf_attn.in_proj_qkvz is not None and
                              hasattr(hf_attn.in_proj_qkvz, 'weight') and
                              hf_attn.in_proj_qkvz.weight.numel() > 0)
+        
+        # Debug: print attention structure for first few layers
+        if is_main and layer_idx < 3:
+            if hf_attn is not None:
+                print(f"  Layer {layer_idx}: hf_attn modules: {list(hf_attn._modules.keys())}", flush=True)
+                print(f"    has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet}, detected_type={detected_type}", flush=True)
         
         # ========== ATTENTION WEIGHTS ==========
         # Engine model always uses self_attn for full attention, linear_attn for linear attention
@@ -1286,6 +1302,23 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
         if layer_idx % 10 == 0:
             gc.collect()
     
+    # Verify a sample of weights after copying
+    if is_main:
+        print("  Verifying weight copy...", flush=True)
+        embed_sum = engine_model.model.embed_tokens.weight.data.abs().sum().item()
+        lmhead_sum = engine_model.lm_head.weight.data.abs().sum().item()
+        print(f"    Embedding weight abs sum: {embed_sum:.4f}", flush=True)
+        print(f"    LM head weight abs sum: {lmhead_sum:.4f}", flush=True)
+        # Check first layer attention weights
+        first_attn_layer = None
+        for layer in engine_model.model.layers:
+            if layer.self_attn is not None:
+                first_attn_layer = layer.self_attn
+                break
+        if first_attn_layer is not None:
+            q_sum = first_attn_layer.q_proj.weight.data.abs().sum().item()
+            print(f"    First attention q_proj abs sum: {q_sum:.4f}", flush=True)
+    
     if is_main:
         print("  Weight copy complete!", flush=True)
 
@@ -1303,6 +1336,16 @@ def _copy_full_attention_weights(hf_attn, engine_attn, config, use_tp, tp_rank, 
     
     # Check if KV is replicated (when num_kv_heads < tp_world_size)
     kv_is_replicated = num_kv_heads < tp_world_size
+    
+    # Debug print for first layer
+    is_main = tp_rank == 0
+    if is_main and layer_idx == 0:
+        print(f"  _copy_full_attention_weights layer {layer_idx}:", flush=True)
+        print(f"    HF q_proj shape: {hf_attn.q_proj.weight.shape}", flush=True)
+        print(f"    Engine q_proj shape: {engine_attn.q_proj.weight.shape}", flush=True)
+        print(f"    HF k_proj shape: {hf_attn.k_proj.weight.shape}", flush=True)
+        print(f"    Engine k_proj shape: {engine_attn.k_proj.weight.shape}", flush=True)
+        print(f"    kv_is_replicated={kv_is_replicated}", flush=True)
     
     if use_tp and tp_world_size > 1:
         # ColumnParallelLinear shards by output_size // world_size
