@@ -1296,7 +1296,7 @@ def _copy_moe_weights(hf_mlp, engine_mlp, config, use_tp, tp_rank, tp_world_size
     
     # Router weights (replicated - small)
     if hasattr(hf_mlp, 'gate') and hf_mlp.gate is not None:
-        engine_mlp.router.weight.data.copy_(hf_mlp.gate.weight.data)
+        engine_mlp.gate.weight.data.copy_(hf_mlp.gate.weight.data)
     
     # Expert weights
     if hasattr(hf_mlp, 'experts') and hf_mlp.experts is not None:
