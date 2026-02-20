@@ -1118,11 +1118,16 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
     """
     tp_rank = get_tp_rank() if use_tp else 0
     tp_world_size = get_tp_world_size() if use_tp else 1
+    is_main = tp_rank == 0
     
     # Copy embeddings (replicated across all ranks)
+    if is_main:
+        print("  Copying embeddings...", flush=True)
     engine_model.model.embed_tokens.weight.data.copy_(hf_model.model.embed_tokens.weight.data)
     
     # Copy lm_head (sharded if TP)
+    if is_main:
+        print("  Copying lm_head...", flush=True)
     if use_tp and tp_world_size > 1:
         vocab_size = config.vocab_size
         shard_size = vocab_size // tp_world_size
@@ -1133,10 +1138,17 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
         engine_model.lm_head.weight.data.copy_(hf_model.lm_head.weight.data)
     
     # Copy final norm (replicated)
+    if is_main:
+        print("  Copying final norm...", flush=True)
     engine_model.model.norm.weight.data.copy_(hf_model.model.norm.weight.data)
     
     # Copy layers
-    for layer_idx in range(config.num_hidden_layers):
+    num_layers = config.num_hidden_layers
+    if is_main:
+        print(f"  Copying {num_layers} layers...", flush=True)
+    for layer_idx in range(num_layers):
+        if is_main and (layer_idx % 10 == 0 or layer_idx == num_layers - 1):
+            print(f"    Layer {layer_idx}/{num_layers}...", flush=True)
         hf_layer = hf_model.model.layers[layer_idx]
         engine_layer = engine_model.model.layers[layer_idx]
         
@@ -1153,7 +1165,7 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
             hf_attn = hf_layer.linear_attn
             detected_type = "linear_attention"
         else:
-            if tp_rank == 0:
+            if is_main:
                 print(f"  Layer {layer_idx}: No attention module found")
             detected_type = None
         
@@ -1183,7 +1195,7 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
             _copy_full_attention_weights(hf_attn, engine_attn, 
                                         config, use_tp, tp_rank, tp_world_size, layer_idx)
         else:
-            if tp_rank == 0:
+            if is_main:
                 print(f"  Layer {layer_idx}: Skipping attention (unknown type, has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet})")
         
         # ========== MLP/MoE WEIGHTS ==========
@@ -1206,7 +1218,7 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
             _copy_dense_mlp_weights(hf_layer.mlp, engine_layer.mlp, config,
                                    use_tp, tp_rank, tp_world_size, layer_idx)
         else:
-            if tp_rank == 0:
+            if is_main:
                 print(f"  Layer {layer_idx}: Skipping MLP (unknown type)")
         
         # ========== LAYER NORMS ==========
@@ -1214,6 +1226,9 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
             engine_layer.input_layernorm.weight.data.copy_(hf_layer.input_layernorm.weight.data)
         if hasattr(hf_layer, 'post_attention_layernorm') and hf_layer.post_attention_layernorm is not None:
             engine_layer.post_attention_layernorm.weight.data.copy_(hf_layer.post_attention_layernorm.weight.data)
+    
+    if is_main:
+        print("  Weight copy complete!", flush=True)
 
 
 def _copy_full_attention_weights(hf_attn, engine_attn, config, use_tp, tp_rank, tp_world_size, layer_idx):
