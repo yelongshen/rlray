@@ -813,8 +813,8 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
     """
     Hybrid decoder layer for Qwen3-Next.
     
-    Uses HF's layer modules directly to ensure correctness.
-    The layer modules will be assigned from HF model during weight copy.
+    - Full attention layers: use our implementation (for paged attention support)
+    - Linear attention layers: use HF's modules (GatedDeltaNet is complex)
     """
     def __init__(self, config, layer_idx: int, use_tp: bool = False):
         super().__init__()
@@ -829,13 +829,39 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         else:
             self.layer_type = "full_attention"
         
-        # All modules will be assigned from HF model during weight copy
-        self.linear_attn = None
-        self.self_attn = None
-        self.input_layernorm = None
-        self.post_attention_layernorm = None
-        self.mlp = None
-        self._use_hf_layer = True  # Always use HF layer modules
+        if self.layer_type == "linear_attention":
+            # Linear attention - use HF's modules (will be assigned during weight copy)
+            self.linear_attn = None
+            self.self_attn = None
+            self.input_layernorm = None
+            self.post_attention_layernorm = None
+            self.mlp = None
+            self._use_hf_layer = True
+        else:
+            # Full attention - use our implementation
+            self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx, use_tp=use_tp)
+            self.linear_attn = None
+            self._use_hf_layer = False
+            
+            # LayerNorms
+            self.input_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
+            self.post_attention_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
+            
+            # MLP - determine if MoE or dense
+            num_experts = getattr(config, 'num_experts', 0)
+            decoder_sparse_step = getattr(config, 'decoder_sparse_step', 1)
+            mlp_only_layers = getattr(config, 'mlp_only_layers', [])
+            
+            use_moe = (num_experts > 0 and 
+                      (layer_idx + 1) % decoder_sparse_step == 0 and 
+                      layer_idx not in mlp_only_layers)
+            
+            if use_moe:
+                self.mlp = Qwen3NextSparseMoeBlockForEngine(config, use_tp=use_tp)
+                self.is_moe = True
+            else:
+                self.mlp = Qwen3NextMLPForEngine(config, use_tp=use_tp)
+                self.is_moe = False
 
     def forward(
         self,
@@ -849,31 +875,43 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         cur_pos: int = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
+        # Linear attention - use HF modules directly
+        if self._use_hf_layer and self.linear_attn is not None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+            hidden_states = self.linear_attn(hidden_states)[0]
+            hidden_states = residual + hidden_states
+            
+            residual = hidden_states
+            hidden_states = self.post_attention_layernorm(hidden_states)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = residual + hidden_states
+            
+            return hidden_states, None, None
+        
+        # Full attention - use our implementation
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         
-        # Token mixer - use HF modules
-        if self.layer_type == "linear_attention" and self.linear_attn is not None:
-            # Use HF's linear_attn module directly
-            hidden_states = self.linear_attn(hidden_states)[0]
-        elif self.self_attn is not None:
-            # Use HF's self_attn module directly with required arguments
-            position_embeddings = (cos, sin) if cos is not None else None
-            hidden_states = self.self_attn(
-                hidden_states, 
-                attention_mask=attention_mask,
-                position_embeddings=position_embeddings
-            )[0]
-        
+        hidden_states, k_cache, v_cache = self.self_attn(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            cos=cos,
+            sin=sin,
+            inference_mode=inference_mode,
+            max_generation=max_generation,
+            cur_pos=cur_pos,
+        )
         hidden_states = residual + hidden_states
         
-        # MLP - use HF module
+        # MLP
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
         
-        return hidden_states, None, None
+        return hidden_states, k_cache, v_cache
 
 
 class Qwen3NextModelForEngine(nn.Module):
@@ -1235,27 +1273,30 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
                 print(f"    has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet}, detected_type={detected_type}", flush=True)
         
         # ========== ATTENTION WEIGHTS ==========
-        # Use HF's full layer modules directly for ALL layer types
-        if is_main and layer_idx < 3:
-            print(f"    Layer {layer_idx}: Using HF's full layer modules directly ({detected_type})", flush=True)
-        
-        # Move entire HF layer's modules to target device and assign to engine layer
-        engine_layer.input_layernorm = hf_layer.input_layernorm.to(device=target_device, dtype=target_dtype)
-        engine_layer.post_attention_layernorm = hf_layer.post_attention_layernorm.to(device=target_device, dtype=target_dtype)
-        engine_layer.mlp = hf_layer.mlp.to(device=target_device, dtype=target_dtype)
-        
         if has_gated_deltanet or detected_type == "linear_attention":
+            # Linear attention - use HF's full layer modules directly
+            if is_main and layer_idx < 3:
+                print(f"    Layer {layer_idx}: Using HF's full layer modules directly (linear_attention)", flush=True)
+            
+            engine_layer.input_layernorm = hf_layer.input_layernorm.to(device=target_device, dtype=target_dtype)
             engine_layer.linear_attn = hf_attn.to(device=target_device, dtype=target_dtype)
-            engine_layer.self_attn = None
+            engine_layer.post_attention_layernorm = hf_layer.post_attention_layernorm.to(device=target_device, dtype=target_dtype)
+            engine_layer.mlp = hf_layer.mlp.to(device=target_device, dtype=target_dtype)
+            engine_layer._use_hf_layer = True
+            
+            # Skip separate MLP/layernorm weight copy
+            has_moe = False
+            has_dense_mlp = False
+            
+        elif has_k_proj or detected_type == "full_attention":
+            # Full attention - copy weights to our implementation
+            if is_main and layer_idx < 3:
+                print(f"    Layer {layer_idx}: Copying full attention weights to our implementation", flush=True)
+            _copy_full_attention_weights(hf_attn, engine_layer.self_attn, 
+                                        config, use_tp, tp_rank, tp_world_size, layer_idx)
         else:
-            engine_layer.self_attn = hf_attn.to(device=target_device, dtype=target_dtype)
-            engine_layer.linear_attn = None
-        
-        engine_layer._use_hf_layer = True
-        
-        # Skip separate MLP/layernorm weight copy - already done above
-        has_moe = False
-        has_dense_mlp = False
+            if is_main:
+                print(f"  Layer {layer_idx}: SKIPPING attention (unknown type)")
         
         # ========== MLP/MoE WEIGHTS ==========
         # Detect if this is MoE or dense MLP
@@ -1268,29 +1309,27 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
                         hf_layer.mlp.gate_proj is not None and
                         not has_moe)
         
-        # Skip if we used HF's layer directly (already copied above)
-        if getattr(engine_layer, '_use_hf_layer', False):
+        # Skip if we used HF's layer directly (linear_attention)
+        if engine_layer._use_hf_layer:
             if is_main and layer_idx < 3:
                 print(f"    Layer {layer_idx}: MLP/MoE already copied with HF layer", flush=True)
         elif has_moe:
-            # MoE layer
             if is_main and layer_idx < 3:
                 print(f"    Layer {layer_idx}: Copying MoE weights", flush=True)
             _copy_moe_weights(hf_layer.mlp, engine_layer.mlp, config, 
                              use_tp, tp_rank, tp_world_size, layer_idx)
         elif has_dense_mlp:
-            # Dense MLP layer
             if is_main and layer_idx < 3:
                 print(f"    Layer {layer_idx}: Copying dense MLP weights", flush=True)
             _copy_dense_mlp_weights(hf_layer.mlp, engine_layer.mlp, config,
                                    use_tp, tp_rank, tp_world_size, layer_idx)
         else:
-            if is_main:
+            if is_main and not engine_layer._use_hf_layer:
                 print(f"  Layer {layer_idx}: SKIPPING MLP (unknown type)")
         
         # ========== LAYER NORMS ==========
-        # Skip if we used HF's layer directly (already copied above)
-        if not getattr(engine_layer, '_use_hf_layer', False):
+        # Skip if we used HF's layer directly (linear_attention)
+        if not engine_layer._use_hf_layer:
             if hasattr(hf_layer, 'input_layernorm') and hf_layer.input_layernorm is not None:
                 _copy_to_device(hf_layer.input_layernorm.weight.data, engine_layer.input_layernorm.weight)
             if hasattr(hf_layer, 'post_attention_layernorm') and hf_layer.post_attention_layernorm is not None:
@@ -1310,17 +1349,18 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
         lmhead_sum = engine_model.lm_head.weight.data.abs().sum().item()
         print(f"    Embedding weight abs sum: {embed_sum:.4f}", flush=True)
         print(f"    LM head weight abs sum: {lmhead_sum:.4f}", flush=True)
-        # Check first attention layer weights (could be full attention or linear attention)
+        # Check first attention layer weights
         for layer in engine_model.model.layers:
-            if layer.self_attn is not None:
-                q_sum = layer.self_attn.q_proj.weight.data.abs().sum().item()
-                print(f"    First full attention q_proj abs sum: {q_sum:.4f}", flush=True)
-                break
-            elif layer.linear_attn is not None:
+            if layer._use_hf_layer and layer.linear_attn is not None:
                 # Linear attention uses HF module directly
                 if hasattr(layer.linear_attn, 'in_proj_qkvz'):
                     qkvz_sum = layer.linear_attn.in_proj_qkvz.weight.data.abs().sum().item()
                     print(f"    First linear attention in_proj_qkvz abs sum: {qkvz_sum:.4f}", flush=True)
+                break
+            elif layer.self_attn is not None:
+                # Full attention uses our implementation
+                q_sum = layer.self_attn.q_proj.weight.data.abs().sum().item()
+                print(f"    First full attention q_proj abs sum: {q_sum:.4f}", flush=True)
                 break
     
     if is_main:
