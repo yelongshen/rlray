@@ -811,12 +811,10 @@ class Qwen3NextMLPForEngine(nn.Module):
 
 class Qwen3NextDecoderLayerForEngine(nn.Module):
     """
-    Hybrid decoder layer for Qwen3-Next supporting:
-    - Full attention OR linear attention (GatedDeltaNet)
-    - Dense MLP OR MoE
+    Hybrid decoder layer for Qwen3-Next.
     
-    For linear attention layers: uses HF's modules directly
-    For full attention layers: uses our implementation (for paged attention support)
+    Uses HF's layer modules directly to ensure correctness.
+    The layer modules will be assigned from HF model during weight copy.
     """
     def __init__(self, config, layer_idx: int, use_tp: bool = False):
         super().__init__()
@@ -831,41 +829,13 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         else:
             self.layer_type = "full_attention"
         
-        # Token mixer (attention)
-        if self.layer_type == "linear_attention":
-            # For linear attention, we'll use HF's module directly
-            # These will be assigned later during weight copy
-            self.linear_attn = None  # Placeholder, will be replaced with HF module
-            self.self_attn = None
-            self.input_layernorm = None  # Will use HF's
-            self.post_attention_layernorm = None  # Will use HF's
-            self.mlp = None  # Will use HF's
-            self.is_moe = None  # Will be determined later
-            self._use_hf_layer = True  # Flag to indicate HF layer usage
-        else:  # full_attention
-            self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx, use_tp=use_tp)
-            self.linear_attn = None
-            self._use_hf_layer = False
-            
-            # MLP block - determine if MoE or dense
-            num_experts = getattr(config, 'num_experts', 0)
-            decoder_sparse_step = getattr(config, 'decoder_sparse_step', 1)
-            mlp_only_layers = getattr(config, 'mlp_only_layers', [])
-            
-            # MoE is used if: num_experts > 0 AND (layer_idx + 1) % decoder_sparse_step == 0 AND not in mlp_only_layers
-            use_moe = (num_experts > 0 and 
-                      (layer_idx + 1) % decoder_sparse_step == 0 and 
-                      layer_idx not in mlp_only_layers)
-            
-            if use_moe:
-                self.mlp = Qwen3NextSparseMoeBlockForEngine(config, use_tp=use_tp)
-                self.is_moe = True
-            else:
-                self.mlp = Qwen3NextMLPForEngine(config, use_tp=use_tp)
-                self.is_moe = False
-            
-            self.input_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
-            self.post_attention_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
+        # All modules will be assigned from HF model during weight copy
+        self.linear_attn = None
+        self.self_attn = None
+        self.input_layernorm = None
+        self.post_attention_layernorm = None
+        self.mlp = None
+        self._use_hf_layer = True  # Always use HF layer modules
 
     def forward(
         self,
@@ -879,46 +849,27 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         cur_pos: int = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
-        # For linear attention layers using HF modules directly
-        if getattr(self, '_use_hf_layer', False) and self.linear_attn is not None:
-            residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
-            
-            # Use HF's linear_attn module directly
-            hidden_states = self.linear_attn(hidden_states)[0]
-            hidden_states = residual + hidden_states
-            
-            # MLP
-            residual = hidden_states
-            hidden_states = self.post_attention_layernorm(hidden_states)
-            hidden_states = self.mlp(hidden_states)
-            hidden_states = residual + hidden_states
-            
-            return hidden_states, None, None
-        
-        # For full attention layers using our implementation
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         
-        hidden_states, k_cache, v_cache = self.self_attn(
-            hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            cos=cos,
-            sin=sin,
-            inference_mode=inference_mode,
-            max_generation=max_generation,
-            cur_pos=cur_pos,
-        )
+        # Token mixer - use HF modules
+        if self.layer_type == "linear_attention" and self.linear_attn is not None:
+            # Use HF's linear_attn module directly
+            hidden_states = self.linear_attn(hidden_states)[0]
+        elif self.self_attn is not None:
+            # Use HF's self_attn module directly with position_embeddings
+            position_embeddings = (cos, sin) if cos is not None else None
+            hidden_states = self.self_attn(hidden_states, position_embeddings=position_embeddings)[0]
+        
         hidden_states = residual + hidden_states
         
-        # MLP
+        # MLP - use HF module
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
         
-        return hidden_states, k_cache, v_cache
+        return hidden_states, None, None
 
 
 class Qwen3NextModelForEngine(nn.Module):
@@ -1280,33 +1231,27 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
                 print(f"    has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet}, detected_type={detected_type}", flush=True)
         
         # ========== ATTENTION WEIGHTS ==========
-        # Engine model always uses self_attn for full attention, linear_attn for linear attention
+        # Use HF's full layer modules directly for ALL layer types
+        if is_main and layer_idx < 3:
+            print(f"    Layer {layer_idx}: Using HF's full layer modules directly ({detected_type})", flush=True)
+        
+        # Move entire HF layer's modules to target device and assign to engine layer
+        engine_layer.input_layernorm = hf_layer.input_layernorm.to(device=target_device, dtype=target_dtype)
+        engine_layer.post_attention_layernorm = hf_layer.post_attention_layernorm.to(device=target_device, dtype=target_dtype)
+        engine_layer.mlp = hf_layer.mlp.to(device=target_device, dtype=target_dtype)
+        
         if has_gated_deltanet or detected_type == "linear_attention":
-            # Linear attention (GatedDeltaNet) layer - use HF's modules directly
-            if is_main and layer_idx < 3:
-                print(f"    Layer {layer_idx}: Using HF's full layer modules directly (linear_attn, layernorms, mlp)", flush=True)
-            
-            # Move entire HF layer's modules to target device and assign to engine layer
-            engine_layer.input_layernorm = hf_layer.input_layernorm.to(device=target_device, dtype=target_dtype)
             engine_layer.linear_attn = hf_attn.to(device=target_device, dtype=target_dtype)
-            engine_layer.post_attention_layernorm = hf_layer.post_attention_layernorm.to(device=target_device, dtype=target_dtype)
-            engine_layer.mlp = hf_layer.mlp.to(device=target_device, dtype=target_dtype)
-            engine_layer._use_hf_layer = True
-            
-            # Skip the separate MLP weight copy below
-            has_moe = False
-            has_dense_mlp = False
-            
-        elif has_k_proj or detected_type == "full_attention":
-            # Full attention layer
-            engine_attn = engine_layer.self_attn if hasattr(engine_layer, 'self_attn') and engine_layer.self_attn is not None else engine_layer.linear_attn
-            if is_main and layer_idx < 3:
-                print(f"    Layer {layer_idx}: Copying full attention weights", flush=True)
-            _copy_full_attention_weights(hf_attn, engine_attn, 
-                                        config, use_tp, tp_rank, tp_world_size, layer_idx)
+            engine_layer.self_attn = None
         else:
-            if is_main:
-                print(f"  Layer {layer_idx}: SKIPPING attention (unknown type, has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet})")
+            engine_layer.self_attn = hf_attn.to(device=target_device, dtype=target_dtype)
+            engine_layer.linear_attn = None
+        
+        engine_layer._use_hf_layer = True
+        
+        # Skip separate MLP/layernorm weight copy - already done above
+        has_moe = False
+        has_dense_mlp = False
         
         # ========== MLP/MoE WEIGHTS ==========
         # Detect if this is MoE or dense MLP
@@ -1721,21 +1666,21 @@ if __name__ == "__main__":
             engine_layer0 = model.model.layers[0]
             engine_hidden = engine_embed.clone()
             engine_residual = engine_hidden
-            engine_hidden = engine_layer0.input_layernorm(engine_hidden)
+            engine_hidden_ln = engine_layer0.input_layernorm(engine_hidden)
             
             # HF layer 0 (move to GPU temporarily)
             hf_layer0 = _hf_model_for_compare.model.layers[0].to(model_device)
             hf_hidden = hf_embed.clone()
             hf_residual = hf_hidden
-            hf_hidden = hf_layer0.input_layernorm(hf_hidden)
+            hf_hidden_ln = hf_layer0.input_layernorm(hf_hidden)
             
-            ln_diff = (engine_hidden - hf_hidden).abs().max().item()
+            ln_diff = (engine_hidden_ln - hf_hidden_ln).abs().max().item()
             print(f"  After input_layernorm: max diff = {ln_diff:.8f}")
             
-            # Linear attention output
+            # Linear attention output (both use HF modules now)
             if engine_layer0.linear_attn is not None:
-                engine_attn_out = engine_layer0.linear_attn(engine_hidden)[0]
-                hf_attn_out = hf_layer0.linear_attn(hf_hidden)[0]
+                engine_attn_out = engine_layer0.linear_attn(engine_hidden_ln)[0]
+                hf_attn_out = hf_layer0.linear_attn(hf_hidden_ln)[0]
                 attn_diff = (engine_attn_out - hf_attn_out).abs().max().item()
                 print(f"  After linear_attn: max diff = {attn_diff:.8f}")
                 print(f"    Engine: mean={engine_attn_out.mean().item():.6f}, std={engine_attn_out.std().item():.6f}")
@@ -1747,15 +1692,15 @@ if __name__ == "__main__":
             # Post attention layernorm
             engine_residual = engine_hidden
             hf_residual = hf_hidden
-            engine_hidden = engine_layer0.post_attention_layernorm(engine_hidden)
-            hf_hidden = hf_layer0.post_attention_layernorm(hf_hidden)
+            engine_hidden_post = engine_layer0.post_attention_layernorm(engine_hidden)
+            hf_hidden_post = hf_layer0.post_attention_layernorm(hf_hidden)
             
-            post_ln_diff = (engine_hidden - hf_hidden).abs().max().item()
+            post_ln_diff = (engine_hidden_post - hf_hidden_post).abs().max().item()
             print(f"  After post_attention_layernorm: max diff = {post_ln_diff:.8f}")
             
             # MLP/MoE output
-            engine_mlp_out = engine_layer0.mlp(engine_hidden)
-            hf_mlp_out = hf_layer0.mlp(hf_hidden)
+            engine_mlp_out = engine_layer0.mlp(engine_hidden_post)
+            hf_mlp_out = hf_layer0.mlp(hf_hidden_post)
             mlp_diff = (engine_mlp_out - hf_mlp_out).abs().max().item()
             print(f"  After MLP/MoE: max diff = {mlp_diff:.8f}")
             print(f"    Engine: mean={engine_mlp_out.mean().item():.6f}, std={engine_mlp_out.std().item():.6f}")
@@ -1763,70 +1708,6 @@ if __name__ == "__main__":
             
             # Move HF layer back to CPU
             hf_layer0 = hf_layer0.to("cpu")
-            torch.cuda.empty_cache()
-            
-            # Compare layer 3 output (first full_attention layer)
-            print("\nComparing layer 3 output (first full_attention layer):")
-            
-            # Run full forward through layers 0-2 to get input to layer 3
-            engine_hidden = engine_embed.clone()
-            hf_hidden = hf_embed.clone()
-            
-            # Position embeddings for HF layers
-            batch_size, seq_length = test_input.shape
-            position_ids = torch.arange(seq_length, dtype=torch.long, device=model_device).unsqueeze(0)
-            hf_cos, hf_sin = _hf_model_for_compare.model.rotary_emb(hf_embed.to("cpu"), position_ids.to("cpu"))
-            hf_cos = hf_cos.to(model_device)
-            hf_sin = hf_sin.to(model_device)
-            hf_position_embeddings = (hf_cos, hf_sin)
-            
-            for i in range(3):
-                engine_layer_i = model.model.layers[i]
-                hf_layer_i = _hf_model_for_compare.model.layers[i].to(model_device)
-                
-                # Engine forward
-                engine_hidden, _, _ = engine_layer_i(engine_hidden)
-                # HF forward - needs position_embeddings
-                hf_hidden = hf_layer_i(hf_hidden, position_embeddings=hf_position_embeddings)[0]
-                
-                hf_layer_i = hf_layer_i.to("cpu")
-            
-            layer3_input_diff = (engine_hidden - hf_hidden).abs().max().item()
-            print(f"  Input to layer 3: max diff = {layer3_input_diff:.8f}")
-            
-            # Layer 3
-            engine_layer3 = model.model.layers[3]
-            hf_layer3 = _hf_model_for_compare.model.layers[3].to(model_device)
-            
-            # Input layernorm
-            engine_residual = engine_hidden
-            hf_residual = hf_hidden
-            engine_hidden_ln = engine_layer3.input_layernorm(engine_hidden)
-            hf_hidden_ln = hf_layer3.input_layernorm(hf_hidden)
-            
-            ln3_diff = (engine_hidden_ln - hf_hidden_ln).abs().max().item()
-            print(f"  After input_layernorm: max diff = {ln3_diff:.8f}")
-            
-            # Full attention - need position_ids and cos/sin
-            cos, sin = model.model.rotary_emb(engine_hidden_ln, position_ids)
-            
-            # Engine attention
-            engine_attn_out, _, _ = engine_layer3.self_attn(
-                engine_hidden_ln,
-                position_ids=position_ids,
-                cos=cos,
-                sin=sin,
-                inference_mode=False,
-            )
-            # HF attention - pass position_embeddings
-            hf_attn_out = hf_layer3.self_attn(hf_hidden_ln, position_embeddings=hf_position_embeddings)[0]
-            
-            attn3_diff = (engine_attn_out - hf_attn_out).abs().max().item()
-            print(f"  After self_attn: max diff = {attn3_diff:.8f}")
-            print(f"    Engine: mean={engine_attn_out.mean().item():.6f}, std={engine_attn_out.std().item():.6f}")
-            print(f"    HF:     mean={hf_attn_out.mean().item():.6f}, std={hf_attn_out.std().item():.6f}")
-            
-            hf_layer3 = hf_layer3.to("cpu")
             torch.cuda.empty_cache()
     
     with torch.no_grad():
