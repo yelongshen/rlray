@@ -1084,7 +1084,20 @@ def load_qwen3_next_for_engine(
         
         # Print attention dimensions
         head_dim = getattr(hf_config, 'head_dim', hf_config.hidden_size // hf_config.num_attention_heads)
-        print(f"Attention config: num_heads={hf_config.num_attention_heads}, num_kv_heads={hf_config.num_key_value_heads}, head_dim={head_dim}")
+        num_q_heads = hf_config.num_attention_heads
+        num_kv_heads = hf_config.num_key_value_heads
+        gqa_ratio = num_q_heads // num_kv_heads
+        print(f"Attention config:")
+        print(f"  - Query heads: {num_q_heads}")
+        print(f"  - KV heads: {num_kv_heads}")
+        print(f"  - GQA ratio: {gqa_ratio} (Q heads per KV head)")
+        print(f"  - head_dim: {head_dim}")
+        if tensor_parallel_size > 1:
+            kv_is_replicated = num_kv_heads < tensor_parallel_size
+            if kv_is_replicated:
+                print(f"  - KV heads replicated (num_kv_heads={num_kv_heads} < tp_size={tensor_parallel_size})")
+            else:
+                print(f"  - KV heads sharded: {num_kv_heads // tensor_parallel_size} per GPU")
     
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     hf_model = AutoModelForCausalLM.from_pretrained(
