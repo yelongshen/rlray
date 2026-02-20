@@ -1041,6 +1041,23 @@ def load_qwen3_next_for_engine(
     
     # Load HuggingFace model
     hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    
+    # Print layer configuration
+    layer_types = getattr(hf_config, 'layer_types', None)
+    if layer_types:
+        print(f"Layer types ({len(layer_types)} layers):")
+        full_attn_count = sum(1 for t in layer_types if t == "full_attention")
+        linear_attn_count = sum(1 for t in layer_types if t == "linear_attention")
+        print(f"  - full_attention: {full_attn_count}")
+        print(f"  - linear_attention: {linear_attn_count}")
+        print(f"  - pattern: {layer_types[:10]}..." if len(layer_types) > 10 else f"  - pattern: {layer_types}")
+    
+    # Print MoE configuration
+    num_experts = getattr(hf_config, 'num_experts', 0)
+    decoder_sparse_step = getattr(hf_config, 'decoder_sparse_step', 1)
+    if num_experts > 0:
+        print(f"MoE config: num_experts={num_experts}, decoder_sparse_step={decoder_sparse_step}")
+    
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     hf_model = AutoModelForCausalLM.from_pretrained(
         model_path,
