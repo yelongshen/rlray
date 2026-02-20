@@ -1772,14 +1772,22 @@ if __name__ == "__main__":
             engine_hidden = engine_embed.clone()
             hf_hidden = hf_embed.clone()
             
+            # Position embeddings for HF layers
+            batch_size, seq_length = test_input.shape
+            position_ids = torch.arange(seq_length, dtype=torch.long, device=model_device).unsqueeze(0)
+            hf_cos, hf_sin = _hf_model_for_compare.model.rotary_emb(hf_embed.to("cpu"), position_ids.to("cpu"))
+            hf_cos = hf_cos.to(model_device)
+            hf_sin = hf_sin.to(model_device)
+            hf_position_embeddings = (hf_cos, hf_sin)
+            
             for i in range(3):
                 engine_layer_i = model.model.layers[i]
                 hf_layer_i = _hf_model_for_compare.model.layers[i].to(model_device)
                 
                 # Engine forward
                 engine_hidden, _, _ = engine_layer_i(engine_hidden)
-                # HF forward - call forward directly
-                hf_hidden = hf_layer_i(hf_hidden)[0]
+                # HF forward - needs position_embeddings
+                hf_hidden = hf_layer_i(hf_hidden, position_embeddings=hf_position_embeddings)[0]
                 
                 hf_layer_i = hf_layer_i.to("cpu")
             
@@ -1800,8 +1808,6 @@ if __name__ == "__main__":
             print(f"  After input_layernorm: max diff = {ln3_diff:.8f}")
             
             # Full attention - need position_ids and cos/sin
-            batch_size, seq_length = test_input.shape
-            position_ids = torch.arange(seq_length, dtype=torch.long, device=model_device).unsqueeze(0)
             cos, sin = model.model.rotary_emb(engine_hidden_ln, position_ids)
             
             # Engine attention
@@ -1812,8 +1818,8 @@ if __name__ == "__main__":
                 sin=sin,
                 inference_mode=False,
             )
-            # HF attention
-            hf_attn_out = hf_layer3.self_attn(hf_hidden_ln)[0]
+            # HF attention - pass position_embeddings
+            hf_attn_out = hf_layer3.self_attn(hf_hidden_ln, position_embeddings=hf_position_embeddings)[0]
             
             attn3_diff = (engine_attn_out - hf_attn_out).abs().max().item()
             print(f"  After self_attn: max diff = {attn3_diff:.8f}")
