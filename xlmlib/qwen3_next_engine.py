@@ -24,6 +24,7 @@ Usage:
     )
 """
 
+import gc
 import math
 import torch
 import torch.nn as nn
@@ -1077,18 +1078,18 @@ def load_qwen3_next_for_engine(
     )
     
     # Create our engine-compatible model with TP support
+    # Initialize model on target device to avoid CPU memory pressure
+    if is_main:
+        print(f"Creating engine model on {device}...", flush=True)
     model = Qwen3NextForLLMEngine(hf_config, use_tp=use_tp)
+    model = model.to(device=device, dtype=torch_dtype)
     
-    # Copy weights from HuggingFace model (handles TP sharding)
+    # Copy weights from HuggingFace model directly to GPU (handles TP sharding)
     is_main = get_tp_rank() == 0
     if is_main:
         print("Copying weights to engine-compatible model...")
-    _copy_weights(hf_model, model, hf_config, use_tp=use_tp)
+    _copy_weights(hf_model, model, hf_config, use_tp=use_tp, target_device=device, target_dtype=torch_dtype)
     
-    if is_main:
-        print("Moving model to device...", flush=True)
-    # Move to device
-    model = model.to(device=device, dtype=torch_dtype)
     model.eval()
     
     # Create LLMEngine-compatible config
@@ -1112,11 +1113,14 @@ def load_qwen3_next_for_engine(
     return model, tokenizer, llm_config
 
 
-def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
+def _copy_weights(hf_model, engine_model, config, use_tp: bool = False, 
+                  target_device: str = "cuda", target_dtype=None):
     """Copy weights from HuggingFace model to our engine-compatible model.
     
     For tensor parallelism, this shards the weights across GPUs.
     Supports hybrid architecture: full attention + linear attention (GatedDeltaNet) + MoE.
+    
+    Memory optimization: Copies weights directly to target device and frees HF layers progressively.
     """
     tp_rank = get_tp_rank() if use_tp else 0
     tp_world_size = get_tp_world_size() if use_tp else 1
@@ -1124,11 +1128,16 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
     
     if is_main:
         print(f"  TP rank: {tp_rank}, world_size: {tp_world_size}", flush=True)
+        print(f"  Target device: {target_device}, dtype: {target_dtype}", flush=True)
+    
+    def _copy_to_device(src_tensor, dst_tensor):
+        """Copy tensor from CPU to target device with dtype conversion."""
+        dst_tensor.data.copy_(src_tensor.to(device=dst_tensor.device, dtype=dst_tensor.dtype))
     
     # Copy embeddings (replicated across all ranks)
     if is_main:
         print("  Copying embeddings...", flush=True)
-    engine_model.model.embed_tokens.weight.data.copy_(hf_model.model.embed_tokens.weight.data)
+    _copy_to_device(hf_model.model.embed_tokens.weight.data, engine_model.model.embed_tokens.weight)
     
     # Copy lm_head (sharded if TP)
     if is_main:
@@ -1138,14 +1147,19 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
         shard_size = vocab_size // tp_world_size
         start = tp_rank * shard_size
         end = start + shard_size
-        engine_model.lm_head.weight.data.copy_(hf_model.lm_head.weight.data[start:end])
+        _copy_to_device(hf_model.lm_head.weight.data[start:end], engine_model.lm_head.weight)
     else:
-        engine_model.lm_head.weight.data.copy_(hf_model.lm_head.weight.data)
+        _copy_to_device(hf_model.lm_head.weight.data, engine_model.lm_head.weight)
+    
+    # Free HF embeddings and lm_head to save CPU memory
+    hf_model.model.embed_tokens = None
+    hf_model.lm_head = None
     
     # Copy final norm (replicated)
     if is_main:
         print("  Copying final norm...", flush=True)
-    engine_model.model.norm.weight.data.copy_(hf_model.model.norm.weight.data)
+    _copy_to_device(hf_model.model.norm.weight.data, engine_model.model.norm.weight)
+    hf_model.model.norm = None
     
     # Copy layers
     num_layers = config.num_hidden_layers
@@ -1228,9 +1242,16 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
         
         # ========== LAYER NORMS ==========
         if hasattr(hf_layer, 'input_layernorm') and hf_layer.input_layernorm is not None:
-            engine_layer.input_layernorm.weight.data.copy_(hf_layer.input_layernorm.weight.data)
+            _copy_to_device(hf_layer.input_layernorm.weight.data, engine_layer.input_layernorm.weight)
         if hasattr(hf_layer, 'post_attention_layernorm') and hf_layer.post_attention_layernorm is not None:
-            engine_layer.post_attention_layernorm.weight.data.copy_(hf_layer.post_attention_layernorm.weight.data)
+            _copy_to_device(hf_layer.post_attention_layernorm.weight.data, engine_layer.post_attention_layernorm.weight)
+        
+        # Free HF layer to save CPU memory
+        hf_model.model.layers[layer_idx] = None
+        
+        # Periodic garbage collection to free memory more aggressively
+        if layer_idx % 10 == 0:
+            gc.collect()
     
     if is_main:
         print("  Weight copy complete!", flush=True)
