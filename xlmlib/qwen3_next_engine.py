@@ -1678,6 +1678,56 @@ if __name__ == "__main__":
             print(f"  Engine embedding: mean={engine_embed.mean().item():.6f}, std={engine_embed.std().item():.6f}")
             print(f"  HF embedding:     mean={hf_embed.mean().item():.6f}, std={hf_embed.std().item():.6f}")
             print(f"  Max absolute diff: {embed_diff:.8f}")
+            
+            # Compare layer 0 output
+            print("\nComparing layer 0 output:")
+            # Engine layer 0
+            engine_layer0 = model.model.layers[0]
+            engine_hidden = engine_embed.clone()
+            engine_residual = engine_hidden
+            engine_hidden = engine_layer0.input_layernorm(engine_hidden)
+            
+            # HF layer 0 (move to GPU temporarily)
+            hf_layer0 = _hf_model_for_compare.model.layers[0].to(model_device)
+            hf_hidden = hf_embed.clone()
+            hf_residual = hf_hidden
+            hf_hidden = hf_layer0.input_layernorm(hf_hidden)
+            
+            ln_diff = (engine_hidden - hf_hidden).abs().max().item()
+            print(f"  After input_layernorm: max diff = {ln_diff:.8f}")
+            
+            # Linear attention output
+            if engine_layer0.linear_attn is not None:
+                engine_attn_out = engine_layer0.linear_attn(engine_hidden)[0]
+                hf_attn_out = hf_layer0.linear_attn(hf_hidden)[0]
+                attn_diff = (engine_attn_out - hf_attn_out).abs().max().item()
+                print(f"  After linear_attn: max diff = {attn_diff:.8f}")
+                print(f"    Engine: mean={engine_attn_out.mean().item():.6f}, std={engine_attn_out.std().item():.6f}")
+                print(f"    HF:     mean={hf_attn_out.mean().item():.6f}, std={hf_attn_out.std().item():.6f}")
+                
+                engine_hidden = engine_residual + engine_attn_out
+                hf_hidden = hf_residual + hf_attn_out
+            
+            # Post attention layernorm
+            engine_residual = engine_hidden
+            hf_residual = hf_hidden
+            engine_hidden = engine_layer0.post_attention_layernorm(engine_hidden)
+            hf_hidden = hf_layer0.post_attention_layernorm(hf_hidden)
+            
+            post_ln_diff = (engine_hidden - hf_hidden).abs().max().item()
+            print(f"  After post_attention_layernorm: max diff = {post_ln_diff:.8f}")
+            
+            # MLP/MoE output
+            engine_mlp_out = engine_layer0.mlp(engine_hidden)
+            hf_mlp_out = hf_layer0.mlp(hf_hidden)
+            mlp_diff = (engine_mlp_out - hf_mlp_out).abs().max().item()
+            print(f"  After MLP/MoE: max diff = {mlp_diff:.8f}")
+            print(f"    Engine: mean={engine_mlp_out.mean().item():.6f}, std={engine_mlp_out.std().item():.6f}")
+            print(f"    HF:     mean={hf_mlp_out.mean().item():.6f}, std={hf_mlp_out.std().item():.6f}")
+            
+            # Move HF layer back to CPU
+            hf_layer0 = hf_layer0.to("cpu")
+            torch.cuda.empty_cache()
     
     with torch.no_grad():
         _, logits, _, _ = model(test_input, inference_mode=False)
