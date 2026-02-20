@@ -1633,6 +1633,11 @@ if __name__ == "__main__":
         hf_generated_text = tokenizer.decode(hf_generated[0], skip_special_tokens=True)
         print(f"HF model generated: {hf_generated_text}")
         
+        # Move HF model to CPU to free GPU memory before loading engine model
+        print("\nMoving HF model to CPU to free GPU memory...")
+        hf_model = hf_model.to("cpu")
+        torch.cuda.empty_cache()
+        
         # Keep HF model for later comparison
         _hf_model_for_compare = hf_model
     else:
@@ -1663,7 +1668,9 @@ if __name__ == "__main__":
         print("\nComparing embedding outputs:")
         with torch.no_grad():
             engine_embed = model.model.embed_tokens(test_input)
-            hf_embed = _hf_model_for_compare.model.embed_tokens(test_input)
+            # HF model is on CPU, compute embedding on CPU then compare
+            test_input_cpu = test_input.to("cpu")
+            hf_embed = _hf_model_for_compare.model.embed_tokens(test_input_cpu).to(model_device)
             embed_diff = (engine_embed - hf_embed).abs().max().item()
             print(f"  Engine embedding: mean={engine_embed.mean().item():.6f}, std={engine_embed.std().item():.6f}")
             print(f"  HF embedding:     mean={hf_embed.mean().item():.6f}, std={hf_embed.std().item():.6f}")
