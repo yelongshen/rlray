@@ -95,7 +95,8 @@ def init_tensor_parallel(tensor_parallel_size: int = 1):
             _TENSOR_PARALLEL_WORLD_SIZE = tensor_parallel_size
             _TENSOR_PARALLEL_RANK = rank - i * tensor_parallel_size
     
-    print(f"Initialized TP: rank={_TENSOR_PARALLEL_RANK}/{_TENSOR_PARALLEL_WORLD_SIZE}")
+    if _TENSOR_PARALLEL_RANK == 0:
+        print(f"Initialized TP: rank={_TENSOR_PARALLEL_RANK}/{_TENSOR_PARALLEL_WORLD_SIZE}")
 
 
 def get_tp_world_size() -> int:
@@ -1036,32 +1037,36 @@ def load_qwen3_next_for_engine(
         init_tensor_parallel(tensor_parallel_size)
         rank = get_tp_rank()
         device = f"cuda:{rank}"
-        print(f"Tensor parallel enabled: rank {rank}/{tensor_parallel_size}, device {device}")
+        if rank == 0:
+            print(f"Tensor parallel enabled: {tensor_parallel_size} GPUs")
     
-    print(f"Loading Qwen3-Next from {model_path}...")
+    is_main = get_tp_rank() == 0
+    if is_main:
+        print(f"Loading Qwen3-Next from {model_path}...")
     
     # Load HuggingFace model
     hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     
-    # Print layer configuration
-    layer_types = getattr(hf_config, 'layer_types', None)
-    if layer_types:
-        print(f"Layer types ({len(layer_types)} layers):")
-        full_attn_count = sum(1 for t in layer_types if t == "full_attention")
-        linear_attn_count = sum(1 for t in layer_types if t == "linear_attention")
-        print(f"  - full_attention: {full_attn_count}")
-        print(f"  - linear_attention: {linear_attn_count}")
-        print(f"  - pattern: {layer_types[:10]}..." if len(layer_types) > 10 else f"  - pattern: {layer_types}")
-    
-    # Print MoE configuration
-    num_experts = getattr(hf_config, 'num_experts', 0)
-    decoder_sparse_step = getattr(hf_config, 'decoder_sparse_step', 1)
-    if num_experts > 0:
-        print(f"MoE config: num_experts={num_experts}, decoder_sparse_step={decoder_sparse_step}")
-    
-    # Print attention dimensions
-    head_dim = getattr(hf_config, 'head_dim', hf_config.hidden_size // hf_config.num_attention_heads)
-    print(f"Attention config: num_heads={hf_config.num_attention_heads}, num_kv_heads={hf_config.num_key_value_heads}, head_dim={head_dim}")
+    # Print layer configuration (only rank 0)
+    if is_main:
+        layer_types = getattr(hf_config, 'layer_types', None)
+        if layer_types:
+            print(f"Layer types ({len(layer_types)} layers):")
+            full_attn_count = sum(1 for t in layer_types if t == "full_attention")
+            linear_attn_count = sum(1 for t in layer_types if t == "linear_attention")
+            print(f"  - full_attention: {full_attn_count}")
+            print(f"  - linear_attention: {linear_attn_count}")
+            print(f"  - pattern: {layer_types[:10]}..." if len(layer_types) > 10 else f"  - pattern: {layer_types}")
+        
+        # Print MoE configuration
+        num_experts = getattr(hf_config, 'num_experts', 0)
+        decoder_sparse_step = getattr(hf_config, 'decoder_sparse_step', 1)
+        if num_experts > 0:
+            print(f"MoE config: num_experts={num_experts}, decoder_sparse_step={decoder_sparse_step}")
+        
+        # Print attention dimensions
+        head_dim = getattr(hf_config, 'head_dim', hf_config.hidden_size // hf_config.num_attention_heads)
+        print(f"Attention config: num_heads={hf_config.num_attention_heads}, num_kv_heads={hf_config.num_key_value_heads}, head_dim={head_dim}")
     
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     hf_model = AutoModelForCausalLM.from_pretrained(
@@ -1075,7 +1080,9 @@ def load_qwen3_next_for_engine(
     model = Qwen3NextForLLMEngine(hf_config, use_tp=use_tp)
     
     # Copy weights from HuggingFace model (handles TP sharding)
-    print("Copying weights to engine-compatible model...")
+    is_main = get_tp_rank() == 0
+    if is_main:
+        print("Copying weights to engine-compatible model...")
     _copy_weights(hf_model, model, hf_config, use_tp=use_tp)
     
     # Move to device
@@ -1098,7 +1105,8 @@ def load_qwen3_next_for_engine(
     del hf_model
     torch.cuda.empty_cache()
     
-    print("Model loaded and converted successfully!")
+    if is_main:
+        print("Model loaded and converted successfully!")
     return model, tokenizer, llm_config
 
 
@@ -1145,7 +1153,8 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
             hf_attn = hf_layer.linear_attn
             detected_type = "linear_attention"
         else:
-            print(f"  Layer {layer_idx}: No attention module found")
+            if tp_rank == 0:
+                print(f"  Layer {layer_idx}: No attention module found")
             detected_type = None
         
         # Detect layer type from structure - check actual weight sizes
@@ -1174,7 +1183,8 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
             _copy_full_attention_weights(hf_attn, engine_attn, 
                                         config, use_tp, tp_rank, tp_world_size, layer_idx)
         else:
-            print(f"  Layer {layer_idx}: Skipping attention (unknown type, has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet})")
+            if tp_rank == 0:
+                print(f"  Layer {layer_idx}: Skipping attention (unknown type, has_k_proj={has_k_proj}, has_gated_deltanet={has_gated_deltanet})")
         
         # ========== MLP/MoE WEIGHTS ==========
         # Detect if this is MoE or dense MLP
@@ -1196,7 +1206,8 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
             _copy_dense_mlp_weights(hf_layer.mlp, engine_layer.mlp, config,
                                    use_tp, tp_rank, tp_world_size, layer_idx)
         else:
-            print(f"  Layer {layer_idx}: Skipping MLP (unknown type)")
+            if tp_rank == 0:
+                print(f"  Layer {layer_idx}: Skipping MLP (unknown type)")
         
         # ========== LAYER NORMS ==========
         if hasattr(hf_layer, 'input_layernorm') and hf_layer.input_layernorm is not None:
@@ -1414,32 +1425,43 @@ if __name__ == "__main__":
     # For TP mode, device is set by init_tensor_parallel
     device = "cuda:0" if args.tensor_parallel == 1 else "cuda"
     
-    print(f"Testing load_qwen3_next_for_engine with {args.model_path}")
-    print(f"Tensor parallel size: {args.tensor_parallel}")
+    # These early prints are before TP is initialized, but only rank 0 should print
+    # For TP, use RANK env var; for single GPU, always print
+    import os as os_module
+    rank_env = int(os_module.environ.get("RANK", "0"))
+    if rank_env == 0:
+        print(f"Testing load_qwen3_next_for_engine with {args.model_path}")
+        print(f"Tensor parallel size: {args.tensor_parallel}")
     
     model, tokenizer, config = load_qwen3_next_for_engine(
         args.model_path, 
         device=device,
         tensor_parallel_size=args.tensor_parallel
     )
-    print(f"Model loaded: {type(model)}")
-    print(f"Config: hidden_size={config.hidden_size}, num_layers={config.num_hidden_layers}")
+    
+    is_main = get_tp_rank() == 0
+    if is_main:
+        print(f"Model loaded: {type(model)}")
+        print(f"Config: hidden_size={config.hidden_size}, num_layers={config.num_hidden_layers}")
     
     # Get the actual device model is on
     model_device = next(model.parameters()).device
     
-    # Test 1: Direct forward pass
-    print("\n=== Test 1: Direct Forward Pass ===")
+    # Test 1: Direct forward pass (all ranks must run, only rank 0 prints)
+    if is_main:
+        print("\n=== Test 1: Direct Forward Pass ===")
     test_input = tokenizer.encode("Hello", return_tensors="pt").to(model_device)
     with torch.no_grad():
         _, logits, _, _ = model(test_input, inference_mode=False)
-    print(f"Input shape: {test_input.shape}")
-    print(f"Output logits shape: {logits.shape}")
-    print("Direct forward pass: OK")
+    if is_main:
+        print(f"Input shape: {test_input.shape}")
+        print(f"Output logits shape: {logits.shape}")
+        print("Direct forward pass: OK")
     
     # Test 2: With LLMEngine
     if args.test_engine:
-        print("\n=== Test 2: LLMEngine Generation ===")
+        if is_main:
+            print("\n=== Test 2: LLMEngine Generation ===")
         from llm_engine import LLMEngine
         
         config.eos_token_id = tokenizer.eos_token_id
@@ -1450,17 +1472,18 @@ if __name__ == "__main__":
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         input_ids = tokenizer.encode(text)
         
-        print(f"Prompt: {args.prompt}")
-        print(f"Input tokens: {len(input_ids)}")
+        if is_main:
+            print(f"Prompt: {args.prompt}")
+            print(f"Input tokens: {len(input_ids)}")
         
         import time
         start = time.time()
         output_ids = engine.generate([input_ids])[0]
         elapsed = time.time() - start
         
-        new_tokens = len(output_ids) - len(input_ids)
-        response = tokenizer.decode(output_ids[len(input_ids):], skip_special_tokens=True)
-        
-        print(f"Generated {new_tokens} tokens in {elapsed:.2f}s ({new_tokens/elapsed:.1f} tok/s)")
-        print(f"Response: {response}")
+        if is_main:
+            new_tokens = len(output_ids) - len(input_ids)
+            response = tokenizer.decode(output_ids[len(input_ids):], skip_special_tokens=True)
+            print(f"Generated {new_tokens} tokens in {elapsed:.2f}s ({new_tokens/elapsed:.1f} tok/s)")
+            print(f"Response: {response}")
 
