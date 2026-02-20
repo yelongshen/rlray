@@ -1450,12 +1450,18 @@ if __name__ == "__main__":
     # Test 1: Direct forward pass (all ranks must run, only rank 0 prints)
     if is_main:
         print("\n=== Test 1: Direct Forward Pass ===")
-    test_input = tokenizer.encode("Hello", return_tensors="pt").to(model_device)
+    test_input_text = "Hello"
+    test_input = tokenizer.encode(test_input_text, return_tensors="pt").to(model_device)
     with torch.no_grad():
         _, logits, _, _ = model(test_input, inference_mode=False)
     if is_main:
+        print(f"Input string: {test_input_text}")
         print(f"Input shape: {test_input.shape}")
         print(f"Output logits shape: {logits.shape}")
+        # Get predicted next token
+        next_token_id = logits[0, -1, :].argmax().item()
+        next_token = tokenizer.decode([next_token_id])
+        print(f"Predicted next token: {next_token}")
         print("Direct forward pass: OK")
     
     # Test 2: With LLMEngine
