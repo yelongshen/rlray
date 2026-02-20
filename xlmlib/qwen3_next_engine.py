@@ -814,6 +814,9 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
     Hybrid decoder layer for Qwen3-Next supporting:
     - Full attention OR linear attention (GatedDeltaNet)
     - Dense MLP OR MoE
+    
+    For linear attention layers: uses HF's modules directly
+    For full attention layers: uses our implementation (for paged attention support)
     """
     def __init__(self, config, layer_idx: int, use_tp: bool = False):
         super().__init__()
@@ -831,32 +834,38 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         # Token mixer (attention)
         if self.layer_type == "linear_attention":
             # For linear attention, we'll use HF's module directly
-            # It will be assigned later during weight copy
+            # These will be assigned later during weight copy
             self.linear_attn = None  # Placeholder, will be replaced with HF module
             self.self_attn = None
+            self.input_layernorm = None  # Will use HF's
+            self.post_attention_layernorm = None  # Will use HF's
+            self.mlp = None  # Will use HF's
+            self.is_moe = None  # Will be determined later
+            self._use_hf_layer = True  # Flag to indicate HF layer usage
         else:  # full_attention
             self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx, use_tp=use_tp)
             self.linear_attn = None
-        
-        # MLP block - determine if MoE or dense
-        num_experts = getattr(config, 'num_experts', 0)
-        decoder_sparse_step = getattr(config, 'decoder_sparse_step', 1)
-        mlp_only_layers = getattr(config, 'mlp_only_layers', [])
-        
-        # MoE is used if: num_experts > 0 AND (layer_idx + 1) % decoder_sparse_step == 0 AND not in mlp_only_layers
-        use_moe = (num_experts > 0 and 
-                  (layer_idx + 1) % decoder_sparse_step == 0 and 
-                  layer_idx not in mlp_only_layers)
-        
-        if use_moe:
-            self.mlp = Qwen3NextSparseMoeBlockForEngine(config, use_tp=use_tp)
-            self.is_moe = True
-        else:
-            self.mlp = Qwen3NextMLPForEngine(config, use_tp=use_tp)
-            self.is_moe = False
-        
-        self.input_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
-        self.post_attention_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
+            self._use_hf_layer = False
+            
+            # MLP block - determine if MoE or dense
+            num_experts = getattr(config, 'num_experts', 0)
+            decoder_sparse_step = getattr(config, 'decoder_sparse_step', 1)
+            mlp_only_layers = getattr(config, 'mlp_only_layers', [])
+            
+            # MoE is used if: num_experts > 0 AND (layer_idx + 1) % decoder_sparse_step == 0 AND not in mlp_only_layers
+            use_moe = (num_experts > 0 and 
+                      (layer_idx + 1) % decoder_sparse_step == 0 and 
+                      layer_idx not in mlp_only_layers)
+            
+            if use_moe:
+                self.mlp = Qwen3NextSparseMoeBlockForEngine(config, use_tp=use_tp)
+                self.is_moe = True
+            else:
+                self.mlp = Qwen3NextMLPForEngine(config, use_tp=use_tp)
+                self.is_moe = False
+            
+            self.input_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
+            self.post_attention_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
 
     def forward(
         self,
@@ -869,26 +878,38 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         max_generation: int = 0,
         cur_pos: int = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        
+        # For linear attention layers using HF modules directly
+        if getattr(self, '_use_hf_layer', False) and self.linear_attn is not None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+            
+            # Use HF's linear_attn module directly
+            hidden_states = self.linear_attn(hidden_states)[0]
+            hidden_states = residual + hidden_states
+            
+            # MLP
+            residual = hidden_states
+            hidden_states = self.post_attention_layernorm(hidden_states)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = residual + hidden_states
+            
+            return hidden_states, None, None
+        
+        # For full attention layers using our implementation
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         
-        # Token mixer
-        if self.layer_type == "linear_attention" and self.linear_attn is not None:
-            # Use HF's linear_attn module directly
-            # HF module returns just the output tensor
-            hidden_states = self.linear_attn(hidden_states)[0]
-            k_cache, v_cache = None, None
-        else:
-            hidden_states, k_cache, v_cache = self.self_attn(
-                hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                cos=cos,
-                sin=sin,
-                inference_mode=inference_mode,
-                max_generation=max_generation,
-                cur_pos=cur_pos,
-            )
+        hidden_states, k_cache, v_cache = self.self_attn(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            cos=cos,
+            sin=sin,
+            inference_mode=inference_mode,
+            max_generation=max_generation,
+            cur_pos=cur_pos,
+        )
         hidden_states = residual + hidden_states
         
         # MLP
@@ -1261,12 +1282,21 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
         # ========== ATTENTION WEIGHTS ==========
         # Engine model always uses self_attn for full attention, linear_attn for linear attention
         if has_gated_deltanet or detected_type == "linear_attention":
-            # Linear attention (GatedDeltaNet) layer - use HF's module directly
+            # Linear attention (GatedDeltaNet) layer - use HF's modules directly
             if is_main and layer_idx < 3:
-                print(f"    Layer {layer_idx}: Using HF's linear_attn module directly", flush=True)
-            # Move HF's linear_attn to target device and assign to engine layer
-            hf_attn_module = hf_attn.to(device=target_device, dtype=target_dtype)
-            engine_layer.linear_attn = hf_attn_module
+                print(f"    Layer {layer_idx}: Using HF's full layer modules directly (linear_attn, layernorms, mlp)", flush=True)
+            
+            # Move entire HF layer's modules to target device and assign to engine layer
+            engine_layer.input_layernorm = hf_layer.input_layernorm.to(device=target_device, dtype=target_dtype)
+            engine_layer.linear_attn = hf_attn.to(device=target_device, dtype=target_dtype)
+            engine_layer.post_attention_layernorm = hf_layer.post_attention_layernorm.to(device=target_device, dtype=target_dtype)
+            engine_layer.mlp = hf_layer.mlp.to(device=target_device, dtype=target_dtype)
+            engine_layer._use_hf_layer = True
+            
+            # Skip the separate MLP weight copy below
+            has_moe = False
+            has_dense_mlp = False
+            
         elif has_k_proj or detected_type == "full_attention":
             # Full attention layer
             engine_attn = engine_layer.self_attn if hasattr(engine_layer, 'self_attn') and engine_layer.self_attn is not None else engine_layer.linear_attn
@@ -1289,7 +1319,11 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
                         hf_layer.mlp.gate_proj is not None and
                         not has_moe)
         
-        if has_moe:
+        # Skip if we used HF's layer directly (already copied above)
+        if getattr(engine_layer, '_use_hf_layer', False):
+            if is_main and layer_idx < 3:
+                print(f"    Layer {layer_idx}: MLP/MoE already copied with HF layer", flush=True)
+        elif has_moe:
             # MoE layer
             if is_main and layer_idx < 3:
                 print(f"    Layer {layer_idx}: Copying MoE weights", flush=True)
@@ -1306,10 +1340,12 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False,
                 print(f"  Layer {layer_idx}: SKIPPING MLP (unknown type)")
         
         # ========== LAYER NORMS ==========
-        if hasattr(hf_layer, 'input_layernorm') and hf_layer.input_layernorm is not None:
-            _copy_to_device(hf_layer.input_layernorm.weight.data, engine_layer.input_layernorm.weight)
-        if hasattr(hf_layer, 'post_attention_layernorm') and hf_layer.post_attention_layernorm is not None:
-            _copy_to_device(hf_layer.post_attention_layernorm.weight.data, engine_layer.post_attention_layernorm.weight)
+        # Skip if we used HF's layer directly (already copied above)
+        if not getattr(engine_layer, '_use_hf_layer', False):
+            if hasattr(hf_layer, 'input_layernorm') and hf_layer.input_layernorm is not None:
+                _copy_to_device(hf_layer.input_layernorm.weight.data, engine_layer.input_layernorm.weight)
+            if hasattr(hf_layer, 'post_attention_layernorm') and hf_layer.post_attention_layernorm is not None:
+                _copy_to_device(hf_layer.post_attention_layernorm.weight.data, engine_layer.post_attention_layernorm.weight)
         
         # Free HF layer to save CPU memory
         hf_model.model.layers[layer_idx] = None
