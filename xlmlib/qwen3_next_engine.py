@@ -1101,6 +1101,14 @@ def load_qwen3_next_for_engine(
                 print(f"  - KV heads replicated (num_kv_heads={num_kv_heads} < tp_size={tensor_parallel_size})")
             else:
                 print(f"  - KV heads sharded: {num_kv_heads // tensor_parallel_size} per GPU")
+        
+        # Print GatedDeltaNet config
+        print(f"GatedDeltaNet config:")
+        print(f"  - linear_num_value_heads: {getattr(hf_config, 'linear_num_value_heads', 'NOT SET')}")
+        print(f"  - linear_num_key_heads: {getattr(hf_config, 'linear_num_key_heads', 'NOT SET')}")
+        print(f"  - linear_key_head_dim: {getattr(hf_config, 'linear_key_head_dim', 'NOT SET')}")
+        print(f"  - linear_value_head_dim: {getattr(hf_config, 'linear_value_head_dim', 'NOT SET')}")
+        print(f"  - linear_conv_kernel_dim: {getattr(hf_config, 'linear_conv_kernel_dim', 'NOT SET')}")
     
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     hf_model = AutoModelForCausalLM.from_pretrained(
@@ -1404,6 +1412,13 @@ def _copy_gated_deltanet_weights(hf_attn, engine_attn, config, use_tp, tp_rank, 
     This is because GatedDeltaNet has complex interleaved dimensions that don't
     shard cleanly, and the weights are relatively small compared to full attention.
     """
+    is_main = tp_rank == 0
+    
+    # Debug: print all parameters and buffers for first layer
+    if is_main and layer_idx == 0:
+        print(f"    GatedDeltaNet layer 0 parameters: {[n for n, p in hf_attn.named_parameters()]}", flush=True)
+        print(f"    GatedDeltaNet layer 0 buffers: {[n for n, b in hf_attn.named_buffers()]}", flush=True)
+    
     # Just copy all weights without sharding - replicate across all ranks
     
     # in_proj_qkvz: projects to [q, k, v, z]
@@ -1423,10 +1438,18 @@ def _copy_gated_deltanet_weights(hf_attn, engine_attn, config, use_tp, tp_rank, 
     # dt_bias: per-head bias
     if hasattr(hf_attn, 'dt_bias') and hf_attn.dt_bias is not None:
         engine_attn.dt_bias.data.copy_(hf_attn.dt_bias.data)
+        if is_main and layer_idx == 0:
+            print(f"    Copied dt_bias: {hf_attn.dt_bias.shape}", flush=True)
+    elif is_main and layer_idx == 0:
+        print(f"    WARNING: dt_bias not found in HF model", flush=True)
     
     # A_log: per-head parameter
     if hasattr(hf_attn, 'A_log') and hf_attn.A_log is not None:
         engine_attn.A_log.data.copy_(hf_attn.A_log.data)
+        if is_main and layer_idx == 0:
+            print(f"    Copied A_log: {hf_attn.A_log.shape}", flush=True)
+    elif is_main and layer_idx == 0:
+        print(f"    WARNING: A_log not found in HF model", flush=True)
     
     # norm (gated RMSNorm)
     if hasattr(hf_attn, 'norm') and hf_attn.norm is not None:
@@ -1595,6 +1618,11 @@ if __name__ == "__main__":
         print(f"HF logits shape: {hf_logits.shape}")
         print(f"HF logits last position stats: min={hf_logits[0,-1].min().item():.4f}, max={hf_logits[0,-1].max().item():.4f}, mean={hf_logits[0,-1].mean().item():.4f}")
         
+        # Also capture HF intermediate states for comparison
+        print("\nHF intermediate states:")
+        hf_embed = hf_model.model.embed_tokens(test_input)
+        print(f"  HF embedding output: shape={hf_embed.shape}, mean={hf_embed.mean().item():.6f}, std={hf_embed.std().item():.6f}")
+        
         # HF model greedy generation
         hf_generated = hf_model.generate(
             test_input, 
@@ -1605,9 +1633,10 @@ if __name__ == "__main__":
         hf_generated_text = tokenizer.decode(hf_generated[0], skip_special_tokens=True)
         print(f"HF model generated: {hf_generated_text}")
         
-        # Cleanup HF model
-        del hf_model
-        torch.cuda.empty_cache()
+        # Keep HF model for later comparison
+        _hf_model_for_compare = hf_model
+    else:
+        _hf_model_for_compare = None
     
     model, tokenizer, config = load_qwen3_next_for_engine(
         args.model_path, 
@@ -1628,6 +1657,18 @@ if __name__ == "__main__":
         print("\n=== Test 1: Direct Forward Pass ===")
     test_input_text = "Hello"
     test_input = tokenizer.encode(test_input_text, return_tensors="pt").to(model_device)
+    
+    # Compare embedding outputs if HF model available
+    if args.compare_hf and _hf_model_for_compare is not None:
+        print("\nComparing embedding outputs:")
+        with torch.no_grad():
+            engine_embed = model.model.embed_tokens(test_input)
+            hf_embed = _hf_model_for_compare.model.embed_tokens(test_input)
+            embed_diff = (engine_embed - hf_embed).abs().max().item()
+            print(f"  Engine embedding: mean={engine_embed.mean().item():.6f}, std={engine_embed.std().item():.6f}")
+            print(f"  HF embedding:     mean={hf_embed.mean().item():.6f}, std={hf_embed.std().item():.6f}")
+            print(f"  Max absolute diff: {embed_diff:.8f}")
+    
     with torch.no_grad():
         _, logits, _, _ = model(test_input, inference_mode=False)
     if is_main:
@@ -1640,6 +1681,11 @@ if __name__ == "__main__":
         next_token = tokenizer.decode([next_token_id])
         print(f"Predicted next token: '{next_token}' (id={next_token_id})")
         print("Direct forward pass: OK")
+    
+    # Cleanup HF model if it was kept
+    if args.compare_hf and _hf_model_for_compare is not None:
+        del _hf_model_for_compare
+        torch.cuda.empty_cache()
     
     # Test 1.5: Simple greedy generation (without LLMEngine)
     if is_main:
