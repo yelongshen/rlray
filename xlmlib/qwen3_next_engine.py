@@ -1085,6 +1085,8 @@ def load_qwen3_next_for_engine(
         print("Copying weights to engine-compatible model...")
     _copy_weights(hf_model, model, hf_config, use_tp=use_tp)
     
+    if is_main:
+        print("Moving model to device...", flush=True)
     # Move to device
     model = model.to(device=device, dtype=torch_dtype)
     model.eval()
