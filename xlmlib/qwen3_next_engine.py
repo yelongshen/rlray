@@ -296,22 +296,11 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         projection_size_qkvz = self.key_dim * 2 + self.value_dim * 2
         projection_size_ba = self.num_v_heads * 2
         
-        tp_world_size = get_tp_world_size() if use_tp else 1
-        
-        if use_tp and tp_world_size > 1:
-            self.in_proj_qkvz = ColumnParallelLinear(
-                self.hidden_size, projection_size_qkvz, bias=False, gather_output=False
-            )
-            self.in_proj_ba = ColumnParallelLinear(
-                self.hidden_size, projection_size_ba, bias=False, gather_output=False
-            )
-            self.out_proj = RowParallelLinear(
-                self.value_dim, self.hidden_size, bias=False, input_is_parallel=True
-            )
-        else:
-            self.in_proj_qkvz = nn.Linear(self.hidden_size, projection_size_qkvz, bias=False)
-            self.in_proj_ba = nn.Linear(self.hidden_size, projection_size_ba, bias=False)
-            self.out_proj = nn.Linear(self.value_dim, self.hidden_size, bias=False)
+        # Note: GatedDeltaNet doesn't use TP sharding - weights are replicated
+        # This is because the dimensions are complex and interleaved
+        self.in_proj_qkvz = nn.Linear(self.hidden_size, projection_size_qkvz, bias=False)
+        self.in_proj_ba = nn.Linear(self.hidden_size, projection_size_ba, bias=False)
+        self.out_proj = nn.Linear(self.value_dim, self.hidden_size, bias=False)
         
         # Causal convolution
         self.conv1d = nn.Conv1d(
@@ -1235,93 +1224,43 @@ def _copy_full_attention_weights(hf_attn, engine_attn, config, use_tp, tp_rank, 
 
 
 def _copy_gated_deltanet_weights(hf_attn, engine_attn, config, use_tp, tp_rank, tp_world_size, layer_idx):
-    """Copy weights for GatedDeltaNet (linear attention) layers with optional TP sharding."""
-    hidden_size = config.hidden_size
-    num_heads = getattr(config, 'num_gated_heads', config.num_attention_heads)
-    head_dim = hidden_size // num_heads
-    expand_v = getattr(config, 'expand_v', 1)
-    v_head_dim = int(head_dim * expand_v)
+    """Copy weights for GatedDeltaNet (linear attention) layers.
     
-    # in_proj_qkvz: projects to [q, k, v, z] - output can be sharded
-    # Shape: [num_heads * (head_dim + head_dim + v_head_dim + v_head_dim), hidden_size]
+    Note: GatedDeltaNet weights are NOT sharded with TP - they're replicated.
+    This is because GatedDeltaNet has complex interleaved dimensions that don't
+    shard cleanly, and the weights are relatively small compared to full attention.
+    """
+    # Just copy all weights without sharding - replicate across all ranks
+    
+    # in_proj_qkvz: projects to [q, k, v, z]
     if hasattr(hf_attn, 'in_proj_qkvz') and hf_attn.in_proj_qkvz is not None:
-        if use_tp and tp_world_size > 1:
-            qkvz_per_head = head_dim + head_dim + v_head_dim + v_head_dim
-            heads_per_rank = num_heads // tp_world_size
-            start = tp_rank * heads_per_rank * qkvz_per_head
-            end = start + heads_per_rank * qkvz_per_head
-            engine_attn.in_proj_qkvz.weight.data.copy_(hf_attn.in_proj_qkvz.weight.data[start:end])
-        else:
-            engine_attn.in_proj_qkvz.weight.data.copy_(hf_attn.in_proj_qkvz.weight.data)
+        engine_attn.in_proj_qkvz.weight.data.copy_(hf_attn.in_proj_qkvz.weight.data)
     
     # in_proj_ba: projects to [beta, alpha]
-    # Shape: [num_heads * (1 + head_dim), hidden_size]
     if hasattr(hf_attn, 'in_proj_ba') and hf_attn.in_proj_ba is not None:
-        if use_tp and tp_world_size > 1:
-            ba_per_head = 1 + head_dim
-            heads_per_rank = num_heads // tp_world_size
-            start = tp_rank * heads_per_rank * ba_per_head
-            end = start + heads_per_rank * ba_per_head
-            engine_attn.in_proj_ba.weight.data.copy_(hf_attn.in_proj_ba.weight.data[start:end])
-        else:
-            engine_attn.in_proj_ba.weight.data.copy_(hf_attn.in_proj_ba.weight.data)
+        engine_attn.in_proj_ba.weight.data.copy_(hf_attn.in_proj_ba.weight.data)
     
-    # conv1d: causal convolution - replicated (per head) or sharded
+    # conv1d: causal convolution
     if hasattr(hf_attn, 'conv1d') and hf_attn.conv1d is not None:
-        if use_tp and tp_world_size > 1:
-            # conv1d operates on each head independently, shard by heads
-            conv_dim = hf_attn.conv1d.weight.shape[0]
-            conv_per_rank = conv_dim // tp_world_size
-            start = tp_rank * conv_per_rank
-            end = start + conv_per_rank
-            engine_attn.conv1d.weight.data.copy_(hf_attn.conv1d.weight.data[start:end])
-            if hf_attn.conv1d.bias is not None:
-                engine_attn.conv1d.bias.data.copy_(hf_attn.conv1d.bias.data[start:end])
-        else:
-            engine_attn.conv1d.weight.data.copy_(hf_attn.conv1d.weight.data)
-            if hf_attn.conv1d.bias is not None:
-                engine_attn.conv1d.bias.data.copy_(hf_attn.conv1d.bias.data)
+        engine_attn.conv1d.weight.data.copy_(hf_attn.conv1d.weight.data)
+        if hf_attn.conv1d.bias is not None:
+            engine_attn.conv1d.bias.data.copy_(hf_attn.conv1d.bias.data)
     
-    # dt_bias: per-head bias - replicated or sharded
+    # dt_bias: per-head bias
     if hasattr(hf_attn, 'dt_bias') and hf_attn.dt_bias is not None:
-        if use_tp and tp_world_size > 1:
-            heads_per_rank = num_heads // tp_world_size
-            start = tp_rank * heads_per_rank
-            end = start + heads_per_rank
-            engine_attn.dt_bias.data.copy_(hf_attn.dt_bias.data[start:end])
-        else:
-            engine_attn.dt_bias.data.copy_(hf_attn.dt_bias.data)
+        engine_attn.dt_bias.data.copy_(hf_attn.dt_bias.data)
     
-    # A_log: per-head parameter - replicated or sharded
+    # A_log: per-head parameter
     if hasattr(hf_attn, 'A_log') and hf_attn.A_log is not None:
-        if use_tp and tp_world_size > 1:
-            heads_per_rank = num_heads // tp_world_size
-            start = tp_rank * heads_per_rank
-            end = start + heads_per_rank
-            engine_attn.A_log.data.copy_(hf_attn.A_log.data[start:end])
-        else:
-            engine_attn.A_log.data.copy_(hf_attn.A_log.data)
+        engine_attn.A_log.data.copy_(hf_attn.A_log.data)
     
-    # norm (gated RMSNorm): replicated or sharded
+    # norm (gated RMSNorm)
     if hasattr(hf_attn, 'norm') and hf_attn.norm is not None:
-        if use_tp and tp_world_size > 1:
-            norm_dim = hf_attn.norm.weight.shape[0]
-            norm_per_rank = norm_dim // tp_world_size
-            start = tp_rank * norm_per_rank
-            end = start + norm_per_rank
-            engine_attn.norm.weight.data.copy_(hf_attn.norm.weight.data[start:end])
-        else:
-            engine_attn.norm.weight.data.copy_(hf_attn.norm.weight.data)
+        engine_attn.norm.weight.data.copy_(hf_attn.norm.weight.data)
     
-    # out_proj: [hidden_size, num_heads * v_head_dim] - shard input dim
+    # out_proj
     if hasattr(hf_attn, 'out_proj') and hf_attn.out_proj is not None:
-        if use_tp and tp_world_size > 1:
-            heads_per_rank = num_heads // tp_world_size
-            start = tp_rank * heads_per_rank * v_head_dim
-            end = start + heads_per_rank * v_head_dim
-            engine_attn.out_proj.weight.data.copy_(hf_attn.out_proj.weight.data[:, start:end])
-        else:
-            engine_attn.out_proj.weight.data.copy_(hf_attn.out_proj.weight.data)
+        engine_attn.out_proj.weight.data.copy_(hf_attn.out_proj.weight.data)
 
 
 def _copy_dense_mlp_weights(hf_mlp, engine_mlp, config, use_tp, tp_rank, tp_world_size, layer_idx):
