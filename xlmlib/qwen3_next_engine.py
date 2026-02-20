@@ -920,8 +920,11 @@ class Qwen3NextModelForEngine(nn.Module):
         if rope_theta is None:
             rope_theta = getattr(config, 'rotary_pct_base', 1000000.0)  # Default
         
+        # Use explicit head_dim if set, otherwise compute from hidden_size
+        head_dim = getattr(config, 'head_dim', config.hidden_size // config.num_attention_heads)
+        
         self.rotary_emb = Qwen3NextRotaryEmbedding(
-            config.hidden_size // config.num_attention_heads,
+            head_dim,
             max_position_embeddings=getattr(config, 'max_position_embeddings', 131072),
             base=rope_theta,
         )
