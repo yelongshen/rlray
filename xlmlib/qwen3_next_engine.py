@@ -597,12 +597,20 @@ class Qwen3NextAttentionForEngine(nn.Module):
         # Use config.head_dim if explicitly set (Qwen3-Next may have different head_dim)
         self.head_dim = getattr(config, 'head_dim', config.hidden_size // config.num_attention_heads)
         self.num_key_value_heads = config.num_key_value_heads
-        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         
         # For tensor parallel, split heads across GPUs
         tp_world_size = get_tp_world_size() if use_tp else 1
         self.num_heads_per_partition = self.num_heads // tp_world_size
-        self.num_kv_heads_per_partition = self.num_key_value_heads // tp_world_size
+        
+        # Handle GQA: if KV heads < TP world size, replicate KV instead of sharding
+        self.kv_is_replicated = self.num_key_value_heads < tp_world_size
+        if self.kv_is_replicated:
+            self.num_kv_heads_per_partition = self.num_key_value_heads  # Keep all KV heads
+        else:
+            self.num_kv_heads_per_partition = self.num_key_value_heads // tp_world_size
+        
+        # GQA groups: ratio of Q heads to KV heads in this partition
+        self.num_key_value_groups = self.num_heads_per_partition // self.num_kv_heads_per_partition
         
         if use_tp and tp_world_size > 1:
             # Projections with tensor parallelism
@@ -613,18 +621,26 @@ class Qwen3NextAttentionForEngine(nn.Module):
                 bias=False, 
                 gather_output=False
             )
-            self.k_proj = ColumnParallelLinear(
-                self.hidden_size, 
-                self.num_key_value_heads * self.head_dim, 
-                bias=False, 
-                gather_output=False
-            )
-            self.v_proj = ColumnParallelLinear(
-                self.hidden_size, 
-                self.num_key_value_heads * self.head_dim, 
-                bias=False, 
-                gather_output=False
-            )
+            
+            # KV projections: shard if enough KV heads, otherwise replicate
+            if self.kv_is_replicated:
+                # Replicate KV projections (standard linear, no sharding)
+                self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
+                self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
+            else:
+                self.k_proj = ColumnParallelLinear(
+                    self.hidden_size, 
+                    self.num_key_value_heads * self.head_dim, 
+                    bias=False, 
+                    gather_output=False
+                )
+                self.v_proj = ColumnParallelLinear(
+                    self.hidden_size, 
+                    self.num_key_value_heads * self.head_dim, 
+                    bias=False, 
+                    gather_output=False
+                )
+            
             self.o_proj = RowParallelLinear(
                 self.num_heads * self.head_dim, 
                 self.hidden_size, 
@@ -632,6 +648,7 @@ class Qwen3NextAttentionForEngine(nn.Module):
                 input_is_parallel=True
             )
         else:
+            self.kv_is_replicated = False  # No TP, no replication needed
             # Standard projections
             self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim * 2, bias=False)
             self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
@@ -1268,6 +1285,9 @@ def _copy_full_attention_weights(hf_attn, engine_attn, config, use_tp, tp_rank, 
     # Use config.head_dim if explicitly set (Qwen3-Next may have different head_dim)
     head_dim = getattr(config, 'head_dim', config.hidden_size // num_heads)
     
+    # Check if KV is replicated (when num_kv_heads < tp_world_size)
+    kv_is_replicated = num_kv_heads < tp_world_size
+    
     if use_tp and tp_world_size > 1:
         # ColumnParallelLinear shards by output_size // world_size
         # q_proj output: num_heads * head_dim * 2 (QK with gate)
@@ -1277,15 +1297,19 @@ def _copy_full_attention_weights(hf_attn, engine_attn, config, use_tp, tp_rank, 
         q_end = q_start + q_shard
         engine_attn.q_proj.weight.data.copy_(hf_attn.q_proj.weight.data[q_start:q_end])
         
-        # k_proj output: num_kv_heads * head_dim
-        kv_output_size = num_kv_heads * head_dim
-        kv_shard = kv_output_size // tp_world_size
-        k_start = tp_rank * kv_shard
-        k_end = k_start + kv_shard
-        engine_attn.k_proj.weight.data.copy_(hf_attn.k_proj.weight.data[k_start:k_end])
-        
-        # v_proj: same sharding as k_proj
-        engine_attn.v_proj.weight.data.copy_(hf_attn.v_proj.weight.data[k_start:k_end])
+        if kv_is_replicated:
+            # KV heads are replicated - copy full weights
+            engine_attn.k_proj.weight.data.copy_(hf_attn.k_proj.weight.data)
+            engine_attn.v_proj.weight.data.copy_(hf_attn.v_proj.weight.data)
+        else:
+            # k_proj output: num_kv_heads * head_dim
+            kv_output_size = num_kv_heads * head_dim
+            kv_shard = kv_output_size // tp_world_size
+            k_start = tp_rank * kv_shard
+            k_end = k_start + kv_shard
+            engine_attn.k_proj.weight.data.copy_(hf_attn.k_proj.weight.data[k_start:k_end])
+            # v_proj: same sharding as k_proj
+            engine_attn.v_proj.weight.data.copy_(hf_attn.v_proj.weight.data[k_start:k_end])
         
         # o_proj: RowParallelLinear shards input_size // world_size
         o_input_size = num_heads * head_dim
