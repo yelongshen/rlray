@@ -1764,6 +1764,64 @@ if __name__ == "__main__":
             # Move HF layer back to CPU
             hf_layer0 = hf_layer0.to("cpu")
             torch.cuda.empty_cache()
+            
+            # Compare layer 3 output (first full_attention layer)
+            print("\nComparing layer 3 output (first full_attention layer):")
+            
+            # Run full forward through layers 0-2 to get input to layer 3
+            engine_hidden = engine_embed.clone()
+            hf_hidden = hf_embed.clone()
+            
+            for i in range(3):
+                engine_layer_i = model.model.layers[i]
+                hf_layer_i = _hf_model_for_compare.model.layers[i].to(model_device)
+                
+                # Engine forward
+                engine_hidden, _, _ = engine_layer_i(engine_hidden)
+                # HF forward - call forward directly
+                hf_hidden = hf_layer_i(hf_hidden)[0]
+                
+                hf_layer_i = hf_layer_i.to("cpu")
+            
+            layer3_input_diff = (engine_hidden - hf_hidden).abs().max().item()
+            print(f"  Input to layer 3: max diff = {layer3_input_diff:.8f}")
+            
+            # Layer 3
+            engine_layer3 = model.model.layers[3]
+            hf_layer3 = _hf_model_for_compare.model.layers[3].to(model_device)
+            
+            # Input layernorm
+            engine_residual = engine_hidden
+            hf_residual = hf_hidden
+            engine_hidden_ln = engine_layer3.input_layernorm(engine_hidden)
+            hf_hidden_ln = hf_layer3.input_layernorm(hf_hidden)
+            
+            ln3_diff = (engine_hidden_ln - hf_hidden_ln).abs().max().item()
+            print(f"  After input_layernorm: max diff = {ln3_diff:.8f}")
+            
+            # Full attention - need position_ids and cos/sin
+            batch_size, seq_length = test_input.shape
+            position_ids = torch.arange(seq_length, dtype=torch.long, device=model_device).unsqueeze(0)
+            cos, sin = model.model.rotary_emb(engine_hidden_ln, position_ids)
+            
+            # Engine attention
+            engine_attn_out, _, _ = engine_layer3.self_attn(
+                engine_hidden_ln,
+                position_ids=position_ids,
+                cos=cos,
+                sin=sin,
+                inference_mode=False,
+            )
+            # HF attention
+            hf_attn_out = hf_layer3.self_attn(hf_hidden_ln)[0]
+            
+            attn3_diff = (engine_attn_out - hf_attn_out).abs().max().item()
+            print(f"  After self_attn: max diff = {attn3_diff:.8f}")
+            print(f"    Engine: mean={engine_attn_out.mean().item():.6f}, std={engine_attn_out.std().item():.6f}")
+            print(f"    HF:     mean={hf_attn_out.mean().item():.6f}, std={hf_attn_out.std().item():.6f}")
+            
+            hf_layer3 = hf_layer3.to("cpu")
+            torch.cuda.empty_cache()
     
     with torch.no_grad():
         _, logits, _, _ = model(test_input, inference_mode=False)
