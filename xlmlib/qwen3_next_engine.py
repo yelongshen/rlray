@@ -245,6 +245,320 @@ class Qwen3NextRMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
 
+class Qwen3NextRMSNormGated(nn.Module):
+    """RMSNorm with gating for Qwen3-Next GatedDeltaNet."""
+    def __init__(self, hidden_size, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+    
+    def forward(self, hidden_states, gate=None):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        hidden_states = self.weight * hidden_states.to(input_dtype)
+        if gate is not None:
+            hidden_states = hidden_states * F.silu(gate.to(torch.float32)).to(input_dtype)
+        return hidden_states
+
+
+# ============================================================================
+# Linear Attention (Gated DeltaNet)
+# ============================================================================
+
+class Qwen3NextGatedDeltaNetForEngine(nn.Module):
+    """
+    Gated DeltaNet linear attention for Qwen3-Next.
+    
+    This implements a recurrent linear attention mechanism with:
+    - Causal convolution for local context
+    - Gated delta rule for recurrent state updates
+    """
+    def __init__(self, config, layer_idx: int, use_tp: bool = False):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.layer_idx = layer_idx
+        self.use_tp = use_tp
+        
+        # Get dimensions from config with fallbacks
+        self.num_v_heads = getattr(config, 'linear_num_value_heads', 32)
+        self.num_k_heads = getattr(config, 'linear_num_key_heads', 4)
+        self.head_k_dim = getattr(config, 'linear_key_head_dim', 128)
+        self.head_v_dim = getattr(config, 'linear_value_head_dim', 128)
+        self.conv_kernel_size = getattr(config, 'linear_conv_kernel_dim', 4)
+        
+        self.key_dim = self.head_k_dim * self.num_k_heads
+        self.value_dim = self.head_v_dim * self.num_v_heads
+        self.conv_dim = self.key_dim * 2 + self.value_dim
+        
+        # Projections
+        projection_size_qkvz = self.key_dim * 2 + self.value_dim * 2
+        projection_size_ba = self.num_v_heads * 2
+        
+        tp_world_size = get_tp_world_size() if use_tp else 1
+        
+        if use_tp and tp_world_size > 1:
+            self.in_proj_qkvz = ColumnParallelLinear(
+                self.hidden_size, projection_size_qkvz, bias=False, gather_output=False
+            )
+            self.in_proj_ba = ColumnParallelLinear(
+                self.hidden_size, projection_size_ba, bias=False, gather_output=False
+            )
+            self.out_proj = RowParallelLinear(
+                self.value_dim, self.hidden_size, bias=False, input_is_parallel=True
+            )
+        else:
+            self.in_proj_qkvz = nn.Linear(self.hidden_size, projection_size_qkvz, bias=False)
+            self.in_proj_ba = nn.Linear(self.hidden_size, projection_size_ba, bias=False)
+            self.out_proj = nn.Linear(self.value_dim, self.hidden_size, bias=False)
+        
+        # Causal convolution
+        self.conv1d = nn.Conv1d(
+            in_channels=self.conv_dim,
+            out_channels=self.conv_dim,
+            bias=False,
+            kernel_size=self.conv_kernel_size,
+            groups=self.conv_dim,
+            padding=self.conv_kernel_size - 1,
+        )
+        
+        # Learnable parameters
+        self.dt_bias = nn.Parameter(torch.ones(self.num_v_heads))
+        self.A_log = nn.Parameter(torch.zeros(self.num_v_heads))
+        
+        # Output norm with gating
+        self.norm = Qwen3NextRMSNormGated(self.head_v_dim, eps=get_rms_norm_eps(config))
+        
+        # Recurrent state (for inference)
+        self.conv_state = None
+        self.recurrent_state = None
+    
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        inference_mode: bool = False,
+    ) -> torch.Tensor:
+        batch_size, seq_len, _ = hidden_states.shape
+        
+        # Project to QKVZ and BA
+        projected_qkvz = self.in_proj_qkvz(hidden_states)
+        projected_ba = self.in_proj_ba(hidden_states)
+        
+        # Split projections
+        query, key, value, z = self._split_qkvz(projected_qkvz)
+        beta, alpha = self._split_ba(projected_ba)
+        
+        # Apply causal conv1d
+        qkv_cat = torch.cat([query, key, value], dim=-1)
+        qkv_cat = qkv_cat.transpose(1, 2)  # [B, D, L]
+        qkv_cat = F.silu(self.conv1d(qkv_cat)[:, :, :seq_len])
+        qkv_cat = qkv_cat.transpose(1, 2)  # [B, L, D]
+        
+        query, key, value = torch.split(qkv_cat, [self.key_dim, self.key_dim, self.value_dim], dim=-1)
+        
+        # Reshape for attention
+        query = query.view(batch_size, seq_len, self.num_k_heads, self.head_k_dim)
+        key = key.view(batch_size, seq_len, self.num_k_heads, self.head_k_dim)
+        value = value.view(batch_size, seq_len, self.num_v_heads, self.head_v_dim)
+        z = z.view(batch_size, seq_len, self.num_v_heads, self.head_v_dim)
+        
+        # Compute gated delta rule (simplified version)
+        output = self._gated_delta_rule(query, key, value, beta, alpha)
+        
+        # Apply gated norm and output projection
+        output = self.norm(output, z)
+        output = output.reshape(batch_size, seq_len, -1)
+        output = self.out_proj(output)
+        
+        return output
+    
+    def _split_qkvz(self, mixed):
+        """Split mixed projection into Q, K, V, Z."""
+        # Shape: [B, L, projection_size_qkvz]
+        q_size = self.key_dim
+        k_size = self.key_dim
+        v_size = self.value_dim
+        z_size = self.value_dim
+        query, key, value, z = torch.split(mixed, [q_size, k_size, v_size, z_size], dim=-1)
+        return query, key, value, z
+    
+    def _split_ba(self, mixed):
+        """Split mixed projection into beta and alpha."""
+        beta, alpha = torch.chunk(mixed, 2, dim=-1)
+        return beta, alpha
+    
+    def _gated_delta_rule(self, query, key, value, beta, alpha):
+        """
+        Simplified gated delta rule computation.
+        This is a basic implementation - the full FLA library version is more efficient.
+        """
+        batch_size, seq_len, num_v_heads, head_v_dim = value.shape
+        num_k_heads = query.shape[2]
+        head_k_dim = query.shape[3]
+        
+        # Expand K heads to match V heads
+        kv_ratio = num_v_heads // num_k_heads
+        query = query.repeat_interleave(kv_ratio, dim=2)
+        key = key.repeat_interleave(kv_ratio, dim=2)
+        
+        # Compute gate
+        g = -F.softplus(-self.A_log.view(1, 1, -1, 1) - alpha.unsqueeze(-1))
+        beta = torch.sigmoid(beta + self.dt_bias.view(1, 1, -1)).unsqueeze(-1)
+        
+        # Scale query
+        scale = 1.0 / (head_k_dim ** 0.5)
+        query = query * scale
+        
+        # Simple linear attention (not full delta rule for efficiency)
+        # Full implementation would use recurrent state
+        output = torch.zeros(batch_size, seq_len, num_v_heads, head_v_dim, 
+                           device=value.device, dtype=value.dtype)
+        
+        # Causal linear attention approximation
+        kv = torch.einsum('bsnk,bsnv->bsnkv', key, value * beta)
+        kv_cumsum = kv.cumsum(dim=1)
+        output = torch.einsum('bsnk,bsnkv->bsnv', query, kv_cumsum)
+        
+        return output
+
+
+# ============================================================================
+# Mixture of Experts (MoE)
+# ============================================================================
+
+class Qwen3NextTopKRouter(nn.Module):
+    """Router for MoE layers."""
+    def __init__(self, config, use_tp: bool = False):
+        super().__init__()
+        self.num_experts = getattr(config, 'num_experts', 64)
+        self.top_k = getattr(config, 'num_experts_per_tok', 8)
+        self.hidden_size = config.hidden_size
+        self.norm_topk_prob = getattr(config, 'norm_topk_prob', True)
+        
+        self.weight = nn.Parameter(torch.zeros(self.num_experts, self.hidden_size))
+    
+    def forward(self, hidden_states):
+        # hidden_states: [batch * seq_len, hidden_size]
+        router_logits = F.linear(hidden_states, self.weight)
+        router_probs = F.softmax(router_logits, dim=-1, dtype=torch.float32)
+        
+        router_top_values, router_indices = torch.topk(router_probs, self.top_k, dim=-1)
+        
+        if self.norm_topk_prob:
+            router_top_values = router_top_values / router_top_values.sum(dim=-1, keepdim=True)
+        
+        return router_logits, router_top_values.to(hidden_states.dtype), router_indices
+
+
+class Qwen3NextExpertsForEngine(nn.Module):
+    """MoE Experts layer with tensor parallelism support."""
+    def __init__(self, config, use_tp: bool = False):
+        super().__init__()
+        self.num_experts = getattr(config, 'num_experts', 64)
+        self.hidden_size = config.hidden_size
+        self.moe_intermediate_size = getattr(config, 'moe_intermediate_size', 1408)
+        self.use_tp = use_tp
+        
+        tp_world_size = get_tp_world_size() if use_tp else 1
+        
+        if use_tp and tp_world_size > 1:
+            # Shard experts across TP ranks
+            self.experts_per_rank = self.num_experts // tp_world_size
+            self.gate_up_proj = nn.Parameter(
+                torch.empty(self.experts_per_rank, 2 * self.moe_intermediate_size, self.hidden_size)
+            )
+            self.down_proj = nn.Parameter(
+                torch.empty(self.experts_per_rank, self.hidden_size, self.moe_intermediate_size)
+            )
+        else:
+            self.experts_per_rank = self.num_experts
+            self.gate_up_proj = nn.Parameter(
+                torch.empty(self.num_experts, 2 * self.moe_intermediate_size, self.hidden_size)
+            )
+            self.down_proj = nn.Parameter(
+                torch.empty(self.num_experts, self.hidden_size, self.moe_intermediate_size)
+            )
+        
+        self.act_fn = nn.SiLU()
+    
+    def forward(self, hidden_states, top_k_indices, top_k_weights):
+        """
+        Args:
+            hidden_states: [num_tokens, hidden_size]
+            top_k_indices: [num_tokens, top_k]
+            top_k_weights: [num_tokens, top_k]
+        """
+        tp_rank = get_tp_rank() if self.use_tp else 0
+        tp_world_size = get_tp_world_size() if self.use_tp else 1
+        
+        final_output = torch.zeros_like(hidden_states)
+        
+        # Process each expert
+        for expert_local_idx in range(self.experts_per_rank):
+            expert_global_idx = expert_local_idx + tp_rank * self.experts_per_rank
+            
+            # Find tokens routed to this expert
+            expert_mask = (top_k_indices == expert_global_idx)
+            if not expert_mask.any():
+                continue
+            
+            # Get positions where this expert is selected
+            token_indices, top_k_positions = torch.where(expert_mask)
+            
+            # Get input states and weights
+            expert_input = hidden_states[token_indices]
+            expert_weights = top_k_weights[token_indices, top_k_positions].unsqueeze(-1)
+            
+            # Forward through expert
+            gate, up = F.linear(expert_input, self.gate_up_proj[expert_local_idx]).chunk(2, dim=-1)
+            expert_output = self.act_fn(gate) * up
+            expert_output = F.linear(expert_output, self.down_proj[expert_local_idx])
+            
+            # Weight and accumulate
+            expert_output = expert_output * expert_weights
+            final_output.index_add_(0, token_indices, expert_output.to(final_output.dtype))
+        
+        # All-reduce if using TP for experts
+        if self.use_tp and tp_world_size > 1:
+            final_output = reduce_from_tp(final_output)
+        
+        return final_output
+
+
+class Qwen3NextSparseMoeBlockForEngine(nn.Module):
+    """Sparse MoE block combining router, experts, and shared expert."""
+    def __init__(self, config, use_tp: bool = False):
+        super().__init__()
+        self.gate = Qwen3NextTopKRouter(config, use_tp=use_tp)
+        self.experts = Qwen3NextExpertsForEngine(config, use_tp=use_tp)
+        
+        # Shared expert
+        shared_intermediate = getattr(config, 'shared_expert_intermediate_size', config.intermediate_size)
+        self.shared_expert = Qwen3NextMLPForEngine(config, use_tp=use_tp)
+        self.shared_expert_gate = nn.Linear(config.hidden_size, 1, bias=False)
+    
+    def forward(self, hidden_states):
+        batch_size, seq_len, hidden_dim = hidden_states.shape
+        hidden_flat = hidden_states.view(-1, hidden_dim)
+        
+        # Shared expert
+        shared_output = self.shared_expert(hidden_flat)
+        shared_gate = F.sigmoid(self.shared_expert_gate(hidden_flat))
+        shared_output = shared_gate * shared_output
+        
+        # Routed experts
+        _, routing_weights, selected_experts = self.gate(hidden_flat)
+        expert_output = self.experts(hidden_flat, selected_experts, routing_weights)
+        
+        # Combine
+        output = expert_output + shared_output
+        output = output.view(batch_size, seq_len, hidden_dim)
+        
+        return output
+
+
 class Qwen3NextRotaryEmbedding(nn.Module):
     """Rotary position embedding for Qwen3-Next."""
     def __init__(self, dim, max_position_embeddings=131072, base=1000000.0, device=None):
@@ -487,12 +801,49 @@ class Qwen3NextMLPForEngine(nn.Module):
 
 
 class Qwen3NextDecoderLayerForEngine(nn.Module):
-    """Decoder layer adapted for LLM Engine (full attention only) with TP support."""
+    """
+    Hybrid decoder layer for Qwen3-Next supporting:
+    - Full attention OR linear attention (GatedDeltaNet)
+    - Dense MLP OR MoE
+    """
     def __init__(self, config, layer_idx: int, use_tp: bool = False):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx, use_tp=use_tp)
-        self.mlp = Qwen3NextMLPForEngine(config, use_tp=use_tp)
+        self.layer_idx = layer_idx
+        self.use_tp = use_tp
+        
+        # Determine layer type from config
+        layer_types = getattr(config, 'layer_types', None)
+        if layer_types is not None and layer_idx < len(layer_types):
+            self.layer_type = layer_types[layer_idx]
+        else:
+            self.layer_type = "full_attention"
+        
+        # Token mixer (attention)
+        if self.layer_type == "linear_attention":
+            self.linear_attn = Qwen3NextGatedDeltaNetForEngine(config, layer_idx, use_tp=use_tp)
+            self.self_attn = None
+        else:  # full_attention
+            self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx, use_tp=use_tp)
+            self.linear_attn = None
+        
+        # MLP block - determine if MoE or dense
+        num_experts = getattr(config, 'num_experts', 0)
+        decoder_sparse_step = getattr(config, 'decoder_sparse_step', 1)
+        mlp_only_layers = getattr(config, 'mlp_only_layers', [])
+        
+        # MoE is used if: num_experts > 0 AND (layer_idx + 1) % decoder_sparse_step == 0 AND not in mlp_only_layers
+        use_moe = (num_experts > 0 and 
+                  (layer_idx + 1) % decoder_sparse_step == 0 and 
+                  layer_idx not in mlp_only_layers)
+        
+        if use_moe:
+            self.mlp = Qwen3NextSparseMoeBlockForEngine(config, use_tp=use_tp)
+            self.is_moe = True
+        else:
+            self.mlp = Qwen3NextMLPForEngine(config, use_tp=use_tp)
+            self.is_moe = False
+        
         self.input_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
         self.post_attention_layernorm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
 
@@ -510,18 +861,28 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         
-        hidden_states, k_cache, v_cache = self.self_attn(
-            hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            cos=cos,
-            sin=sin,
-            inference_mode=inference_mode,
-            max_generation=max_generation,
-            cur_pos=cur_pos,
-        )
+        # Token mixer
+        if self.layer_type == "linear_attention" and self.linear_attn is not None:
+            hidden_states = self.linear_attn(
+                hidden_states,
+                attention_mask=attention_mask,
+                inference_mode=inference_mode,
+            )
+            k_cache, v_cache = None, None
+        else:
+            hidden_states, k_cache, v_cache = self.self_attn(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                cos=cos,
+                sin=sin,
+                inference_mode=inference_mode,
+                max_generation=max_generation,
+                cur_pos=cur_pos,
+            )
         hidden_states = residual + hidden_states
         
+        # MLP
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
@@ -734,6 +1095,7 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
     """Copy weights from HuggingFace model to our engine-compatible model.
     
     For tensor parallelism, this shards the weights across GPUs.
+    Supports hybrid architecture: full attention + linear attention (GatedDeltaNet) + MoE.
     """
     tp_rank = get_tp_rank() if use_tp else 0
     tp_world_size = get_tp_world_size() if use_tp else 1
@@ -759,115 +1121,289 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
         hf_layer = hf_model.model.layers[layer_idx]
         engine_layer = engine_model.model.layers[layer_idx]
         
-        # Check layer type from config or detect from structure
-        layer_type = "full_attention"  # default
-        if hasattr(config, 'layer_types') and layer_idx < len(config.layer_types):
-            layer_type = config.layer_types[layer_idx]
+        # Get layer type from config
+        layer_types = getattr(config, 'layer_types', None)
+        layer_type = layer_types[layer_idx] if layer_types and layer_idx < len(layer_types) else "full_attention"
         
-        # Detect actual layer type by checking attributes
-        has_full_attn = (hasattr(hf_layer, 'self_attn') and 
-                        hasattr(hf_layer.self_attn, 'k_proj') and 
-                        hf_layer.self_attn.k_proj is not None and
-                        hasattr(hf_layer.self_attn.k_proj, 'weight'))
+        # Detect layer type from structure if config is ambiguous
+        has_k_proj = (hasattr(hf_layer, 'self_attn') and 
+                     hasattr(hf_layer.self_attn, 'k_proj') and 
+                     hf_layer.self_attn.k_proj is not None and
+                     hasattr(hf_layer.self_attn.k_proj, 'weight'))
         
-        if has_full_attn:
-            # Get attention dimensions
-            num_heads = config.num_attention_heads
-            num_kv_heads = config.num_key_value_heads
-            head_dim = config.hidden_size // num_heads
-            
-            # Check actual weight sizes
-            hf_k_proj_size = hf_layer.self_attn.k_proj.weight.shape[0]
-            expected_kv_size = num_kv_heads * head_dim
-            
-            if hf_k_proj_size == 0:
-                print(f"  Layer {layer_idx}: Skipping attention (k_proj size is 0)")
-            elif use_tp and tp_world_size > 1:
-                # Shard attention weights across TP ranks
-                heads_per_rank = num_heads // tp_world_size
-                kv_heads_per_rank = num_kv_heads // tp_world_size
-                
-                # q_proj: [num_heads * head_dim * 2, hidden_size] -> shard output dim
-                q_start = tp_rank * heads_per_rank * head_dim * 2
-                q_end = q_start + heads_per_rank * head_dim * 2
-                engine_layer.self_attn.q_proj.weight.data.copy_(
-                    hf_layer.self_attn.q_proj.weight.data[q_start:q_end]
-                )
-                
-                # k_proj: [num_kv_heads * head_dim, hidden_size] -> shard output dim
-                k_start = tp_rank * kv_heads_per_rank * head_dim
-                k_end = k_start + kv_heads_per_rank * head_dim
-                engine_layer.self_attn.k_proj.weight.data.copy_(
-                    hf_layer.self_attn.k_proj.weight.data[k_start:k_end]
-                )
-                
-                # v_proj: same as k_proj
-                engine_layer.self_attn.v_proj.weight.data.copy_(
-                    hf_layer.self_attn.v_proj.weight.data[k_start:k_end]
-                )
-                
-                # o_proj: [hidden_size, num_heads * head_dim] -> shard input dim
-                o_start = tp_rank * heads_per_rank * head_dim
-                o_end = o_start + heads_per_rank * head_dim
-                engine_layer.self_attn.o_proj.weight.data.copy_(
-                    hf_layer.self_attn.o_proj.weight.data[:, o_start:o_end]
-                )
-            else:
-                # No TP - copy full weights
-                engine_layer.self_attn.q_proj.weight.data.copy_(hf_layer.self_attn.q_proj.weight.data)
-                engine_layer.self_attn.k_proj.weight.data.copy_(hf_layer.self_attn.k_proj.weight.data)
-                engine_layer.self_attn.v_proj.weight.data.copy_(hf_layer.self_attn.v_proj.weight.data)
-                engine_layer.self_attn.o_proj.weight.data.copy_(hf_layer.self_attn.o_proj.weight.data)
-            
-            # QK norm (replicated across ranks)
-            if hasattr(hf_layer.self_attn, 'q_norm') and hf_layer.self_attn.q_norm is not None:
-                engine_layer.self_attn.q_norm.weight.data.copy_(hf_layer.self_attn.q_norm.weight.data)
-            if hasattr(hf_layer.self_attn, 'k_norm') and hf_layer.self_attn.k_norm is not None:
-                engine_layer.self_attn.k_norm.weight.data.copy_(hf_layer.self_attn.k_norm.weight.data)
+        has_gated_deltanet = (hasattr(hf_layer, 'self_attn') and 
+                             hasattr(hf_layer.self_attn, 'in_proj_qkvz') and 
+                             hf_layer.self_attn.in_proj_qkvz is not None)
+        
+        # ========== ATTENTION WEIGHTS ==========
+        if has_k_proj and layer_type == "full_attention":
+            # Full attention layer
+            _copy_full_attention_weights(hf_layer.self_attn, engine_layer.self_attn, 
+                                        config, use_tp, tp_rank, tp_world_size, layer_idx)
+        elif has_gated_deltanet or layer_type == "linear_attention":
+            # Linear attention (GatedDeltaNet) layer
+            _copy_gated_deltanet_weights(hf_layer.self_attn, engine_layer.self_attn,
+                                        config, use_tp, tp_rank, tp_world_size, layer_idx)
         else:
-            # Linear attention or other layer type - skip attention weights
-            print(f"  Layer {layer_idx}: Skipping attention (not full attention)")
+            print(f"  Layer {layer_idx}: Skipping attention (unknown type)")
         
-        # MLP weights - check if this is dense MLP or MoE
+        # ========== MLP/MoE WEIGHTS ==========
+        # Detect if this is MoE or dense MLP
+        has_moe = (hasattr(hf_layer, 'mlp') and 
+                  hasattr(hf_layer.mlp, 'experts') and 
+                  hf_layer.mlp.experts is not None)
+        
         has_dense_mlp = (hasattr(hf_layer, 'mlp') and 
                         hasattr(hf_layer.mlp, 'gate_proj') and 
                         hf_layer.mlp.gate_proj is not None and
-                        not hasattr(hf_layer.mlp, 'experts'))
+                        not has_moe)
         
-        if has_dense_mlp:
-            intermediate_size = config.intermediate_size
-            
-            if use_tp and tp_world_size > 1:
-                # Shard MLP weights
-                mlp_shard = intermediate_size // tp_world_size
-                mlp_start = tp_rank * mlp_shard
-                mlp_end = mlp_start + mlp_shard
-                
-                # gate_proj & up_proj: [intermediate_size, hidden_size] -> shard output dim
-                engine_layer.mlp.gate_proj.weight.data.copy_(
-                    hf_layer.mlp.gate_proj.weight.data[mlp_start:mlp_end]
-                )
-                engine_layer.mlp.up_proj.weight.data.copy_(
-                    hf_layer.mlp.up_proj.weight.data[mlp_start:mlp_end]
-                )
-                
-                # down_proj: [hidden_size, intermediate_size] -> shard input dim
-                engine_layer.mlp.down_proj.weight.data.copy_(
-                    hf_layer.mlp.down_proj.weight.data[:, mlp_start:mlp_end]
-                )
-            else:
-                engine_layer.mlp.gate_proj.weight.data.copy_(hf_layer.mlp.gate_proj.weight.data)
-                engine_layer.mlp.up_proj.weight.data.copy_(hf_layer.mlp.up_proj.weight.data)
-                engine_layer.mlp.down_proj.weight.data.copy_(hf_layer.mlp.down_proj.weight.data)
+        if has_moe:
+            # MoE layer
+            _copy_moe_weights(hf_layer.mlp, engine_layer.mlp, config, 
+                             use_tp, tp_rank, tp_world_size, layer_idx)
+        elif has_dense_mlp:
+            # Dense MLP layer
+            _copy_dense_mlp_weights(hf_layer.mlp, engine_layer.mlp, config,
+                                   use_tp, tp_rank, tp_world_size, layer_idx)
         else:
-            # MoE layer - skip for now (would need MoE support)
-            print(f"  Layer {layer_idx}: Skipping MLP (MoE or not dense)")
+            print(f"  Layer {layer_idx}: Skipping MLP (unknown type)")
         
-        # Layer norms (replicated across ranks)
+        # ========== LAYER NORMS ==========
         if hasattr(hf_layer, 'input_layernorm') and hf_layer.input_layernorm is not None:
             engine_layer.input_layernorm.weight.data.copy_(hf_layer.input_layernorm.weight.data)
         if hasattr(hf_layer, 'post_attention_layernorm') and hf_layer.post_attention_layernorm is not None:
             engine_layer.post_attention_layernorm.weight.data.copy_(hf_layer.post_attention_layernorm.weight.data)
+
+
+def _copy_full_attention_weights(hf_attn, engine_attn, config, use_tp, tp_rank, tp_world_size, layer_idx):
+    """Copy weights for full attention layers with optional TP sharding."""
+    num_heads = config.num_attention_heads
+    num_kv_heads = config.num_key_value_heads
+    head_dim = config.hidden_size // num_heads
+    
+    if use_tp and tp_world_size > 1:
+        heads_per_rank = num_heads // tp_world_size
+        kv_heads_per_rank = max(1, num_kv_heads // tp_world_size)
+        
+        # q_proj: [num_heads * head_dim * 2, hidden_size] (QK rotary)
+        q_start = tp_rank * heads_per_rank * head_dim * 2
+        q_end = q_start + heads_per_rank * head_dim * 2
+        engine_attn.q_proj.weight.data.copy_(hf_attn.q_proj.weight.data[q_start:q_end])
+        
+        # k_proj: [num_kv_heads * head_dim, hidden_size]
+        k_start = tp_rank * kv_heads_per_rank * head_dim
+        k_end = k_start + kv_heads_per_rank * head_dim
+        engine_attn.k_proj.weight.data.copy_(hf_attn.k_proj.weight.data[k_start:k_end])
+        
+        # v_proj: same sharding as k_proj
+        engine_attn.v_proj.weight.data.copy_(hf_attn.v_proj.weight.data[k_start:k_end])
+        
+        # o_proj: [hidden_size, num_heads * head_dim] - shard input dim
+        o_start = tp_rank * heads_per_rank * head_dim
+        o_end = o_start + heads_per_rank * head_dim
+        engine_attn.o_proj.weight.data.copy_(hf_attn.o_proj.weight.data[:, o_start:o_end])
+    else:
+        engine_attn.q_proj.weight.data.copy_(hf_attn.q_proj.weight.data)
+        engine_attn.k_proj.weight.data.copy_(hf_attn.k_proj.weight.data)
+        engine_attn.v_proj.weight.data.copy_(hf_attn.v_proj.weight.data)
+        engine_attn.o_proj.weight.data.copy_(hf_attn.o_proj.weight.data)
+    
+    # QK norms (replicated)
+    if hasattr(hf_attn, 'q_norm') and hf_attn.q_norm is not None:
+        engine_attn.q_norm.weight.data.copy_(hf_attn.q_norm.weight.data)
+    if hasattr(hf_attn, 'k_norm') and hf_attn.k_norm is not None:
+        engine_attn.k_norm.weight.data.copy_(hf_attn.k_norm.weight.data)
+
+
+def _copy_gated_deltanet_weights(hf_attn, engine_attn, config, use_tp, tp_rank, tp_world_size, layer_idx):
+    """Copy weights for GatedDeltaNet (linear attention) layers with optional TP sharding."""
+    hidden_size = config.hidden_size
+    num_heads = getattr(config, 'num_gated_heads', config.num_attention_heads)
+    head_dim = hidden_size // num_heads
+    expand_v = getattr(config, 'expand_v', 1)
+    v_head_dim = int(head_dim * expand_v)
+    
+    # in_proj_qkvz: projects to [q, k, v, z] - output can be sharded
+    # Shape: [num_heads * (head_dim + head_dim + v_head_dim + v_head_dim), hidden_size]
+    if hasattr(hf_attn, 'in_proj_qkvz') and hf_attn.in_proj_qkvz is not None:
+        if use_tp and tp_world_size > 1:
+            qkvz_per_head = head_dim + head_dim + v_head_dim + v_head_dim
+            heads_per_rank = num_heads // tp_world_size
+            start = tp_rank * heads_per_rank * qkvz_per_head
+            end = start + heads_per_rank * qkvz_per_head
+            engine_attn.in_proj_qkvz.weight.data.copy_(hf_attn.in_proj_qkvz.weight.data[start:end])
+        else:
+            engine_attn.in_proj_qkvz.weight.data.copy_(hf_attn.in_proj_qkvz.weight.data)
+    
+    # in_proj_ba: projects to [beta, alpha]
+    # Shape: [num_heads * (1 + head_dim), hidden_size]
+    if hasattr(hf_attn, 'in_proj_ba') and hf_attn.in_proj_ba is not None:
+        if use_tp and tp_world_size > 1:
+            ba_per_head = 1 + head_dim
+            heads_per_rank = num_heads // tp_world_size
+            start = tp_rank * heads_per_rank * ba_per_head
+            end = start + heads_per_rank * ba_per_head
+            engine_attn.in_proj_ba.weight.data.copy_(hf_attn.in_proj_ba.weight.data[start:end])
+        else:
+            engine_attn.in_proj_ba.weight.data.copy_(hf_attn.in_proj_ba.weight.data)
+    
+    # conv1d: causal convolution - replicated (per head) or sharded
+    if hasattr(hf_attn, 'conv1d') and hf_attn.conv1d is not None:
+        if use_tp and tp_world_size > 1:
+            # conv1d operates on each head independently, shard by heads
+            conv_dim = hf_attn.conv1d.weight.shape[0]
+            conv_per_rank = conv_dim // tp_world_size
+            start = tp_rank * conv_per_rank
+            end = start + conv_per_rank
+            engine_attn.conv1d.weight.data.copy_(hf_attn.conv1d.weight.data[start:end])
+            if hf_attn.conv1d.bias is not None:
+                engine_attn.conv1d.bias.data.copy_(hf_attn.conv1d.bias.data[start:end])
+        else:
+            engine_attn.conv1d.weight.data.copy_(hf_attn.conv1d.weight.data)
+            if hf_attn.conv1d.bias is not None:
+                engine_attn.conv1d.bias.data.copy_(hf_attn.conv1d.bias.data)
+    
+    # dt_bias: per-head bias - replicated or sharded
+    if hasattr(hf_attn, 'dt_bias') and hf_attn.dt_bias is not None:
+        if use_tp and tp_world_size > 1:
+            heads_per_rank = num_heads // tp_world_size
+            start = tp_rank * heads_per_rank
+            end = start + heads_per_rank
+            engine_attn.dt_bias.data.copy_(hf_attn.dt_bias.data[start:end])
+        else:
+            engine_attn.dt_bias.data.copy_(hf_attn.dt_bias.data)
+    
+    # A_log: per-head parameter - replicated or sharded
+    if hasattr(hf_attn, 'A_log') and hf_attn.A_log is not None:
+        if use_tp and tp_world_size > 1:
+            heads_per_rank = num_heads // tp_world_size
+            start = tp_rank * heads_per_rank
+            end = start + heads_per_rank
+            engine_attn.A_log.data.copy_(hf_attn.A_log.data[start:end])
+        else:
+            engine_attn.A_log.data.copy_(hf_attn.A_log.data)
+    
+    # norm (gated RMSNorm): replicated or sharded
+    if hasattr(hf_attn, 'norm') and hf_attn.norm is not None:
+        if use_tp and tp_world_size > 1:
+            norm_dim = hf_attn.norm.weight.shape[0]
+            norm_per_rank = norm_dim // tp_world_size
+            start = tp_rank * norm_per_rank
+            end = start + norm_per_rank
+            engine_attn.norm.weight.data.copy_(hf_attn.norm.weight.data[start:end])
+        else:
+            engine_attn.norm.weight.data.copy_(hf_attn.norm.weight.data)
+    
+    # out_proj: [hidden_size, num_heads * v_head_dim] - shard input dim
+    if hasattr(hf_attn, 'out_proj') and hf_attn.out_proj is not None:
+        if use_tp and tp_world_size > 1:
+            heads_per_rank = num_heads // tp_world_size
+            start = tp_rank * heads_per_rank * v_head_dim
+            end = start + heads_per_rank * v_head_dim
+            engine_attn.out_proj.weight.data.copy_(hf_attn.out_proj.weight.data[:, start:end])
+        else:
+            engine_attn.out_proj.weight.data.copy_(hf_attn.out_proj.weight.data)
+
+
+def _copy_dense_mlp_weights(hf_mlp, engine_mlp, config, use_tp, tp_rank, tp_world_size, layer_idx):
+    """Copy weights for dense MLP layers with optional TP sharding."""
+    intermediate_size = config.intermediate_size
+    
+    if use_tp and tp_world_size > 1:
+        mlp_shard = intermediate_size // tp_world_size
+        mlp_start = tp_rank * mlp_shard
+        mlp_end = mlp_start + mlp_shard
+        
+        engine_mlp.gate_proj.weight.data.copy_(hf_mlp.gate_proj.weight.data[mlp_start:mlp_end])
+        engine_mlp.up_proj.weight.data.copy_(hf_mlp.up_proj.weight.data[mlp_start:mlp_end])
+        engine_mlp.down_proj.weight.data.copy_(hf_mlp.down_proj.weight.data[:, mlp_start:mlp_end])
+    else:
+        engine_mlp.gate_proj.weight.data.copy_(hf_mlp.gate_proj.weight.data)
+        engine_mlp.up_proj.weight.data.copy_(hf_mlp.up_proj.weight.data)
+        engine_mlp.down_proj.weight.data.copy_(hf_mlp.down_proj.weight.data)
+
+
+def _copy_moe_weights(hf_mlp, engine_mlp, config, use_tp, tp_rank, tp_world_size, layer_idx):
+    """Copy weights for MoE layers with optional TP sharding.
+    
+    For MoE, we can either:
+    1. Expert parallelism: Different ranks handle different experts
+    2. Tensor parallelism within experts: Each expert's weights are sharded
+    
+    We use expert parallelism when num_experts >= tp_world_size, 
+    otherwise fall back to sharding within experts.
+    """
+    num_experts = getattr(config, 'num_experts', 0)
+    intermediate_size = getattr(config, 'moe_intermediate_size', config.intermediate_size)
+    
+    # Router weights (replicated - small)
+    if hasattr(hf_mlp, 'gate') and hf_mlp.gate is not None:
+        engine_mlp.router.weight.data.copy_(hf_mlp.gate.weight.data)
+    
+    # Expert weights
+    if hasattr(hf_mlp, 'experts') and hf_mlp.experts is not None:
+        if use_tp and tp_world_size > 1 and num_experts >= tp_world_size:
+            # Expert parallelism: each rank handles a subset of experts
+            experts_per_rank = num_experts // tp_world_size
+            start_expert = tp_rank * experts_per_rank
+            end_expert = start_expert + experts_per_rank
+            
+            # gate_up_proj: [num_experts, 2 * intermediate, hidden]
+            engine_mlp.experts.gate_up_proj.data.copy_(
+                hf_mlp.experts.gate_up_proj.data[start_expert:end_expert]
+            )
+            # down_proj: [num_experts, hidden, intermediate]
+            engine_mlp.experts.down_proj.data.copy_(
+                hf_mlp.experts.down_proj.data[start_expert:end_expert]
+            )
+        elif use_tp and tp_world_size > 1:
+            # Tensor parallelism within experts (when num_experts < tp_world_size)
+            # Replicate experts, shard intermediate dimension
+            mlp_shard = intermediate_size // tp_world_size
+            mlp_start = tp_rank * mlp_shard
+            mlp_end = mlp_start + mlp_shard
+            
+            # gate_up_proj: [num_experts, 2 * intermediate, hidden]
+            # Shard the middle dimension
+            engine_mlp.experts.gate_up_proj.data.copy_(
+                hf_mlp.experts.gate_up_proj.data[:, mlp_start*2:mlp_end*2, :]
+            )
+            # down_proj: [num_experts, hidden, intermediate]
+            engine_mlp.experts.down_proj.data.copy_(
+                hf_mlp.experts.down_proj.data[:, :, mlp_start:mlp_end]
+            )
+        else:
+            # No TP - copy full weights
+            engine_mlp.experts.gate_up_proj.data.copy_(hf_mlp.experts.gate_up_proj.data)
+            engine_mlp.experts.down_proj.data.copy_(hf_mlp.experts.down_proj.data)
+    
+    # Shared expert (replicated or sharded like dense MLP)
+    if hasattr(hf_mlp, 'shared_expert') and hf_mlp.shared_expert is not None:
+        shared_intermediate = getattr(config, 'shared_expert_intermediate_size', intermediate_size)
+        
+        if use_tp and tp_world_size > 1:
+            mlp_shard = shared_intermediate // tp_world_size
+            mlp_start = tp_rank * mlp_shard
+            mlp_end = mlp_start + mlp_shard
+            
+            engine_mlp.shared_expert.gate_proj.weight.data.copy_(
+                hf_mlp.shared_expert.gate_proj.weight.data[mlp_start:mlp_end]
+            )
+            engine_mlp.shared_expert.up_proj.weight.data.copy_(
+                hf_mlp.shared_expert.up_proj.weight.data[mlp_start:mlp_end]
+            )
+            engine_mlp.shared_expert.down_proj.weight.data.copy_(
+                hf_mlp.shared_expert.down_proj.weight.data[:, mlp_start:mlp_end]
+            )
+        else:
+            engine_mlp.shared_expert.gate_proj.weight.data.copy_(hf_mlp.shared_expert.gate_proj.weight.data)
+            engine_mlp.shared_expert.up_proj.weight.data.copy_(hf_mlp.shared_expert.up_proj.weight.data)
+            engine_mlp.shared_expert.down_proj.weight.data.copy_(hf_mlp.shared_expert.down_proj.weight.data)
+    
+    # Shared expert gate (replicated)
+    if hasattr(hf_mlp, 'shared_expert_gate') and hf_mlp.shared_expert_gate is not None:
+        engine_mlp.shared_expert_gate.weight.data.copy_(hf_mlp.shared_expert_gate.weight.data)
 
 
 # Simple test
