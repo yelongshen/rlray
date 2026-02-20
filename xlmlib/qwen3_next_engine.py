@@ -592,7 +592,8 @@ class Qwen3NextAttentionForEngine(nn.Module):
         
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.head_dim = config.hidden_size // config.num_attention_heads
+        # Use config.head_dim if explicitly set (Qwen3-Next may have different head_dim)
+        self.head_dim = getattr(config, 'head_dim', config.hidden_size // config.num_attention_heads)
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         
@@ -1058,6 +1059,10 @@ def load_qwen3_next_for_engine(
     if num_experts > 0:
         print(f"MoE config: num_experts={num_experts}, decoder_sparse_step={decoder_sparse_step}")
     
+    # Print attention dimensions
+    head_dim = getattr(hf_config, 'head_dim', hf_config.hidden_size // hf_config.num_attention_heads)
+    print(f"Attention config: num_heads={hf_config.num_attention_heads}, num_kv_heads={hf_config.num_key_value_heads}, head_dim={head_dim}")
+    
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     hf_model = AutoModelForCausalLM.from_pretrained(
         model_path,
@@ -1208,7 +1213,8 @@ def _copy_full_attention_weights(hf_attn, engine_attn, config, use_tp, tp_rank, 
     """
     num_heads = config.num_attention_heads
     num_kv_heads = config.num_key_value_heads
-    head_dim = config.hidden_size // num_heads
+    # Use config.head_dim if explicitly set (Qwen3-Next may have different head_dim)
+    head_dim = getattr(config, 'head_dim', config.hidden_size // num_heads)
     
     if use_tp and tp_world_size > 1:
         # ColumnParallelLinear shards by output_size // world_size
