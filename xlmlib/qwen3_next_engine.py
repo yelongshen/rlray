@@ -522,20 +522,28 @@ def _copy_weights(hf_model, engine_model, config):
 # Simple test
 if __name__ == "__main__":
     import argparse
+    import os
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default="Qwen/Qwen3-Coder-Next")
     parser.add_argument("--test_engine", action="store_true", help="Test with LLMEngine")
     parser.add_argument("--prompt", type=str, default="What is 2+2?")
+    parser.add_argument("--gpu_ids", type=str, default=None, help="GPU IDs to use (e.g., '0' or '2,3')")
     args = parser.parse_args()
     
+    # Set GPU
+    if args.gpu_ids is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
+        print(f"Using GPUs: {args.gpu_ids}")
+    device = "cuda:0"
+    
     print(f"Testing load_qwen3_next_for_engine with {args.model_path}")
-    model, tokenizer, config = load_qwen3_next_for_engine(args.model_path)
+    model, tokenizer, config = load_qwen3_next_for_engine(args.model_path, device=device)
     print(f"Model loaded: {type(model)}")
     print(f"Config: hidden_size={config.hidden_size}, num_layers={config.num_hidden_layers}")
     
     # Test 1: Direct forward pass
     print("\n=== Test 1: Direct Forward Pass ===")
-    test_input = tokenizer.encode("Hello", return_tensors="pt").cuda()
+    test_input = tokenizer.encode("Hello", return_tensors="pt").to(device)
     with torch.no_grad():
         _, logits, _, _ = model(test_input, inference_mode=False)
     print(f"Input shape: {test_input.shape}")
@@ -548,7 +556,7 @@ if __name__ == "__main__":
         from llm_engine import LLMEngine
         
         config.eos_token_id = tokenizer.eos_token_id
-        engine = LLMEngine(model, config, "cuda")
+        engine = LLMEngine(model, config, device)
         
         # Prepare prompt with chat template
         messages = [{"role": "user", "content": args.prompt}]
