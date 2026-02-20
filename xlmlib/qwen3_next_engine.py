@@ -210,11 +210,26 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
-    """Apply rotary position embeddings to query and key tensors."""
+    """Apply rotary position embeddings to query and key tensors.
+    
+    Handles partial rotary: if cos/sin have smaller dim than q/k,
+    only apply rotary to the first rotary_dim dimensions.
+    """
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    
+    # Handle partial rotary (if cos/sin dim < q/k dim)
+    rotary_dim = cos.shape[-1]
+    q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
+    k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
+    
+    # Apply rotary embeddings
+    q_embed = (q_rot * cos) + (rotate_half(q_rot) * sin)
+    k_embed = (k_rot * cos) + (rotate_half(k_rot) * sin)
+    
+    # Concatenate with pass-through portion
+    q_embed = torch.cat([q_embed, q_pass], dim=-1)
+    k_embed = torch.cat([k_embed, k_pass], dim=-1)
     return q_embed, k_embed
 
 
@@ -233,10 +248,14 @@ def get_rms_norm_eps(config):
 
 
 class Qwen3NextRMSNorm(nn.Module):
-    """RMSNorm for Qwen3-Next."""
+    """RMSNorm for Qwen3-Next.
+    
+    Note: Qwen3-Next uses (1 + weight) formula where weight is initialized to 0.
+    """
     def __init__(self, hidden_size, eps=1e-6):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
+        # Initialize to zeros to match HF (effective weight = 1 + 0 = 1)
+        self.weight = nn.Parameter(torch.zeros(hidden_size))
         self.variance_epsilon = eps
     
     def forward(self, hidden_states):
@@ -244,7 +263,8 @@ class Qwen3NextRMSNorm(nn.Module):
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        # Qwen3-Next uses (1 + weight) formula
+        return ((1.0 + self.weight.float()) * hidden_states).to(input_dtype)
 
 
 class Qwen3NextRMSNormGated(nn.Module):
@@ -680,15 +700,18 @@ class Qwen3NextAttentionForEngine(nn.Module):
         num_heads = self.num_heads_per_partition if self.use_tp else self.num_heads
         num_kv_heads = self.num_kv_heads_per_partition if self.use_tp else self.num_key_value_heads
         
-        # Compute Q, K, V (Qwen3-Next has q_proj output q and gate concatenated)
+        # Compute Q, K, V (Qwen3-Next has q_proj output q and gate interleaved per head)
+        # HF: view to (bsz, q_len, num_heads, head_dim * 2) then chunk on last dim
+        # This ensures Q and Gate are correctly paired per head
         qg = self.q_proj(hidden_states)
-        query_states, gate = torch.chunk(qg, 2, dim=-1)
+        qg = qg.view(bsz, q_len, num_heads, self.head_dim * 2)
+        query_states, gate = torch.chunk(qg, 2, dim=-1)  # Each: (bsz, q_len, num_heads, head_dim)
+        gate = gate.reshape(bsz, q_len, -1)  # Flatten gate: (bsz, q_len, num_heads * head_dim)
         
-        query_states = query_states.view(bsz, q_len, num_heads, self.head_dim)
         key_states = self.k_proj(hidden_states).view(bsz, q_len, num_kv_heads, self.head_dim)
         value_states = self.v_proj(hidden_states).view(bsz, q_len, num_kv_heads, self.head_dim)
         
-        # Apply QK norm
+        # Apply QK norm (apply on the head_dim dimension)
         query_states = self.q_norm(query_states)
         key_states = self.k_norm(key_states)
         
