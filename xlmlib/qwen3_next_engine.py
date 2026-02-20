@@ -1201,31 +1201,39 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
 
 
 def _copy_full_attention_weights(hf_attn, engine_attn, config, use_tp, tp_rank, tp_world_size, layer_idx):
-    """Copy weights for full attention layers with optional TP sharding."""
+    """Copy weights for full attention layers with optional TP sharding.
+    
+    Note: ColumnParallelLinear shards by output dimension, not by heads.
+    So we need to match that sharding pattern.
+    """
     num_heads = config.num_attention_heads
     num_kv_heads = config.num_key_value_heads
     head_dim = config.hidden_size // num_heads
     
     if use_tp and tp_world_size > 1:
-        heads_per_rank = num_heads // tp_world_size
-        kv_heads_per_rank = max(1, num_kv_heads // tp_world_size)
-        
-        # q_proj: [num_heads * head_dim * 2, hidden_size] (QK rotary)
-        q_start = tp_rank * heads_per_rank * head_dim * 2
-        q_end = q_start + heads_per_rank * head_dim * 2
+        # ColumnParallelLinear shards by output_size // world_size
+        # q_proj output: num_heads * head_dim * 2 (QK with gate)
+        q_output_size = num_heads * head_dim * 2
+        q_shard = q_output_size // tp_world_size
+        q_start = tp_rank * q_shard
+        q_end = q_start + q_shard
         engine_attn.q_proj.weight.data.copy_(hf_attn.q_proj.weight.data[q_start:q_end])
         
-        # k_proj: [num_kv_heads * head_dim, hidden_size]
-        k_start = tp_rank * kv_heads_per_rank * head_dim
-        k_end = k_start + kv_heads_per_rank * head_dim
+        # k_proj output: num_kv_heads * head_dim
+        kv_output_size = num_kv_heads * head_dim
+        kv_shard = kv_output_size // tp_world_size
+        k_start = tp_rank * kv_shard
+        k_end = k_start + kv_shard
         engine_attn.k_proj.weight.data.copy_(hf_attn.k_proj.weight.data[k_start:k_end])
         
         # v_proj: same sharding as k_proj
         engine_attn.v_proj.weight.data.copy_(hf_attn.v_proj.weight.data[k_start:k_end])
         
-        # o_proj: [hidden_size, num_heads * head_dim] - shard input dim
-        o_start = tp_rank * heads_per_rank * head_dim
-        o_end = o_start + heads_per_rank * head_dim
+        # o_proj: RowParallelLinear shards input_size // world_size
+        o_input_size = num_heads * head_dim
+        o_shard = o_input_size // tp_world_size
+        o_start = tp_rank * o_shard
+        o_end = o_start + o_shard
         engine_attn.o_proj.weight.data.copy_(hf_attn.o_proj.weight.data[:, o_start:o_end])
     else:
         engine_attn.q_proj.weight.data.copy_(hf_attn.q_proj.weight.data)
