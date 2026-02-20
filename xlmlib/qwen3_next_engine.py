@@ -759,16 +759,30 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
         hf_layer = hf_model.model.layers[layer_idx]
         engine_layer = engine_model.model.layers[layer_idx]
         
-        # Check layer type - only copy full attention layers
-        layer_type = config.layer_types[layer_idx] if hasattr(config, 'layer_types') else "full_attention"
+        # Check layer type from config or detect from structure
+        layer_type = "full_attention"  # default
+        if hasattr(config, 'layer_types') and layer_idx < len(config.layer_types):
+            layer_type = config.layer_types[layer_idx]
         
-        if layer_type == "full_attention" and hasattr(hf_layer, 'self_attn'):
+        # Detect actual layer type by checking attributes
+        has_full_attn = (hasattr(hf_layer, 'self_attn') and 
+                        hasattr(hf_layer.self_attn, 'k_proj') and 
+                        hf_layer.self_attn.k_proj is not None and
+                        hasattr(hf_layer.self_attn.k_proj, 'weight'))
+        
+        if has_full_attn:
             # Get attention dimensions
             num_heads = config.num_attention_heads
             num_kv_heads = config.num_key_value_heads
             head_dim = config.hidden_size // num_heads
             
-            if use_tp and tp_world_size > 1:
+            # Check actual weight sizes
+            hf_k_proj_size = hf_layer.self_attn.k_proj.weight.shape[0]
+            expected_kv_size = num_kv_heads * head_dim
+            
+            if hf_k_proj_size == 0:
+                print(f"  Layer {layer_idx}: Skipping attention (k_proj size is 0)")
+            elif use_tp and tp_world_size > 1:
                 # Shard attention weights across TP ranks
                 heads_per_rank = num_heads // tp_world_size
                 kv_heads_per_rank = num_kv_heads // tp_world_size
@@ -806,13 +820,21 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
                 engine_layer.self_attn.o_proj.weight.data.copy_(hf_layer.self_attn.o_proj.weight.data)
             
             # QK norm (replicated across ranks)
-            if hasattr(hf_layer.self_attn, 'q_norm'):
+            if hasattr(hf_layer.self_attn, 'q_norm') and hf_layer.self_attn.q_norm is not None:
                 engine_layer.self_attn.q_norm.weight.data.copy_(hf_layer.self_attn.q_norm.weight.data)
-            if hasattr(hf_layer.self_attn, 'k_norm'):
+            if hasattr(hf_layer.self_attn, 'k_norm') and hf_layer.self_attn.k_norm is not None:
                 engine_layer.self_attn.k_norm.weight.data.copy_(hf_layer.self_attn.k_norm.weight.data)
+        else:
+            # Linear attention or other layer type - skip attention weights
+            print(f"  Layer {layer_idx}: Skipping attention (not full attention)")
         
-        # MLP weights (for non-MoE layers)
-        if hasattr(hf_layer, 'mlp') and hasattr(hf_layer.mlp, 'gate_proj'):
+        # MLP weights - check if this is dense MLP or MoE
+        has_dense_mlp = (hasattr(hf_layer, 'mlp') and 
+                        hasattr(hf_layer.mlp, 'gate_proj') and 
+                        hf_layer.mlp.gate_proj is not None and
+                        not hasattr(hf_layer.mlp, 'experts'))
+        
+        if has_dense_mlp:
             intermediate_size = config.intermediate_size
             
             if use_tp and tp_world_size > 1:
@@ -837,10 +859,15 @@ def _copy_weights(hf_model, engine_model, config, use_tp: bool = False):
                 engine_layer.mlp.gate_proj.weight.data.copy_(hf_layer.mlp.gate_proj.weight.data)
                 engine_layer.mlp.up_proj.weight.data.copy_(hf_layer.mlp.up_proj.weight.data)
                 engine_layer.mlp.down_proj.weight.data.copy_(hf_layer.mlp.down_proj.weight.data)
+        else:
+            # MoE layer - skip for now (would need MoE support)
+            print(f"  Layer {layer_idx}: Skipping MLP (MoE or not dense)")
         
         # Layer norms (replicated across ranks)
-        engine_layer.input_layernorm.weight.data.copy_(hf_layer.input_layernorm.weight.data)
-        engine_layer.post_attention_layernorm.weight.data.copy_(hf_layer.post_attention_layernorm.weight.data)
+        if hasattr(hf_layer, 'input_layernorm') and hf_layer.input_layernorm is not None:
+            engine_layer.input_layernorm.weight.data.copy_(hf_layer.input_layernorm.weight.data)
+        if hasattr(hf_layer, 'post_attention_layernorm') and hf_layer.post_attention_layernorm is not None:
+            engine_layer.post_attention_layernorm.weight.data.copy_(hf_layer.post_attention_layernorm.weight.data)
 
 
 # Simple test
