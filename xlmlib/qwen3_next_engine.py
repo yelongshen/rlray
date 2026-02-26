@@ -2277,11 +2277,13 @@ class HybridLLMEngine:
                       f'finished={len(outputs)}', flush=True)
         return outputs
 
-    def generate(self, prompts: List[List[int]]) -> List[List[int]]:
+    def generate(self, prompts: List[List[int]], max_tokens: int = 32768) -> List[List[int]]:
         from llm_engine import Sequence
         
         for prompt in prompts:
-            self.scheduler.add(Sequence(prompt))
+            seq = Sequence(prompt)
+            seq.max_tokens = max_tokens
+            self.scheduler.add(seq)
 
         outputs = {}
         while not self.is_finished():
@@ -2524,7 +2526,7 @@ if __name__ == "__main__":
         
         import time
         start = time.time()
-        output_ids = engine.generate([input_ids])[0]
+        output_ids = engine.generate([input_ids], max_tokens=256)[0]
         elapsed = time.time() - start
         
         if is_main:
