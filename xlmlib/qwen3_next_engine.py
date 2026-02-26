@@ -2091,13 +2091,21 @@ class HybridModelRunner:
         return method(*args)
 
     def allocate_cache(self, model, llm_config, gpu_memory_utilization=0.85):
-        """Allocate cache by calling model.allocate_cache()."""
-        total, used, _ = get_gpu_memory()
-        free = int(total * gpu_memory_utilization - used)
+        """Allocate cache by calling model.allocate_cache().
+        
+        Uses torch.cuda.mem_get_info for accurate free memory on the current device.
+        """
+        free, total = torch.cuda.mem_get_info()
+        # Reserve some memory for activations and overhead
+        usable_free = int(free * gpu_memory_utilization)
+        
+        if usable_free <= 0:
+            print(f"WARNING: No free GPU memory for cache allocation! free={free/1e9:.2f} GB")
+            usable_free = int(free * 0.5)  # Try with 50% of whatever is left
         
         cache = model.allocate_cache(
             batch_size=1,  # Engine processes one flattened batch at a time
-            free_memory_budget=free,
+            free_memory_budget=usable_free,
             device=self.device,
             block_size=self.block_size,
         )
