@@ -2337,7 +2337,7 @@ if __name__ == "__main__":
         )
         hf_model.eval()
         
-        test_input_text = "Hello"
+        test_input_text = args.prompt
         test_input = tokenizer.encode(test_input_text, return_tensors="pt").to("cuda:0")
         
         # HF model forward
@@ -2517,7 +2517,8 @@ if __name__ == "__main__":
         # Prepare prompt with chat template
         messages = [{"role": "user", "content": args.prompt}]
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        input_ids = tokenizer.encode(text)
+        #input_ids = tokenizer.encode(text)
+        input_ids = tokenizer.encode(args.prompt)
         
         if is_main:
             print(f"Prompt: {args.prompt}")
