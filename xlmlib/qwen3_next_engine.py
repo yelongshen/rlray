@@ -776,10 +776,16 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
                           self.conv1d.bias, padding=0, groups=self.conv_dim)
             mixed_qkv = F.silu(out[:, :, -seq_len:]).to(hidden_states.dtype)
         else:
-            # Standard conv path
+            # Standard conv path (prefill)
             if cache_params is not None and hasattr(cache_params, 'conv_states'):
-                conv_state = F.pad(mixed_qkv, (self.conv_kernel_size - mixed_qkv.shape[-1], 0))
-                cache_params.conv_states[self.layer_idx] = conv_state
+                # Save last (kernel_size - 1) tokens for decode conv state
+                if mixed_qkv.shape[-1] >= self.conv_kernel_size - 1:
+                    cache_params.conv_states[self.layer_idx] = mixed_qkv[:, :, -(self.conv_kernel_size - 1):].clone()
+                else:
+                    # Sequence shorter than kernel - pad with zeros on left
+                    cache_params.conv_states[self.layer_idx] = F.pad(
+                        mixed_qkv, (self.conv_kernel_size - 1 - mixed_qkv.shape[-1], 0)
+                    )
             mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
         
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [B, L, D]
