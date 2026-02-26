@@ -43,7 +43,10 @@ except ImportError:
     print("Warning: flash_attn not available, paged attention will not work")
 
 try:
-    from fla.ops.gated_delta_rule import chunk_gated_delta_rule as fla_chunk_gated_delta_rule
+    from fla.ops.gated_delta_rule import (
+        chunk_gated_delta_rule as fla_chunk_gated_delta_rule,
+        fused_recurrent_gated_delta_rule as fla_recurrent_gated_delta_rule,
+    )
     FLA_AVAILABLE = True
 except ImportError:
     FLA_AVAILABLE = False
@@ -816,7 +819,9 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         # Use recurrent kernel for single-token decode (chunk kernel pads to chunk_size
         # and the padding corrupts the recurrent state)
         if use_precomputed_states:
-            core_attn_out, last_recurrent_state = torch_recurrent_gated_delta_rule(
+            # Prefer FLA's fused Triton recurrent kernel, fallback to pure PyTorch
+            recurrent_fn = fla_recurrent_gated_delta_rule if FLA_AVAILABLE else torch_recurrent_gated_delta_rule
+            core_attn_out, last_recurrent_state = recurrent_fn(
                 query, key, value,
                 g=g, beta=beta,
                 initial_state=recurrent_state,
