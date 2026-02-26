@@ -2213,12 +2213,10 @@ class HybridLLMEngine:
     Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
     """
     def __init__(self, model, llm_config, device):
-        # Ensure parent directory is on sys.path so llm_engine can import its dependencies
+        # Ensure xlmlib dir is on sys.path so llm_engine can import its sibling modules
         _script_dir = _os.path.dirname(_os.path.abspath(__file__))
-        _parent_dir = _os.path.dirname(_script_dir)
-        for p in [_script_dir, _parent_dir]:
-            if p not in sys.path:
-                sys.path.insert(0, p)
+        if _script_dir not in sys.path:
+            sys.path.insert(0, _script_dir)
         
         from llm_engine import Scheduler, Sequence
         
