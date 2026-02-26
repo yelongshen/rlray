@@ -772,8 +772,8 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             hidden_states_new = torch.cat([conv_state, mixed_qkv], dim=-1).to(self.conv1d.weight.dtype)
             if cache_params is not None:
                 cache_params.conv_states[self.layer_idx] = hidden_states_new[:, :, -state_len:]
-            out = F.conv1d(hidden_states_new, self.conv1d.weight.squeeze(1).unsqueeze(-1), 
-                          None, padding=0, groups=self.conv_dim)
+            out = F.conv1d(hidden_states_new, self.conv1d.weight, 
+                          self.conv1d.bias, padding=0, groups=self.conv_dim)
             mixed_qkv = F.silu(out[:, :, -seq_len:]).to(hidden_states.dtype)
         else:
             # Standard conv path
