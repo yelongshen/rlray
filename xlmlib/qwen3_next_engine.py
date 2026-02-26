@@ -5,8 +5,8 @@ This file adapts the HuggingFace Qwen3-Next model to work with the in-house
 llm_engine.py for fast inference with paged attention.
 
 The in-house LLMEngine expects:
-- model(input_ids=..., position_ids=..., inference_mode=True, logits_to_keep=...) -> (_, logits, _, _)
-- Attention layers with k_cache and v_cache attributes for paged attention
+- model(input_ids=..., position_ids=..., cache_params=..., logits_to_keep=...) -> (_, logits, _, _)
+- cache_params=None for training, cache_params=Qwen3NextCacheParams for inference
 
 Supports tensor parallelism for multi-GPU inference.
 
@@ -436,6 +436,169 @@ def torch_recurrent_gated_delta_rule(
     core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
     return core_attn_out, last_recurrent_state
 
+class Qwen3NextCacheParams:
+    """Unified cache for hybrid Qwen3-Next model.
+    
+    Memory budget allocation strategy:
+    1. First compute fixed-cost linear attention caches (conv + recurrent states).
+       These are O(1) per layer regardless of sequence length.
+    2. Subtract from free GPU memory budget.
+    3. Use remaining budget for paged KV cache blocks (full attention layers only).
+    
+    Memory costs per linear attention layer (per batch element):
+      conv_state:      conv_dim * (kernel_size - 1) * 2 bytes  (bf16)
+      recurrent_state: num_v_heads * key_dim * value_dim * 4 bytes  (fp32 for numerical stability)
+    
+    Memory cost per full attention KV block:
+      2 * block_size * num_kv_heads * head_dim * 2 bytes  (bf16, k+v)
+    """
+    def __init__(
+        self,
+        config,
+        batch_size: int, 
+        free_memory_budget: int,
+        device: torch.device,
+        block_size: int = 256,
+    ):
+        self.batch_size = batch_size
+        self.device = device
+        self.block_size = block_size
+        self.has_previous_state = False
+        
+        num_layers = config.num_hidden_layers
+        layer_types = getattr(config, 'layer_types', ['full_attention'] * num_layers)
+        
+        # === Dimensions ===
+        head_dim = getattr(config, 'head_dim', config.hidden_size // config.num_attention_heads)
+        num_kv_heads = config.num_key_value_heads
+        
+        # GatedDeltaNet dimensions
+        num_v_heads = getattr(config, 'linear_num_value_heads', 32)
+        num_k_heads = getattr(config, 'linear_num_key_heads', 16)
+        head_k_dim = getattr(config, 'linear_key_head_dim', 128)
+        head_v_dim = getattr(config, 'linear_value_head_dim', 128)
+        conv_kernel_size = getattr(config, 'linear_conv_kernel_dim', 4)
+        conv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads
+        
+        # === Count layer types ===
+        num_full_attn_layers = 0
+        num_linear_attn_layers = 0
+        for layer_idx in range(num_layers):
+            lt = layer_types[layer_idx] if layer_idx < len(layer_types) else "full_attention"
+            if lt == "full_attention":
+                num_full_attn_layers += 1
+            else:
+                num_linear_attn_layers += 1
+        
+        # === Step 1: Compute fixed-cost linear attention cache memory ===
+        # conv_state per layer: [batch, conv_dim, kernel_size - 1] in bf16
+        conv_state_bytes_per_layer = batch_size * conv_dim * (conv_kernel_size - 1) * 2  # bf16 = 2 bytes
+        # recurrent_state per layer: [batch, num_v_heads, key_dim, value_dim] in fp32
+        recurrent_state_bytes_per_layer = batch_size * num_v_heads * head_k_dim * head_v_dim * 4  # fp32 = 4 bytes
+        
+        linear_attn_bytes_per_layer = conv_state_bytes_per_layer + recurrent_state_bytes_per_layer
+        total_linear_attn_bytes = num_linear_attn_layers * linear_attn_bytes_per_layer
+        
+        # === Step 2: Remaining budget for paged KV cache ===
+        remaining_budget = free_memory_budget - total_linear_attn_bytes
+        assert remaining_budget > 0, (
+            f"Not enough memory for linear attention caches alone: "
+            f"need {total_linear_attn_bytes / 1e9:.2f} GB, "
+            f"budget {free_memory_budget / 1e9:.2f} GB"
+        )
+        
+        # KV block memory: each block stores block_size tokens for ALL full-attn layers
+        # Per block: num_full_attn_layers * block_size * num_kv_heads * head_dim * 2bytes * 2(k+v)
+        kv_block_bytes = num_full_attn_layers * block_size * num_kv_heads * head_dim * 2 * 2
+        
+        if kv_block_bytes > 0:
+            num_kvcache_blocks = int(remaining_budget) // kv_block_bytes
+        else:
+            num_kvcache_blocks = 0
+        
+        self.num_kvcache_blocks = num_kvcache_blocks
+        self.num_full_attn_layers = num_full_attn_layers
+        self.num_linear_attn_layers = num_linear_attn_layers
+        
+        # === Print memory breakdown ===
+        print(f"Qwen3NextCacheParams memory breakdown:")
+        print(f"  Linear attention layers: {num_linear_attn_layers}")
+        print(f"    conv_state per layer:      {conv_state_bytes_per_layer / 1e6:.2f} MB  "
+              f"[{batch_size} x {conv_dim} x {conv_kernel_size - 1}] bf16")
+        print(f"    recurrent_state per layer:  {recurrent_state_bytes_per_layer / 1e6:.2f} MB  "
+              f"[{batch_size} x {num_v_heads} x {head_k_dim} x {head_v_dim}] fp32")
+        print(f"    total linear attn cache:   {total_linear_attn_bytes / 1e6:.2f} MB")
+        print(f"  Full attention layers: {num_full_attn_layers}")
+        print(f"    KV block size:             {kv_block_bytes / 1e6:.2f} MB per block "
+              f"({block_size} tokens x {num_full_attn_layers} layers)")
+        print(f"    num KV blocks:             {num_kvcache_blocks}")
+        print(f"    max KV cache tokens:       {num_kvcache_blocks * block_size}")
+        print(f"    total KV cache:            {num_kvcache_blocks * kv_block_bytes / 1e9:.2f} GB")
+        print(f"  Free memory budget:          {free_memory_budget / 1e9:.2f} GB")
+        print(f"  Remaining after allocation:  {(remaining_budget - num_kvcache_blocks * kv_block_bytes) / 1e6:.2f} MB")
+        
+        # === Step 3: Allocate caches ===
+        self.conv_states = []
+        self.recurrent_states = []
+        
+        # Allocate paged KV cache for full attention layers only
+        # Shape: [2, num_full_attn_layers, num_blocks, block_size, num_kv_heads, head_dim]
+        if num_full_attn_layers > 0 and num_kvcache_blocks > 0:
+            self.kv_cache = torch.zeros(
+                2, num_full_attn_layers, num_kvcache_blocks, block_size,
+                num_kv_heads, head_dim,
+                dtype=torch.bfloat16, device=device
+            )
+        else:
+            self.kv_cache = None
+        
+        # Allocate per-layer caches
+        full_attn_idx = 0
+        for layer_idx in range(num_layers):
+            lt = layer_types[layer_idx] if layer_idx < len(layer_types) else "full_attention"
+            
+            if lt == "full_attention":
+                # No conv/recurrent state for full attention
+                self.conv_states.append(None)
+                self.recurrent_states.append(None)
+                full_attn_idx += 1
+            else:
+                # Conv state: [batch, conv_dim, kernel_size - 1] bf16
+                conv_state = torch.zeros(
+                    batch_size, conv_dim, conv_kernel_size - 1,
+                    device=device, dtype=torch.bfloat16
+                )
+                self.conv_states.append(conv_state)
+                
+                # Recurrent state: [batch, num_v_heads, key_dim, value_dim] fp32
+                recurrent_state = torch.zeros(
+                    batch_size, num_v_heads, head_k_dim, head_v_dim,
+                    device=device, dtype=torch.float32
+                )
+                self.recurrent_states.append(recurrent_state)
+    
+    def get_kv_cache(self, full_attn_idx: int):
+        """Get (k_cache, v_cache) for a full attention layer by its index."""
+        if self.kv_cache is None:
+            return None, None
+        return self.kv_cache[0, full_attn_idx], self.kv_cache[1, full_attn_idx]
+    
+    def reset(self):
+        """Reset cache for new generation."""
+        self.has_previous_state = False
+        for i, state in enumerate(self.recurrent_states):
+            if state is not None:
+                self.recurrent_states[i].zero_()
+        for i, state in enumerate(self.conv_states):
+            if state is not None:
+                self.conv_states[i].zero_()
+    
+    def set_seq_position(self, position: int):
+        """Mark that we have previous state after prefill."""
+        if position > 0:
+            self.has_previous_state = True
+
+
 
 # ============================================================================
 # Linear Attention (Gated DeltaNet) - Main Module
@@ -541,7 +704,6 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        inference_mode: bool = False,
         cache_params = None,
         cache_position: Optional[torch.LongTensor] = None,
     ) -> torch.Tensor:
@@ -823,15 +985,16 @@ class Qwen3NextAttentionForEngine(nn.Module):
     Qwen3-Next Attention adapted for in-house LLM Engine.
     
     Key changes from HuggingFace version:
-    - Uses paged attention with external k_cache/v_cache
-    - Supports inference_mode parameter
+    - Uses paged attention via cache_params (no stateful k_cache/v_cache on module)
+    - cache_params=None means training, cache_params!=None means inference
     - Uses flash_attn_varlen_func and flash_attn_with_kvcache
     - Supports tensor parallelism
     """
-    def __init__(self, config, layer_idx: int, use_tp: bool = False):
+    def __init__(self, config, layer_idx: int, full_attn_idx: int = 0, use_tp: bool = False):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
+        self.full_attn_idx = full_attn_idx  # Index among full-attention layers only
         self.use_tp = use_tp
         
         self.hidden_size = config.hidden_size
@@ -901,10 +1064,6 @@ class Qwen3NextAttentionForEngine(nn.Module):
         self.q_norm = Qwen3NextRMSNorm(self.head_dim, eps=get_rms_norm_eps(config))
         self.k_norm = Qwen3NextRMSNorm(self.head_dim, eps=get_rms_norm_eps(config))
         
-        # KV cache for paged attention (will be set by LLMEngine)
-        self.k_cache = None
-        self.v_cache = None
-        
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -912,9 +1071,9 @@ class Qwen3NextAttentionForEngine(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         cos: Optional[torch.Tensor] = None,
         sin: Optional[torch.Tensor] = None,
-        inference_mode: bool = False,
         max_generation: int = 0,
         cur_pos: int = 0,
+        cache_params = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         bsz, q_len, _ = hidden_states.size()
         
@@ -949,15 +1108,16 @@ class Qwen3NextAttentionForEngine(nn.Module):
         query_states = query_states.transpose(1, 2).to(hidden_states.dtype)
         key_states = key_states.transpose(1, 2).to(hidden_states.dtype)
         
+        # Look up KV cache from cache_params (paged attention)
+        k_cache_paged, v_cache_paged = None, None
+        if cache_params is not None and hasattr(cache_params, 'get_kv_cache'):
+            k_cache_paged, v_cache_paged = cache_params.get_kv_cache(self.full_attn_idx)
+        
         key_cache = None
         value_cache = None
         page_attention = False
         
-        if not inference_mode:
-            # Training mode - no paged attention
-            key_cache = key_states
-            value_cache = value_states
-        elif inference_mode and self.k_cache is not None and self.v_cache is not None:
+        if k_cache_paged is not None and v_cache_paged is not None:
             # Inference mode with paged attention
             key_cache = None
             value_cache = None
@@ -967,7 +1127,7 @@ class Qwen3NextAttentionForEngine(nn.Module):
             key_states = key_states.view(-1, num_kv_heads, self.head_dim).contiguous()
             value_states = value_states.view(-1, num_kv_heads, self.head_dim).contiguous()
             
-            store_kvcache(key_states, value_states, self.k_cache, self.v_cache, context.slot_mapping)
+            store_kvcache(key_states, value_states, k_cache_paged, v_cache_paged, context.slot_mapping)
             page_attention = True
         else:
             # Fallback: simple KV cache
@@ -978,7 +1138,7 @@ class Qwen3NextAttentionForEngine(nn.Module):
             context = get_context()
             if context.is_prefill:
                 attn_output = flash_attn_varlen_func(
-                    query_states, self.k_cache, self.v_cache,
+                    query_states, k_cache_paged, v_cache_paged,
                     max_seqlen_q=context.max_seqlen_q,
                     cu_seqlens_q=context.cu_seqlens_q,
                     max_seqlen_k=context.max_seqlen_k,
@@ -989,7 +1149,7 @@ class Qwen3NextAttentionForEngine(nn.Module):
             else:
                 attn_output = flash_attn_with_kvcache(
                     query_states.unsqueeze(1),
-                    self.k_cache, self.v_cache,
+                    k_cache_paged, v_cache_paged,
                     cache_seqlens=context.context_lens,
                     causal=True,
                     block_table=context.block_tables
@@ -1061,10 +1221,11 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
     - Full attention layers: use our implementation (for paged attention support)
     - Linear attention layers: use our implementation (matches HF's GatedDeltaNet)
     """
-    def __init__(self, config, layer_idx: int, use_tp: bool = False):
+    def __init__(self, config, layer_idx: int, full_attn_idx: int = -1, use_tp: bool = False):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.layer_idx = layer_idx
+        self.full_attn_idx = full_attn_idx  # -1 for linear attention layers
         self.use_tp = use_tp
         
         # Determine layer type from config
@@ -1101,7 +1262,7 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
                 self.is_moe = False
         else:
             # Full attention - use our implementation
-            self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx, use_tp=use_tp)
+            self.self_attn = Qwen3NextAttentionForEngine(config, layer_idx, full_attn_idx=full_attn_idx, use_tp=use_tp)
             self.linear_attn = None
             self._use_hf_layer = False
             
@@ -1132,9 +1293,9 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         cos: Optional[torch.Tensor] = None,
         sin: Optional[torch.Tensor] = None,
-        inference_mode: bool = False,
         max_generation: int = 0,
         cur_pos: int = 0,
+        cache_params = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
         # Token mixer
@@ -1142,24 +1303,24 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
         
         if self.layer_type == "linear_attention" and self.linear_attn is not None:
-            # Linear attention
+            # Linear attention - pass cache_params for conv/recurrent states
             hidden_states = self.linear_attn(
                 hidden_states,
                 attention_mask=attention_mask,
-                inference_mode=inference_mode,
+                cache_params=cache_params,
             )
             k_cache, v_cache = None, None
         else:
-            # Full attention
+            # Full attention - pass cache_params for paged KV cache lookup
             hidden_states, k_cache, v_cache = self.self_attn(
                 hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 cos=cos,
                 sin=sin,
-                inference_mode=inference_mode,
                 max_generation=max_generation,
                 cur_pos=cur_pos,
+                cache_params=cache_params,
             )
         
         hidden_states = residual + hidden_states
@@ -1180,10 +1341,19 @@ class Qwen3NextModelForEngine(nn.Module):
         self.config = config
         self.use_tp = use_tp
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.layers = nn.ModuleList([
-            Qwen3NextDecoderLayerForEngine(config, layer_idx, use_tp=use_tp)
-            for layer_idx in range(config.num_hidden_layers)
-        ])
+        
+        # Build layers with full_attn_idx tracking
+        layer_types = getattr(config, 'layer_types', ['full_attention'] * config.num_hidden_layers)
+        layers = []
+        full_attn_counter = 0
+        for layer_idx in range(config.num_hidden_layers):
+            lt = layer_types[layer_idx] if layer_idx < len(layer_types) else "full_attention"
+            if lt == "full_attention":
+                layers.append(Qwen3NextDecoderLayerForEngine(config, layer_idx, full_attn_idx=full_attn_counter, use_tp=use_tp))
+                full_attn_counter += 1
+            else:
+                layers.append(Qwen3NextDecoderLayerForEngine(config, layer_idx, full_attn_idx=-1, use_tp=use_tp))
+        self.layers = nn.ModuleList(layers)
         self.norm = Qwen3NextRMSNorm(config.hidden_size, eps=get_rms_norm_eps(config))
         
         # Get rope_theta with fallback (Qwen3-Next may use different attribute names)
@@ -1207,9 +1377,9 @@ class Qwen3NextModelForEngine(nn.Module):
         input_ids: torch.LongTensor,
         position_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        inference_mode: bool = False,
         max_generation: int = 0,
         cur_pos: int = 0,
+        cache_params = None,
     ) -> Tuple[torch.Tensor, List]:
         batch_size, seq_length = input_ids.shape[:2]
         
@@ -1230,9 +1400,9 @@ class Qwen3NextModelForEngine(nn.Module):
                 position_ids=position_ids,
                 cos=cos,
                 sin=sin,
-                inference_mode=inference_mode,
                 max_generation=max_generation,
                 cur_pos=cur_pos,
+                cache_params=cache_params,
             )
             next_cache.append((k_cache, v_cache))
         
@@ -1243,10 +1413,9 @@ class Qwen3NextModelForEngine(nn.Module):
 class Qwen3NextForLLMEngine(nn.Module):
     """
     Qwen3-Next For Causal LM adapted for in-house LLM Engine.
-    
     Key interface requirement for LLMEngine:
-    - forward(input_ids, position_ids, inference_mode=True, logits_to_keep=...) -> (_, logits, _, _)
-    
+    - forward(input_ids, position_ids, cache_params=..., logits_to_keep=...) -> (_, logits, _, _)
+    - cache_params=None for training, cache_params=Qwen3NextCacheParams for inference
     Supports tensor parallelism for multi-GPU inference.
     """
     def __init__(self, config, use_tp: bool = False):
@@ -1254,7 +1423,6 @@ class Qwen3NextForLLMEngine(nn.Module):
         self.config = config
         self.use_tp = use_tp
         self.model = Qwen3NextModelForEngine(config, use_tp=use_tp)
-        
         # lm_head can be column parallel or regular
         tp_world_size = get_tp_world_size() if use_tp else 1
         if use_tp and tp_world_size > 1:
@@ -1263,20 +1431,57 @@ class Qwen3NextForLLMEngine(nn.Module):
             )
         else:
             self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+    
+    def allocate_cache(
+        self,
+        batch_size: int, 
+        free_memory_budget: int,
+        device: torch.device,
+        block_size: int = 256,
+    ) -> Qwen3NextCacheParams:
+        """
+        Allocate cache for Qwen3-Next hybrid model.
         
+        Strategy:
+        1. Compute fixed-cost memory for linear attention (conv + recurrent states)
+        2. Use remaining GPU memory for paged KV cache blocks (full attention only)
+        3. Return cache_params to be passed as argument to forward()
+        
+        Args:
+            batch_size: Number of sequences (for linear attention states)
+            free_memory_budget: Available GPU memory in bytes
+            device: Target device
+            block_size: Paged KV cache block size (tokens per block)
+        
+        Returns:
+            Qwen3NextCacheParams to pass to forward(cache_params=...)
+        """
+        cache = Qwen3NextCacheParams(
+            config=self.config,
+            batch_size=batch_size,
+            free_memory_budget=free_memory_budget,
+            device=device,
+            block_size=block_size,
+        )
+        return cache
+
     def forward(
         self,
         input_ids: torch.LongTensor,
         position_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        inference_mode: bool = False,
-        max_generation: int = 0,
+        max_generation: int = 0, 
         cur_pos: int = 0,
         logits_to_keep: Optional[torch.Tensor] = None,
         num_logits_to_keep: int = 0,
+        cache_params = None,
     ) -> Tuple[None, torch.Tensor, None, List]:
         """
         Forward pass compatible with LLMEngine.
+        
+        Args:
+            cache_params: None for training. Qwen3NextCacheParams for inference.
+                          Contains paged KV cache (full attn) + conv/recurrent states (linear attn).
         
         Returns: (_, logits, _, past_key_values)
         """
@@ -1284,9 +1489,9 @@ class Qwen3NextForLLMEngine(nn.Module):
             input_ids=input_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
-            inference_mode=inference_mode,
             max_generation=max_generation,
             cur_pos=cur_pos,
+            cache_params=cache_params,
         )
         
         # Handle logits_to_keep for efficient prefill
@@ -1407,14 +1612,8 @@ def load_qwen3_next_for_engine(
     model.eval()
     
     # Create LLMEngine-compatible config
-    class LLMConfig:
-        pass
-    
-    llm_config = LLMConfig()
-    llm_config.hidden_size = hf_config.hidden_size
-    llm_config.num_attention_heads = hf_config.num_attention_heads
-    llm_config.num_key_value_heads = hf_config.num_key_value_heads
-    llm_config.num_hidden_layers = hf_config.num_hidden_layers
+    # Use hf_config directly — it has all fields needed by both LLMEngine and Qwen3NextCacheParams
+    llm_config = hf_config
     llm_config.eos_token_id = tokenizer.eos_token_id
     llm_config.tensor_parallel_size = tensor_parallel_size
     
@@ -1833,6 +2032,228 @@ def _copy_moe_weights(hf_mlp, engine_mlp, config, use_tp, tp_rank, tp_world_size
         engine_mlp.shared_expert_gate.weight.data.copy_(hf_mlp.shared_expert_gate.weight.data)
 
 
+# ============================================================================
+# Qwen3-Next LLM Engine (Hybrid: Full Attention + Linear Attention)
+# ============================================================================
+
+import os
+from collections import deque
+from itertools import count
+from copy import copy
+
+try:
+    from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo, nvmlShutdown
+    PYNVML_AVAILABLE = True
+except ImportError:
+    PYNVML_AVAILABLE = False
+
+
+def get_gpu_memory():
+    """Get GPU memory info: (total, used, free) in bytes."""
+    torch.cuda.synchronize()
+    if PYNVML_AVAILABLE:
+        nvmlInit()
+        visible_device = list(map(int, os.getenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7").split(',')))
+        cuda_device_idx = torch.cuda.current_device()
+        cuda_device_idx = visible_device[cuda_device_idx]
+        handle = nvmlDeviceGetHandleByIndex(cuda_device_idx)
+        mem_info = nvmlDeviceGetMemoryInfo(handle)
+        nvmlShutdown()
+        return mem_info.total, mem_info.used, mem_info.free
+    else:
+        # Fallback using torch
+        total = torch.cuda.get_device_properties(torch.cuda.current_device()).total_mem
+        used = torch.cuda.memory_allocated()
+        return total, used, total - used
+
+
+class HybridModelRunner:
+    """
+    Generic model runner for models with cache_params-based inference.
+    
+    Works with any model that implements:
+    - model.allocate_cache(batch_size, free_memory_budget, device, block_size) -> cache_params
+      where cache_params has .num_kvcache_blocks attribute
+    - model.forward(input_ids, position_ids, cache_params=..., logits_to_keep=...) -> (_, logits, _, _)
+    
+    This is a drop-in replacement for llm_engine.ModelRunner that uses stateless
+    cache_params instead of wiring k_cache/v_cache to model layers.
+    """
+
+    def __init__(self, model, llm_config, device):
+        self.block_size = 256
+        self.default_dtype = torch.bfloat16
+        self.model = model
+        self.llm_config = llm_config
+        self.device = device
+        self.temperature = 0.6
+        
+        # Allocate hybrid cache (paged KV + linear attention states)
+        self.cache_params = self.allocate_cache(self.model, self.llm_config, 0.9)
+        self.num_kvcache_blocks = self.cache_params.num_kvcache_blocks
+
+    def call(self, method_name, *args):
+        method = getattr(self, method_name, None)
+        assert callable(method)
+        return method(*args)
+
+    def allocate_cache(self, model, llm_config, gpu_memory_utilization=0.85):
+        """Allocate cache by calling model.allocate_cache()."""
+        total, used, _ = get_gpu_memory()
+        free = int(total * gpu_memory_utilization - used)
+        
+        cache = model.allocate_cache(
+            batch_size=16,
+            free_memory_budget=free,
+            device=self.device,
+            block_size=self.block_size,
+        )
+        
+        print(f'max kv cache length: {cache.num_kvcache_blocks * self.block_size}')
+        return cache
+
+    def prepare_block_tables(self, seqs):
+        max_len = max(len(seq.block_table) for seq in seqs)
+        block_tables = [
+            seq.block_table + [-1] * (max_len - len(seq.block_table))
+            for seq in seqs
+        ]
+        return torch.tensor(block_tables, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+
+    def prepare_prefill(self, seqs):
+        from context import set_context
+        
+        input_ids = []
+        positions = []
+        cu_seqlens_q = [0]
+        cu_seqlens_k = [0]
+        max_seqlen_q = 0
+        max_seqlen_k = 0
+        slot_mapping = []
+
+        for seq in seqs:
+            seqlen = len(seq)
+            input_ids.extend(seq[seq.num_cached_tokens:])
+            positions.extend(list(range(seq.num_cached_tokens, seqlen)))
+
+            seqlen_q = seqlen - seq.num_cached_tokens
+            seqlen_k = seqlen
+            cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
+            cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
+
+            max_seqlen_q = max(seqlen_q, max_seqlen_q)
+            max_seqlen_k = max(seqlen_k, max_seqlen_k)
+
+            for i in range(seq.num_cached_blocks, seq.num_blocks):
+                start = seq.block_table[i] * self.block_size
+                if i != seq.num_blocks - 1:
+                    end = start + self.block_size
+                else:
+                    end = start + seq.last_block_num_tokens
+                slot_mapping.extend(list(range(start, end)))
+
+        assert len(input_ids) == len(slot_mapping)
+        assert len(input_ids) == cu_seqlens_q[-1]
+
+        context_lens = torch.tensor([len(seq) for seq in seqs], dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        block_tables = self.prepare_block_tables(seqs)
+
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        positions = torch.tensor(positions, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables)
+        return input_ids, positions
+
+    def prepare_decode(self, seqs):
+        from context import set_context
+        
+        input_ids = []
+        positions = []
+        slot_mapping = []
+        context_lens = []
+
+        for seq in seqs:
+            input_ids.append(seq.last_token)
+            positions.append(len(seq) - 1)
+            context_lens.append(len(seq))
+            slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1)
+
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        positions = torch.tensor(positions, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        context_lens = torch.tensor(context_lens, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        block_tables = self.prepare_block_tables(seqs)
+        set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
+        return input_ids, positions
+
+    @torch.inference_mode()
+    def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill):
+        context = get_context()
+        if is_prefill:
+            _, logits, _, _ = self.model(
+                input_ids=input_ids.unsqueeze(0),
+                position_ids=positions.unsqueeze(0),
+                cache_params=self.cache_params,
+                logits_to_keep=context.cu_seqlens_q[1:] - 1,
+            )
+        else:
+            _, logits, _, _ = self.model(
+                input_ids=input_ids.unsqueeze(0),
+                position_ids=positions.unsqueeze(0),
+                cache_params=self.cache_params,
+            )
+        return logits.squeeze(0)
+
+    def run(self, seqs, is_prefill: bool):
+        input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
+        logits = self.run_model(input_ids, positions, is_prefill)
+        
+        probs = torch.softmax((logits / self.temperature).to(torch.float32), dim=-1)
+        token_ids = torch.multinomial(probs, num_samples=1)
+        
+        reset_context()
+        return token_ids.squeeze(dim=1).tolist()
+
+
+class HybridLLMEngine:
+    """
+    Generic LLM Engine for models with cache_params-based inference.
+    
+    Works with any model that implements the allocate_cache() + forward(cache_params=) protocol.
+    Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
+    """
+    def __init__(self, model, llm_config, device):
+        from llm_engine import Scheduler, Sequence
+        
+        self.model_runner = HybridModelRunner(model, llm_config, device)
+        self.scheduler = Scheduler(llm_config, self.model_runner.block_size, self.model_runner.num_kvcache_blocks)
+
+    def is_finished(self):
+        return self.scheduler.is_finished()
+
+    def step(self):
+        seqs, is_prefill = self.scheduler.schedule()
+        token_ids = self.model_runner.call("run", seqs, is_prefill)
+        self.scheduler.postprocess(seqs, token_ids)
+        outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
+        return outputs
+
+    def generate(self, prompts: List[List[int]]) -> List[List[int]]:
+        from llm_engine import Sequence
+        
+        for prompt in prompts:
+            self.scheduler.add(Sequence(prompt))
+
+        outputs = {}
+        while not self.is_finished():
+            output = self.step()
+            for seq_id, token_ids in output:
+                outputs[seq_id] = token_ids
+        return [outputs[seq_id] for seq_id in sorted(outputs)]
+
+
 # Simple test
 if __name__ == "__main__":
     import argparse
@@ -2004,7 +2425,7 @@ if __name__ == "__main__":
             torch.cuda.empty_cache()
     
     with torch.no_grad():
-        _, logits, _, _ = model(test_input, inference_mode=False)
+        _, logits, _, _ = model(test_input)
     if is_main:
         print(f"Input string: {test_input_text}")
         print(f"Input shape: {test_input.shape}")
@@ -2031,7 +2452,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         for step in range(max_new_tokens):
             # Forward pass
-            _, logits, _, _ = model(generated_ids, inference_mode=False)
+            _, logits, _, _ = model(generated_ids)
             # Get next token (greedy)
             next_token_id = logits[0, -1, :].argmax().item()
             # Check for EOS
@@ -2046,14 +2467,13 @@ if __name__ == "__main__":
         print(f"Input: {test_input_text}")
         print(f"Generated ({generated_ids.shape[1] - test_input.shape[1]} new tokens): {generated_text}")
     
-    # Test 2: With LLMEngine
+    # Test 2: With HybridLLMEngine
     if args.test_engine:
         if is_main:
-            print("\n=== Test 2: LLMEngine Generation ===")
-        from llm_engine import LLMEngine
+            print("\n=== Test 2: HybridLLMEngine Generation ===")
         
         config.eos_token_id = tokenizer.eos_token_id
-        engine = LLMEngine(model, config, str(model_device))
+        engine = HybridLLMEngine(model, config, str(model_device))
         
         # Prepare prompt with chat template
         messages = [{"role": "user", "content": args.prompt}]
