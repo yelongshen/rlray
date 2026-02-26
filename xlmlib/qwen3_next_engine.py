@@ -479,7 +479,15 @@ class Qwen3NextCacheParams:
         
         # === Dimensions ===
         head_dim = getattr(config, 'head_dim', config.hidden_size // config.num_attention_heads)
-        num_kv_heads = config.num_key_value_heads
+        num_kv_heads_global = config.num_key_value_heads
+        
+        # For TP: each rank only caches its partition of KV heads
+        tp_world_size = get_tp_world_size()
+        kv_is_replicated = num_kv_heads_global < tp_world_size
+        if kv_is_replicated:
+            num_kv_heads = num_kv_heads_global  # Replicated: each rank has all KV heads
+        else:
+            num_kv_heads = num_kv_heads_global // tp_world_size  # Sharded
         
         # GatedDeltaNet dimensions
         num_v_heads = getattr(config, 'linear_num_value_heads', 32)
