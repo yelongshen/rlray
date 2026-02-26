@@ -41,6 +41,13 @@ except ImportError:
     print("Warning: flash_attn not available, paged attention will not work")
 
 try:
+    from fla.ops.gated_delta_rule import chunk_gated_delta_rule as fla_chunk_gated_delta_rule
+    FLA_AVAILABLE = True
+except ImportError:
+    FLA_AVAILABLE = False
+    print("Warning: fla not available, using pure PyTorch GatedDeltaNet (slow)")
+
+try:
     from context import set_context, get_context, reset_context
 except ImportError:
     print("Warning: context module not found, using dummy implementation")
@@ -656,9 +663,11 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         # Output projection
         self.out_proj = nn.Linear(self.value_dim, self.hidden_size, bias=False)
         
-        # Delta rule functions (use pure torch for now)
-        self.chunk_gated_delta_rule = torch_chunk_gated_delta_rule
-        self.recurrent_gated_delta_rule = torch_recurrent_gated_delta_rule
+        # Delta rule kernel: prefer FLA's Triton kernel, fallback to pure PyTorch
+        if FLA_AVAILABLE:
+            self.chunk_gated_delta_rule = fla_chunk_gated_delta_rule
+        else:
+            self.chunk_gated_delta_rule = torch_chunk_gated_delta_rule
     
     def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
         """
@@ -783,23 +792,14 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             query = query.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
             key = key.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
         
-        # Apply gated delta rule
-        if not use_precomputed_states:
-            core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
-                query, key, value,
-                g=g, beta=beta,
-                initial_state=None,
-                output_final_state=cache_params is not None,
-                use_qk_l2norm_in_kernel=True,
-            )
-        else:
-            core_attn_out, last_recurrent_state = self.recurrent_gated_delta_rule(
-                query, key, value,
-                g=g, beta=beta,
-                initial_state=recurrent_state,
-                output_final_state=cache_params is not None,
-                use_qk_l2norm_in_kernel=True,
-            )
+        # Apply gated delta rule (use chunk kernel for both prefill and decode)
+        core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
+            query, key, value,
+            g=g, beta=beta,
+            initial_state=recurrent_state,
+            output_final_state=cache_params is not None,
+            use_qk_l2norm_in_kernel=True,
+        )
         
         # Update cache
         if cache_params is not None and hasattr(cache_params, 'recurrent_states'):
