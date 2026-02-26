@@ -5,7 +5,7 @@ This file adapts the HuggingFace Qwen3-Next model to work with the in-house
 llm_engine.py for fast inference with paged attention.
 
 The in-house LLMEngine expects:
-- model(input_ids=..., position_ids=..., cache_params=..., logits_to_keep=...) -> (_, logits, _, _)
+- model(input_ids=..., position_ids=..., cache_params=..., logits_to_keep=...) -> (logits, cache)
 - cache_params=None for training, cache_params=Qwen3NextCacheParams for inference
 
 Supports tensor parallelism for multi-GPU inference.
@@ -1406,7 +1406,7 @@ class Qwen3NextForLLMEngine(nn.Module):
     """
     Qwen3-Next For Causal LM adapted for in-house LLM Engine.
     Key interface requirement for LLMEngine:
-    - forward(input_ids, position_ids, cache_params=..., logits_to_keep=...) -> (_, logits, _, _)
+    - forward(input_ids, position_ids, cache_params=..., logits_to_keep=...) -> (logits, cache)
     - cache_params=None for training, cache_params=Qwen3NextCacheParams for inference
     Supports tensor parallelism for multi-GPU inference.
     """
@@ -1463,9 +1463,8 @@ class Qwen3NextForLLMEngine(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         logits_to_keep: Optional[torch.Tensor] = None,
-        num_logits_to_keep: int = 0,
         cache_params = None,
-    ) -> Tuple[None, torch.Tensor, None, List]:
+    ) -> Tuple[torch.Tensor, List]:
         """
         Forward pass compatible with LLMEngine.
         
@@ -1473,7 +1472,7 @@ class Qwen3NextForLLMEngine(nn.Module):
             cache_params: None for training. Qwen3NextCacheParams for inference.
                           Contains paged KV cache (full attn) + conv/recurrent states (linear attn).
         
-        Returns: (_, logits, _, past_key_values)
+        Returns: (logits, past_key_values)
         """
         hidden_states, next_cache = self.model(
             input_ids=input_ids,
@@ -1486,13 +1485,10 @@ class Qwen3NextForLLMEngine(nn.Module):
         if logits_to_keep is not None:
             hidden_states = hidden_states.squeeze(0)[logits_to_keep]
             hidden_states = hidden_states.unsqueeze(0)
-        elif num_logits_to_keep > 0:
-            hidden_states = hidden_states[:, -num_logits_to_keep:, :]
         
         logits = self.lm_head(hidden_states)
         
-        # Return format expected by LLMEngine: (_, logits, _, cache)
-        return None, logits, None, next_cache
+        return logits, next_cache
 
 
 def load_qwen3_next_for_engine(
@@ -2062,7 +2058,7 @@ class HybridModelRunner:
     Works with any model that implements:
     - model.allocate_cache(batch_size, free_memory_budget, device, block_size) -> cache_params
       where cache_params has .num_kvcache_blocks attribute
-    - model.forward(input_ids, position_ids, cache_params=..., logits_to_keep=...) -> (_, logits, _, _)
+    - model.forward(input_ids, position_ids, cache_params=..., logits_to_keep=...) -> (logits, cache)
     
     This is a drop-in replacement for llm_engine.ModelRunner that uses stateless
     cache_params instead of wiring k_cache/v_cache to model layers.
@@ -2180,14 +2176,14 @@ class HybridModelRunner:
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill):
         context = get_context()
         if is_prefill:
-            _, logits, _, _ = self.model(
+            logits, _ = self.model(
                 input_ids=input_ids.unsqueeze(0),
                 position_ids=positions.unsqueeze(0),
                 cache_params=self.cache_params,
                 logits_to_keep=context.cu_seqlens_q[1:] - 1,
             )
         else:
-            _, logits, _, _ = self.model(
+            logits, _ = self.model(
                 input_ids=input_ids.unsqueeze(0),
                 position_ids=positions.unsqueeze(0),
                 cache_params=self.cache_params,
@@ -2357,7 +2353,7 @@ if __name__ == "__main__":
     # Test 1: Direct forward pass (all ranks must run, only rank 0 prints)
     if is_main:
         print("\n=== Test 1: Direct Forward Pass ===")
-    test_input_text = "Hello"
+    test_input_text = args.prompt
     test_input = tokenizer.encode(test_input_text, return_tensors="pt").to(model_device)
     
     # Compare embedding outputs if HF model available
@@ -2428,7 +2424,7 @@ if __name__ == "__main__":
             torch.cuda.empty_cache()
     
     with torch.no_grad():
-        _, logits, _, _ = model(test_input)
+        logits, _ = model(test_input)
     if is_main:
         print(f"Input string: {test_input_text}")
         print(f"Input shape: {test_input.shape}")
@@ -2455,7 +2451,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         for step in range(max_new_tokens):
             # Forward pass
-            _, logits, _, _ = model(generated_ids)
+            logits, _ = model(generated_ids)
             # Get next token (greedy)
             next_token_id = logits[0, -1, :].argmax().item()
             # Check for EOS
