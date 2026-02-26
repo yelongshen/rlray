@@ -2097,13 +2097,13 @@ class HybridModelRunner:
     cache_params instead of wiring k_cache/v_cache to model layers.
     """
 
-    def __init__(self, model, llm_config, device):
+    def __init__(self, model, llm_config, device, temperature=0.6):
         self.block_size = 256
         self.default_dtype = torch.bfloat16
         self.model = model
         self.llm_config = llm_config
         self.device = torch.device(device) if isinstance(device, str) else device
-        self.temperature = 0.6
+        self.temperature = temperature
         
         # Allocate hybrid cache (paged KV + linear attention states)
         self.cache_params = self.allocate_cache(self.model, self.llm_config, 0.9)
@@ -2239,8 +2239,13 @@ class HybridModelRunner:
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
         logits = self.run_model(input_ids, positions, is_prefill)
         
-        probs = torch.softmax((logits / self.temperature).to(torch.float32), dim=-1)
-        token_ids = torch.multinomial(probs, num_samples=1)
+        if self.temperature <= 0:
+            # Greedy decoding
+            token_ids = logits.argmax(dim=-1, keepdim=True)
+        else:
+            # Sampling with temperature
+            probs = torch.softmax((logits / self.temperature).to(torch.float32), dim=-1)
+            token_ids = torch.multinomial(probs, num_samples=1)
         
         # For TP: broadcast sampled tokens from rank 0 so all ranks stay in sync
         if get_tp_world_size() > 1:
@@ -2260,7 +2265,7 @@ class HybridLLMEngine:
     Works with any model that implements the allocate_cache() + forward(cache_params=) protocol.
     Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
     """
-    def __init__(self, model, llm_config, device):
+    def __init__(self, model, llm_config, device, temperature=0.6):
         # Ensure imports work for both `from phi4 import ...` (needs xlmlib/ on path)
         # and `from xlmlib.fused_linear_cross_entropy import ...` (needs parent on path).
         # We register xlmlib as a namespace to avoid triggering __init__.py -> samba.
@@ -2278,7 +2283,7 @@ class HybridLLMEngine:
         
         from llm_engine import Scheduler, Sequence
         
-        self.model_runner = HybridModelRunner(model, llm_config, device)
+        self.model_runner = HybridModelRunner(model, llm_config, device, temperature=temperature)
         self.scheduler = Scheduler(llm_config, self.model_runner.block_size, self.model_runner.num_kvcache_blocks)
 
     def is_finished(self):
@@ -2533,7 +2538,7 @@ if __name__ == "__main__":
             print("\n=== Test 2: HybridLLMEngine Generation ===")
         
         config.eos_token_id = tokenizer.eos_token_id
-        engine = HybridLLMEngine(model, config, str(model_device))
+        engine = HybridLLMEngine(model, config, str(model_device), temperature=0)
         
         # Prepare prompt with chat template
         messages = [{"role": "user", "content": args.prompt}]
