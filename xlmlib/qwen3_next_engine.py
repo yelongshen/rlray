@@ -2200,6 +2200,7 @@ class HybridModelRunner:
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill):
         context = get_context()
         if is_prefill:
+            print(f'  [run_model] prefill: input_ids={input_ids.shape}, positions={positions.shape}', flush=True)
             logits, _ = self.model(
                 input_ids=input_ids.unsqueeze(0),
                 position_ids=positions.unsqueeze(0),
@@ -2208,6 +2209,7 @@ class HybridModelRunner:
             )
             # Mark that we have state for decode steps (GDN conv/recurrent)
             self.cache_params.has_previous_state = True
+            print(f'  [run_model] prefill done: logits={logits.shape}', flush=True)
         else:
             logits, _ = self.model(
                 input_ids=input_ids.unsqueeze(0),
@@ -2224,7 +2226,10 @@ class HybridModelRunner:
         token_ids = torch.multinomial(probs, num_samples=1)
         
         reset_context()
-        return token_ids.squeeze(dim=1).tolist()
+        token_list = token_ids.squeeze(dim=1).tolist()
+        if is_prefill:
+            print(f'  [run] prefill -> sampled tokens: {token_list}', flush=True)
+        return token_list
 
 
 class HybridLLMEngine:
@@ -2263,6 +2268,13 @@ class HybridLLMEngine:
         token_ids = self.model_runner.call("run", seqs, is_prefill)
         self.scheduler.postprocess(seqs, token_ids)
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
+        # Print decode progress every 50 tokens
+        if not is_prefill and len(seqs) > 0:
+            seq = seqs[0]
+            if seq.num_completion_tokens % 50 == 1:
+                print(f'  [step] decode: seq_id={seq.seq_id}, completion_tokens={seq.num_completion_tokens}, '
+                      f'last_token={seq.last_token}, running={len(self.scheduler.running)}, '
+                      f'finished={len(outputs)}', flush=True)
         return outputs
 
     def generate(self, prompts: List[List[int]]) -> List[List[int]]:
