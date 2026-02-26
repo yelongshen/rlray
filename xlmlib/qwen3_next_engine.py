@@ -587,7 +587,12 @@ class Qwen3NextCacheParams:
                 self.recurrent_states.append(recurrent_state)
     
     def get_kv_cache(self, full_attn_idx: int):
-        """Get (k_cache, v_cache) for a full attention layer by its index."""
+        """Get (k_cache, v_cache) for a full attention layer by its index.
+        
+        Returns the paged KV cache in original [num_blocks, block_size, num_kv_heads, head_dim] shape.
+        This is the shape expected by flash_attn_varlen_func and flash_attn_with_kvcache.
+        For store_kvcache (index_copy_), the attention layer will .view() to flatten blocks.
+        """
         if self.kv_cache is None:
             return None, None
         return self.kv_cache[0, full_attn_idx], self.kv_cache[1, full_attn_idx]
@@ -1119,6 +1124,7 @@ class Qwen3NextAttentionForEngine(nn.Module):
         
         if k_cache_paged is not None and v_cache_paged is not None:
             # Inference mode with paged attention
+            # k_cache_paged shape: [num_blocks, block_size, num_kv_heads, head_dim]
             key_cache = None
             value_cache = None
             context = get_context()
@@ -1127,7 +1133,10 @@ class Qwen3NextAttentionForEngine(nn.Module):
             key_states = key_states.view(-1, num_kv_heads, self.head_dim).contiguous()
             value_states = value_states.view(-1, num_kv_heads, self.head_dim).contiguous()
             
-            store_kvcache(key_states, value_states, k_cache_paged, v_cache_paged, context.slot_mapping)
+            # Flatten cache for index_copy_: [num_blocks * block_size, num_kv_heads, head_dim]
+            k_cache_flat = k_cache_paged.view(-1, k_cache_paged.shape[-2], k_cache_paged.shape[-1])
+            v_cache_flat = v_cache_paged.view(-1, v_cache_paged.shape[-2], v_cache_paged.shape[-1])
+            store_kvcache(key_states, value_states, k_cache_flat, v_cache_flat, context.slot_mapping)
             page_attention = True
         else:
             # Fallback: simple KV cache
