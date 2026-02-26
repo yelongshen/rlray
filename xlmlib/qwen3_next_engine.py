@@ -2087,7 +2087,7 @@ class HybridModelRunner:
         free = int(total * gpu_memory_utilization - used)
         
         cache = model.allocate_cache(
-            batch_size=16,
+            batch_size=1,  # Engine processes one flattened batch at a time
             free_memory_budget=free,
             device=self.device,
             block_size=self.block_size,
