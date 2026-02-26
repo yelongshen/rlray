@@ -2543,7 +2543,7 @@ if __name__ == "__main__":
         
         if is_main:
             print(f"Prompt: {args.prompt}")
-            print(f"Input string: {text}")
+            print(f"Input string: {args.prompt}")
             print(f"Input tokens: {len(input_ids)}")
         
         import time
