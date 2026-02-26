@@ -1073,8 +1073,6 @@ class Qwen3NextAttentionForEngine(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         cos: Optional[torch.Tensor] = None,
         sin: Optional[torch.Tensor] = None,
-        max_generation: int = 0,
-        cur_pos: int = 0,
         cache_params = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         bsz, q_len, _ = hidden_states.size()
@@ -1295,8 +1293,6 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         cos: Optional[torch.Tensor] = None,
         sin: Optional[torch.Tensor] = None,
-        max_generation: int = 0,
-        cur_pos: int = 0,
         cache_params = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
@@ -1320,8 +1316,6 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
                 position_ids=position_ids,
                 cos=cos,
                 sin=sin,
-                max_generation=max_generation,
-                cur_pos=cur_pos,
                 cache_params=cache_params,
             )
         
@@ -1379,8 +1373,6 @@ class Qwen3NextModelForEngine(nn.Module):
         input_ids: torch.LongTensor,
         position_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        max_generation: int = 0,
-        cur_pos: int = 0,
         cache_params = None,
     ) -> Tuple[torch.Tensor, List]:
         batch_size, seq_length = input_ids.shape[:2]
@@ -1402,8 +1394,6 @@ class Qwen3NextModelForEngine(nn.Module):
                 position_ids=position_ids,
                 cos=cos,
                 sin=sin,
-                max_generation=max_generation,
-                cur_pos=cur_pos,
                 cache_params=cache_params,
             )
             next_cache.append((k_cache, v_cache))
@@ -1472,8 +1462,6 @@ class Qwen3NextForLLMEngine(nn.Module):
         input_ids: torch.LongTensor,
         position_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        max_generation: int = 0, 
-        cur_pos: int = 0,
         logits_to_keep: Optional[torch.Tensor] = None,
         num_logits_to_keep: int = 0,
         cache_params = None,
@@ -1491,8 +1479,6 @@ class Qwen3NextForLLMEngine(nn.Module):
             input_ids=input_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
-            max_generation=max_generation,
-            cur_pos=cur_pos,
             cache_params=cache_params,
         )
         
