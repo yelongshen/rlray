@@ -730,7 +730,6 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         cache_params = None,
-        cache_position: Optional[torch.LongTensor] = None,
     ) -> torch.Tensor:
         # Apply padding mask
         hidden_states = apply_mask_to_padding_states(hidden_states, attention_mask)
@@ -742,7 +741,6 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             and hasattr(cache_params, 'has_previous_state')
             and cache_params.has_previous_state
             and seq_len == 1
-            and cache_position is not None
         )
         
         # Get conv/recurrent states from cache if exists
@@ -2208,6 +2206,8 @@ class HybridModelRunner:
                 cache_params=self.cache_params,
                 logits_to_keep=context.cu_seqlens_q[1:] - 1,
             )
+            # Mark that we have state for decode steps (GDN conv/recurrent)
+            self.cache_params.has_previous_state = True
         else:
             logits, _ = self.model(
                 input_ids=input_ids.unsqueeze(0),
