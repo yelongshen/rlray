@@ -2086,7 +2086,7 @@ class HybridModelRunner:
         self.default_dtype = torch.bfloat16
         self.model = model
         self.llm_config = llm_config
-        self.device = device
+        self.device = torch.device(device) if isinstance(device, str) else device
         self.temperature = 0.6
         
         # Allocate hybrid cache (paged KV + linear attention states)
@@ -2127,7 +2127,7 @@ class HybridModelRunner:
             seq.block_table + [-1] * (max_len - len(seq.block_table))
             for seq in seqs
         ]
-        return torch.tensor(block_tables, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        return torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
 
     def prepare_prefill(self, seqs):
         from context import set_context
@@ -2164,14 +2164,14 @@ class HybridModelRunner:
         assert len(input_ids) == len(slot_mapping)
         assert len(input_ids) == cu_seqlens_q[-1]
 
-        context_lens = torch.tensor([len(seq) for seq in seqs], dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        context_lens = torch.tensor([len(seq) for seq in seqs], dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         block_tables = self.prepare_block_tables(seqs)
 
-        input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
-        positions = torch.tensor(positions, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
-        cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
-        cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
-        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
+        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
+        cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
+        cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables)
         return input_ids, positions
 
@@ -2189,10 +2189,10 @@ class HybridModelRunner:
             context_lens.append(len(seq))
             slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1)
 
-        input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
-        positions = torch.tensor(positions, dtype=torch.int64, device=self.device, pin_memory=True).cuda(non_blocking=True)
-        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
-        context_lens = torch.tensor(context_lens, dtype=torch.int32, device=self.device, pin_memory=True).cuda(non_blocking=True)
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
+        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
+        context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         block_tables = self.prepare_block_tables(seqs)
         set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
         return input_ids, positions
