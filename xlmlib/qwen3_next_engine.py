@@ -247,6 +247,7 @@ def store_kvcache(key_states: torch.Tensor, value_states: torch.Tensor,
                   k_cache: torch.Tensor, v_cache: torch.Tensor, 
                   slot_mapping: torch.Tensor):
     """Store key/value states into paged KV cache."""
+    slot_mapping = slot_mapping.long()
     k_cache.index_copy_(0, slot_mapping, key_states)
     v_cache.index_copy_(0, slot_mapping, value_states)
 
