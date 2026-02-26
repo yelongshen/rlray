@@ -812,14 +812,25 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             query = query.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
             key = key.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
         
-        # Apply gated delta rule (use chunk kernel for both prefill and decode)
-        core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
-            query, key, value,
-            g=g, beta=beta,
-            initial_state=recurrent_state,
-            output_final_state=cache_params is not None,
-            use_qk_l2norm_in_kernel=True,
-        )
+        # Apply gated delta rule
+        # Use recurrent kernel for single-token decode (chunk kernel pads to chunk_size
+        # and the padding corrupts the recurrent state)
+        if use_precomputed_states:
+            core_attn_out, last_recurrent_state = torch_recurrent_gated_delta_rule(
+                query, key, value,
+                g=g, beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+            )
+        else:
+            core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
+                query, key, value,
+                g=g, beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=cache_params is not None,
+                use_qk_l2norm_in_kernel=True,
+            )
         
         # Update cache
         if cache_params is not None and hasattr(cache_params, 'recurrent_states'):
