@@ -2213,10 +2213,20 @@ class HybridLLMEngine:
     Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
     """
     def __init__(self, model, llm_config, device):
-        # Ensure xlmlib dir is on sys.path so llm_engine can import its sibling modules
+        # Ensure imports work for both `from phi4 import ...` (needs xlmlib/ on path)
+        # and `from xlmlib.fused_linear_cross_entropy import ...` (needs parent on path).
+        # We register xlmlib as a namespace to avoid triggering __init__.py -> samba.
         _script_dir = _os.path.dirname(_os.path.abspath(__file__))
+        _parent_dir = _os.path.dirname(_script_dir)
         if _script_dir not in sys.path:
             sys.path.insert(0, _script_dir)
+        if _parent_dir not in sys.path:
+            sys.path.insert(0, _parent_dir)
+        # Prevent xlmlib/__init__.py from running (it imports samba which needs selective_scan_cuda)
+        import types
+        if 'xlmlib' not in sys.modules:
+            sys.modules['xlmlib'] = types.ModuleType('xlmlib')
+            sys.modules['xlmlib'].__path__ = [_script_dir]
         
         from llm_engine import Scheduler, Sequence
         
