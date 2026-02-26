@@ -26,6 +26,8 @@ Usage:
 
 import gc
 import math
+import sys
+import os as _os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -2225,6 +2227,13 @@ class HybridLLMEngine:
     Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
     """
     def __init__(self, model, llm_config, device):
+        # Ensure parent directory is on sys.path so llm_engine can import its dependencies
+        _script_dir = _os.path.dirname(_os.path.abspath(__file__))
+        _parent_dir = _os.path.dirname(_script_dir)
+        for p in [_script_dir, _parent_dir]:
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        
         from llm_engine import Scheduler, Sequence
         
         self.model_runner = HybridModelRunner(model, llm_config, device)
