@@ -2242,6 +2242,10 @@ class HybridModelRunner:
         probs = torch.softmax((logits / self.temperature).to(torch.float32), dim=-1)
         token_ids = torch.multinomial(probs, num_samples=1)
         
+        # For TP: broadcast sampled tokens from rank 0 so all ranks stay in sync
+        if get_tp_world_size() > 1:
+            dist.broadcast(token_ids, src=0, group=get_tp_group())
+        
         reset_context()
         token_list = token_ids.squeeze(dim=1).tolist()
         if is_prefill:
