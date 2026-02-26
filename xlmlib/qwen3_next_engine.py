@@ -2533,7 +2533,7 @@ if __name__ == "__main__":
         
         import time
         start = time.time()
-        output_ids = engine.generate([input_ids], max_tokens=256)[0]
+        output_ids = engine.generate([input_ids], max_tokens=64)[0]
         elapsed = time.time() - start
         
         if is_main:
