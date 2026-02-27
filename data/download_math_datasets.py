@@ -295,7 +295,38 @@ def download_dataset(name: str, output_dir: str, max_samples: int = None):
         if info["hf_name"]:
             kwargs["name"] = info["hf_name"]
         
-        ds = load_dataset(info["hf_path"], **kwargs)
+        try:
+            ds = load_dataset(info["hf_path"], **kwargs)
+        except Exception as e1:
+            # Fallback: try with explicit split download if '**' pattern error
+            if "'**'" in str(e1) or "pattern" in str(e1).lower():
+                print(f"    Retrying with explicit splits...")
+                try:
+                    # Try downloading train/test splits explicitly
+                    splits = {}
+                    for split_name in ["train", "test", "validation"]:
+                        try:
+                            splits[split_name] = load_dataset(info["hf_path"], split=split_name, **kwargs)
+                        except:
+                            pass
+                    if splits:
+                        from datasets import DatasetDict
+                        ds = DatasetDict(splits)
+                    else:
+                        raise e1
+                except Exception:
+                    # Final fallback: use snapshot_download
+                    print(f"    Retrying with snapshot_download...")
+                    from huggingface_hub import snapshot_download
+                    snapshot_download(
+                        repo_id=info["hf_path"],
+                        repo_type="dataset",
+                        local_dir=save_path,
+                    )
+                    print(f"    Saved raw files to: {save_path}")
+                    return True
+            else:
+                raise e1
         
         if max_samples:
             # Truncate each split
