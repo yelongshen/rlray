@@ -45,8 +45,8 @@ DATASETS = {
         "category": "eval",
     },
     "math": {
-        "hf_path": "lighteval/MATH",
-        "hf_name": "all",
+        "hf_path": "hendrycks/competition_math",
+        "hf_name": None,
         "level": "high school / competition",
         "area": "algebra, geometry, number theory, counting, probability",
         "size": "~12.5K",
@@ -99,13 +99,14 @@ DATASETS = {
         "category": "eval",
     },
     "minerva_math": {
-        "hf_path": "math-ai/minerva-math", 
+        "hf_path": "meta-llama/Llama-3.1-8B-evals",
         "hf_name": None,
         "level": "high school / college",
         "area": "mixed math",
         "size": "~272",
-        "description": "Minerva math evaluation set",
+        "description": "Minerva math evaluation (via Llama evals, or use MATH instead)",
         "category": "eval",
+        "skip": True,  # Hard to get standalone, use MATH instead
     },
     "olympiad_bench": {
         "hf_path": "Hothan/OlympiadBench",
@@ -164,13 +165,14 @@ DATASETS = {
         "category": "train",
     },
     "deepseek_math": {
-        "hf_path": "deepseek-ai/DeepSeek-Math",
+        "hf_path": "deepseek-ai/deepseek-math",
         "hf_name": None,
         "level": "mixed",
         "area": "web-crawled math corpus",
         "size": "~500K",
-        "description": "High-quality math training data from DeepSeek",
+        "description": "High-quality math training data from DeepSeek (may require auth)",
         "category": "train",
+        "skip": True,  # Gated/private repo
     },
     "open_math_instruct_2": {
         "hf_path": "nvidia/OpenMathInstruct-2",
@@ -187,13 +189,14 @@ DATASETS = {
         "level": "mixed",
         "area": "diverse math",
         "size": "~1M",
-        "description": "Knowledge-Preserving Math dataset",
+        "description": "Knowledge-Preserving Math dataset (may require auth)",
         "category": "train",
+        "skip": True,  # May not be publicly available
     },
 
     # === Process Reward / RL Datasets ===
     "prm800k": {
-        "hf_path": "openai/prm800k",
+        "hf_path": "tasksource/prm800k",
         "hf_name": None,
         "level": "high school",
         "area": "step-level math verification",
@@ -269,6 +272,12 @@ def download_dataset(name: str, output_dir: str, max_samples: int = None):
         return False
     
     info = DATASETS[name]
+    
+    # Skip datasets marked as unavailable
+    if info.get("skip"):
+        print(f"  SKIP: {name} - {info.get('description', 'unavailable')}")
+        return True
+    
     save_path = os.path.join(output_dir, name)
     
     if os.path.exists(save_path):
@@ -282,7 +291,7 @@ def download_dataset(name: str, output_dir: str, max_samples: int = None):
     print(f"    Description: {info['description']}")
     
     try:
-        kwargs = {"trust_remote_code": True}
+        kwargs = {}
         if info["hf_name"]:
             kwargs["name"] = info["hf_name"]
         
