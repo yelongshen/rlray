@@ -164,58 +164,89 @@ def evaluate(
     problems,
     device,
     temperature=0.0,
+    top_k=0,
     max_tokens=4096,
+    max_batch_size=64,
     n_rollout=1,
     prompt_type="v17",
     debug=False,
 ):
-    """Run evaluation on a set of math problems."""
+    """Run evaluation on a set of math problems.
+    
+    Uses batch-wise generation with multi-problem packing:
+      - max_batch_size controls the total number of sequences per engine call.
+      - Problems are packed so that (max_batch_size // n_rollout) problems run
+        together, each with n_rollout copies, filling the batch.
+      - e.g. max_batch_size=64, n_rollout=8 => 8 problems packed per batch.
+    """
     is_main = get_tp_rank() == 0
     
-    # Create engine
-    engine = HybridLLMEngine(model, config, str(device), temperature=temperature)
+    # Create engine with top-k support
+    engine = HybridLLMEngine(model, config, str(device), temperature=temperature, top_k=top_k)
     
     results = {}  # id -> list of rewards
     total_response_len = 0
     total_generated = 0
     
+    # Number of distinct problems per batch
+    problems_per_batch = max(1, max_batch_size // max(1, n_rollout))
+    
+    if is_main:
+        print(f"\nBatch config: max_batch_size={max_batch_size}, n_rollout={n_rollout}, "
+              f"problems_per_batch={problems_per_batch}, "
+              f"actual_batch_size={problems_per_batch * n_rollout}")
+    
     start_time = time.time()
     
-    for prob_idx, problem in enumerate(problems):
-        pid = problem["id"]
-        prompt_text = process_math_prompt(problem["problem"], prompt_type=prompt_type)
+    # Process problems in chunks
+    for batch_start in range(0, len(problems), problems_per_batch):
+        batch_problems = problems[batch_start : batch_start + problems_per_batch]
         
-        # Tokenize
-        input_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
-        
-        if is_main and prob_idx < 3:
-            print(f"\n--- Problem {prob_idx} (id={pid}) ---")
-            print(f"  Question: {problem['problem'][:100]}...")
-            print(f"  Gold answer: {problem['answer']}")
-            print(f"  Prompt tokens: {len(input_ids)}")
-        
-        # Generate n_rollout samples
-        for rollout in range(n_rollout):
-            # Reset cache for each new generation
-            engine.model_runner.cache_params.reset()
-            engine.model_runner.cache_params.has_previous_state = False
+        # Tokenize all problems in this chunk
+        batch_prompts = []
+        batch_meta = []  # (problem_index_in_chunk, rollout_index) for each prompt
+        for local_idx, problem in enumerate(batch_problems):
+            prompt_text = process_math_prompt(problem["problem"], prompt_type=prompt_type)
+            input_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
             
-            # Generate
-            try:
-                output_ids_list = engine.generate([input_ids], max_tokens=max_tokens)
-                output_ids = output_ids_list[0]
-            except Exception as e:
-                if is_main:
-                    print(f"  Generation failed: {e}")
-                continue
+            prob_idx = batch_start + local_idx
+            pid = problem["id"]
+            
+            if is_main and prob_idx < 3:
+                print(f"\n--- Problem {prob_idx} (id={pid}) ---")
+                print(f"  Question: {problem['problem'][:100]}...")
+                print(f"  Gold answer: {problem['answer']}")
+                print(f"  Prompt tokens: {len(input_ids)}")
+            
+            # Replicate for n_rollout
+            for r in range(n_rollout):
+                batch_prompts.append(input_ids)
+                batch_meta.append((local_idx, r))
+        
+        # Reset cache before the batch
+        engine.model_runner.cache_params.reset()
+        engine.model_runner.cache_params.has_previous_state = False
+        
+        try:
+            output_ids_list = engine.generate(batch_prompts, max_tokens=max_tokens)
+        except Exception as e:
+            if is_main:
+                print(f"  Batch generation failed (problems {batch_start}-{batch_start+len(batch_problems)-1}): {e}")
+            continue
+        
+        # Score all outputs
+        for out_idx, (local_idx, rollout) in enumerate(batch_meta):
+            problem = batch_problems[local_idx]
+            pid = problem["id"]
+            prob_idx = batch_start + local_idx
+            output_ids = output_ids_list[out_idx]
             
             response = tokenizer.decode(output_ids, skip_special_tokens=True)
             total_response_len += len(output_ids)
             total_generated += 1
             
-            # Score
             _, extracted_answer, reward = safe_math_answer_timeout(
-                response, [problem["answer"]], tokenizer, 
+                response, [problem["answer"]], tokenizer,
                 prompt_type=prompt_type, timeout=30
             )
             
@@ -229,10 +260,11 @@ def evaluate(
                     print(f"  Response: {response[:300]}...")
         
         # Progress
-        if is_main and (prob_idx + 1) % 10 == 0:
+        batch_end = batch_start + len(batch_problems)
+        if is_main and (batch_end % 10 == 0 or batch_end >= len(problems)):
             elapsed = time.time() - start_time
             pass_1 = sum(np.mean(v) for v in results.values()) / len(results) if results else 0
-            print(f"  Progress: {prob_idx+1}/{len(problems)}, pass@1={pass_1:.4f}, "
+            print(f"  Progress: {batch_end}/{len(problems)}, pass@1={pass_1:.4f}, "
                   f"elapsed={elapsed:.1f}s, avg_len={total_response_len/max(1,total_generated):.0f}")
     
     elapsed = time.time() - start_time
@@ -282,6 +314,8 @@ def main():
     parser.add_argument("--tensor_parallel", type=int, default=1, help="TP size")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature (0=greedy)")
     parser.add_argument("--max_tokens", type=int, default=4096, help="Max generation tokens")
+    parser.add_argument("--top_k", type=int, default=0, help="Top-k sampling (0=disabled)")
+    parser.add_argument("--max_batch_size", type=int, default=64, help="Max sequences per engine batch (e.g. 64)")
     parser.add_argument("--n_rollout", type=int, default=1, help="Number of rollouts per problem")
     parser.add_argument("--prompt_type", type=str, default="v17", help="Prompt template version")
     parser.add_argument("--max_problems", type=int, default=None, help="Max problems to evaluate (for testing)")
@@ -321,7 +355,9 @@ def main():
         problems=problems,
         device=device,
         temperature=args.temperature,
+        top_k=args.top_k,
         max_tokens=args.max_tokens,
+        max_batch_size=args.max_batch_size,
         n_rollout=args.n_rollout,
         prompt_type=args.prompt_type,
         debug=args.debug,
@@ -334,6 +370,8 @@ def main():
                 "dataset": args.dataset,
                 "model_path": args.model_path,
                 "temperature": args.temperature,
+                "top_k": args.top_k,
+                "max_batch_size": args.max_batch_size,
                 "n_rollout": args.n_rollout,
                 "results": {k: v for k, v in results.items()},
             }, f, indent=2)
