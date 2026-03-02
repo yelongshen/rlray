@@ -2113,7 +2113,7 @@ class HybridModelRunner:
         self.max_batch_size = max_batch_size
         
         # Allocate hybrid cache (paged KV + linear attention states)
-        self.cache_params = self.allocate_cache(self.model, self.llm_config, 0.9)
+        self.cache_params = self.allocate_cache(self.model, self.llm_config, 0.9, max_batch_size)
         self.num_kvcache_blocks = self.cache_params.num_kvcache_blocks
 
     def call(self, method_name, *args):
@@ -2121,10 +2121,11 @@ class HybridModelRunner:
         assert callable(method)
         return method(*args)
 
-    def allocate_cache(self, model, llm_config, gpu_memory_utilization=0.85):
+    def allocate_cache(self, model, llm_config, gpu_memory_utilization=0.85, max_batch_size=1):
         """Allocate cache by calling model.allocate_cache().
         
         Uses torch.cuda.mem_get_info for accurate free memory on the current device.
+        The batch_size controls linear attention state allocation (conv + recurrent).
         """
         free, total = torch.cuda.mem_get_info()
         # Reserve some memory for activations and overhead
@@ -2135,13 +2136,13 @@ class HybridModelRunner:
             usable_free = int(free * 0.5)  # Try with 50% of whatever is left
         
         cache = model.allocate_cache(
-            batch_size=1,  # Engine processes one flattened batch at a time
+            batch_size=max_batch_size,  # Allocate linear attention states for full batch
             free_memory_budget=usable_free,
             device=self.device,
             block_size=self.block_size,
         )
         
-        print(f'max kv cache length: {cache.num_kvcache_blocks * self.block_size}')
+        print(f'max kv cache length: {cache.num_kvcache_blocks * self.block_size}, batch_size={max_batch_size}')
         return cache
 
     def prepare_block_tables(self, seqs):
