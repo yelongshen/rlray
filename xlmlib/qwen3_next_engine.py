@@ -2102,7 +2102,7 @@ class HybridModelRunner:
     cache_params instead of wiring k_cache/v_cache to model layers.
     """
 
-    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0):
+    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64):
         self.block_size = 256
         self.default_dtype = torch.bfloat16
         self.model = model
@@ -2110,6 +2110,7 @@ class HybridModelRunner:
         self.device = torch.device(device) if isinstance(device, str) else device
         self.temperature = temperature
         self.top_k = top_k  # 0 means no top-k filtering
+        self.max_batch_size = max_batch_size
         
         # Allocate hybrid cache (paged KV + linear attention states)
         self.cache_params = self.allocate_cache(self.model, self.llm_config, 0.9)
@@ -2276,7 +2277,7 @@ class HybridLLMEngine:
     Works with any model that implements the allocate_cache() + forward(cache_params=) protocol.
     Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
     """
-    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0):
+    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64):
         # Ensure imports work for both `from phi4 import ...` (needs xlmlib/ on path)
         # and `from xlmlib.fused_linear_cross_entropy import ...` (needs parent on path).
         # We register xlmlib as a namespace to avoid triggering __init__.py -> samba.
@@ -2294,8 +2295,9 @@ class HybridLLMEngine:
         
         from llm_engine import Scheduler, Sequence
         
-        self.model_runner = HybridModelRunner(model, llm_config, device, temperature=temperature, top_k=top_k)
+        self.model_runner = HybridModelRunner(model, llm_config, device, temperature=temperature, top_k=top_k, max_batch_size=max_batch_size)
         self.scheduler = Scheduler(llm_config, self.model_runner.block_size, self.model_runner.num_kvcache_blocks)
+        self.scheduler.max_num_seqs = max_batch_size  # Limit concurrent sequences
 
     def is_finished(self):
         return self.scheduler.is_finished()

@@ -181,8 +181,8 @@ def evaluate(
     """
     is_main = get_tp_rank() == 0
     
-    # Create engine with top-k support
-    engine = HybridLLMEngine(model, config, str(device), temperature=temperature, top_k=top_k)
+    # Create engine with top-k support and batch size limit
+    engine = HybridLLMEngine(model, config, str(device), temperature=temperature, top_k=top_k, max_batch_size=max_batch_size)
     
     results = {}  # id -> list of rewards
     total_response_len = 0
