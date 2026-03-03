@@ -2275,24 +2275,26 @@ class HybridModelRunner:
                 cache.recurrent_states[i][slot_a].copy_(cache.recurrent_states[i][slot_b])
                 cache.recurrent_states[i][slot_b].copy_(tmp)
 
-    def run(self, seqs, is_prefill: bool, prefill_slot: int = 0):
+    def run(self, seqs, is_prefill: bool):
         if is_prefill:
-            # Process single prefill sequence (step() ensures only 1 seq at a time)
-            assert len(seqs) == 1, f"Expected 1 prefill seq, got {len(seqs)}"
-            seq = seqs[0]
-            # Swap linear attention state: model writes to slot 0, but this seq
-            # needs slot `prefill_slot` (its position in the running queue for decode)
-            slot = prefill_slot
-            if slot > 0:
-                self._swap_linear_state(0, slot)
+            # Prefill each sequence individually because GatedDeltaNet (linear
+            # attention) can't handle packed varlen format.
+            # Each seq gets its own forward pass with correct linear attention slot.
+            all_logits = []
+            for seq_idx, seq in enumerate(seqs):
+                # Map seq to its batch slot for linear attention state
+                slot = seq.seq_id % self.max_batch_size
+                if slot > 0:
+                    self._swap_linear_state(0, slot)
+                
+                input_ids, positions = self.prepare_prefill([seq])
+                logits = self.run_model(input_ids, positions, True)
+                all_logits.append(logits.view(-1))  # [vocab]
+                
+                if slot > 0:
+                    self._swap_linear_state(0, slot)
             
-            input_ids, positions = self.prepare_prefill([seq])
-            logits = self.run_model(input_ids, positions, True)
-            
-            if slot > 0:
-                self._swap_linear_state(0, slot)
-            
-            logits = logits.view(-1)  # [vocab]
+            logits = torch.stack(all_logits, dim=0)  # [num_seqs, vocab]
         else:
             input_ids, positions = self.prepare_decode(seqs)
             logits = self.run_model(input_ids, positions, is_prefill)
@@ -2336,6 +2338,9 @@ class HybridLLMEngine:
     Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
     """
     def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64):
+        # Increase NCCL timeout for batch prefill (many sequential forward passes)
+        if 'NCCL_TIMEOUT' not in _os.environ:
+            _os.environ['NCCL_TIMEOUT'] = '3600'  # 1 hour
         # Ensure imports work for both `from phi4 import ...` (needs xlmlib/ on path)
         # and `from xlmlib.fused_linear_cross_entropy import ...` (needs parent on path).
         # We register xlmlib as a namespace to avoid triggering __init__.py -> samba.
@@ -2362,23 +2367,7 @@ class HybridLLMEngine:
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
-        
-        if is_prefill and len(seqs) > 1:
-            # GatedDeltaNet requires per-sequence prefill (can't handle packed varlen).
-            # Process only 1 sequence per step to keep each step fast and avoid
-            # NCCL timeout. Preempt the rest back to waiting for next step().
-            extra_seqs = seqs[1:]
-            seqs = seqs[:1]
-            for seq in extra_seqs:
-                self.scheduler.preempt(seq)
-            # Pass the prefill slot: this seq's position in the running queue
-            # (it's the last one added, so its index = len(running) - 1)
-            prefill_slot = len(self.scheduler.running) - 1
-        
-        if is_prefill:
-            token_ids = self.model_runner.call("run", seqs, is_prefill, prefill_slot)
-        else:
-            token_ids = self.model_runner.call("run", seqs, is_prefill)
+        token_ids = self.model_runner.call("run", seqs, is_prefill)
         self.scheduler.postprocess(seqs, token_ids)
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
         # Print decode progress every 50 tokens
