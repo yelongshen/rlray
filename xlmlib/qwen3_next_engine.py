@@ -2294,7 +2294,6 @@ class HybridModelRunner:
                 cache_params=self.cache_params,
                 logits_to_keep=context.cu_seqlens_q[1:] - 1,
             )
-            torch.cuda.synchronize()
             t1 = time.time()
             # Mark that we have state for decode steps (GDN conv/recurrent)
             self.cache_params.has_previous_state = True
@@ -2337,7 +2336,6 @@ class HybridModelRunner:
                 input_ids, positions = self.prepare_prefill(seqs)
                 t_prep_done = _time.time()
                 logits = self.run_model(input_ids, positions, True)
-                torch.cuda.synchronize()
                 t_model = _time.time()
                 print(f'  [run] varlen prefill: {len(seqs)} seqs, '
                       f'prep={t_prep_done-t_prep:.3f}s, model={t_model-t_prep_done:.3f}s', flush=True)
@@ -2358,7 +2356,6 @@ class HybridModelRunner:
             input_ids, positions = self.prepare_decode(seqs)
             t_prep_done = _time.time()
             logits = self.run_model(input_ids, positions, is_prefill)
-            torch.cuda.synchronize()
             t_model = _time.time()
         
         # Ensure logits is always 2D [num_seqs, vocab] for uniform sampling
