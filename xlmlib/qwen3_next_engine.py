@@ -2303,9 +2303,13 @@ class HybridModelRunner:
             input_ids, positions = self.prepare_decode(seqs)
             logits = self.run_model(input_ids, positions, is_prefill)
         
+        # Ensure logits is always 2D [num_seqs, vocab] for uniform sampling
+        if logits.dim() == 1:
+            logits = logits.unsqueeze(0)
+        
         if self.temperature <= 0:
             # Greedy decoding
-            token_ids = logits.argmax(dim=-1, keepdim=True)
+            token_ids = logits.argmax(dim=-1)  # [num_seqs]
         else:
             # Sampling with temperature + optional top-k
             scaled_logits = (logits / self.temperature).to(torch.float32)
@@ -2314,14 +2318,17 @@ class HybridModelRunner:
                 topk_vals, _ = torch.topk(scaled_logits, min(self.top_k, scaled_logits.size(-1)), dim=-1)
                 scaled_logits[scaled_logits < topk_vals[..., -1:]] = float('-inf')
             probs = torch.softmax(scaled_logits, dim=-1)
-            token_ids = torch.multinomial(probs, num_samples=1)
+            token_ids = torch.multinomial(probs, num_samples=1).squeeze(-1)  # [num_seqs]
         
         # For TP: broadcast sampled tokens from rank 0 so all ranks stay in sync
         if get_tp_world_size() > 1:
             dist.broadcast(token_ids, src=0, group=get_tp_group())
         
         reset_context()
-        token_list = token_ids.squeeze(dim=1).tolist()
+        token_list = token_ids.tolist()
+        # Ensure token_list is always a flat list
+        if isinstance(token_list, int):
+            token_list = [token_list]
         if is_prefill:
             print(f'  [run] prefill -> sampled tokens: {token_list}', flush=True)
         return token_list
