@@ -2598,18 +2598,24 @@ if __name__ == "__main__":
         n_rollout = 2
         rollout_prompt_text = "What is 5+3?"
         
-        if is_main:
-            print(f"\n--- Test 3a: {batch_size} different prompts (greedy) ---")
-        
-        # Create engine with max_batch_size matching our batch
+        # Create ONE engine with max_batch_size covering both tests
+        # This avoids reallocating GPU memory cache between tests
+        max_bs = max(batch_size, n_rollout)
         engine_batch = HybridLLMEngine(model, config, str(model_device), 
-                                        temperature=0, max_batch_size=batch_size)
+                                        temperature=0, max_batch_size=max_bs)
+        
+        # --- Test 3a: multiple different prompts (greedy) ---
+        if is_main:
+            print(f"\n--- Test 3a: {batch_size} different prompts (greedy, reusing engine with max_batch_size={max_bs}) ---")
         
         batch_input_ids = [tokenizer.encode(p) for p in batch_prompts_text]
         
         if is_main:
             for i, (text, ids) in enumerate(zip(batch_prompts_text, batch_input_ids)):
                 print(f"  Prompt {i}: '{text}' ({len(ids)} tokens)")
+        
+        # Reset cache before new batch
+        engine_batch.model_runner.cache_params.reset()
         
         import time
         start = time.time()
@@ -2624,12 +2630,13 @@ if __name__ == "__main__":
                 response = tokenizer.decode(output_ids, skip_special_tokens=True)
                 print(f"  Output {i} ({len(output_ids)} tokens): {response[:150]}...")
         
-        # Test 3b: Rollout-style (same prompt, multiple copies with sampling)
-        if is_main:
-            print(f"\n--- Test 3b: Same prompt x{n_rollout} rollouts (temperature=0.7, top_k=50) ---")
+        # --- Test 3b: Rollout-style (same prompt, sampling) ---
+        # Switch sampling parameters on the same engine (no reallocation)
+        engine_batch.model_runner.temperature = 0.7
+        engine_batch.model_runner.top_k = 50
         
-        engine_rollout = HybridLLMEngine(model, config, str(model_device), 
-                                          temperature=0.7, top_k=50, max_batch_size=n_rollout)
+        if is_main:
+            print(f"\n--- Test 3b: Same prompt x{n_rollout} rollouts (temperature=0.7, top_k=50, reusing engine) ---")
         
         rollout_ids = tokenizer.encode(rollout_prompt_text)
         rollout_batch = [rollout_ids] * n_rollout
@@ -2637,8 +2644,11 @@ if __name__ == "__main__":
         if is_main:
             print(f"  Prompt: '{rollout_prompt_text}' ({len(rollout_ids)} tokens) x{n_rollout}")
         
+        # Reset cache before new batch
+        engine_batch.model_runner.cache_params.reset()
+        
         start = time.time()
-        rollout_outputs = engine_rollout.generate(rollout_batch, max_tokens=128)
+        rollout_outputs = engine_batch.generate(rollout_batch, max_tokens=128)
         elapsed = time.time() - start
         
         total_tokens = sum(len(o) for o in rollout_outputs)
