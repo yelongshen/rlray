@@ -2285,19 +2285,22 @@ class HybridModelRunner:
             # Prefill each sequence individually because GatedDeltaNet (linear
             # attention) can't handle packed varlen format.
             # Each seq gets its own forward pass with correct linear attention slot.
+            # IMPORTANT: slot = seq_idx (position in batch), NOT seq.seq_id,
+            # because decode reads states in batch order (running queue order).
             all_logits = []
             for seq_idx, seq in enumerate(seqs):
-                # Map seq to its batch slot for linear attention state
-                slot = seq.seq_id % self.max_batch_size
-                if slot > 0:
-                    self._swap_linear_state(0, slot)
+                # Swap slot 0 ↔ seq_idx so model writes to the correct position.
+                # During decode, running[i] reads state[i], so prefill must place
+                # seq i's state at slot i.
+                if seq_idx > 0:
+                    self._swap_linear_state(0, seq_idx)
                 
                 input_ids, positions = self.prepare_prefill([seq])
                 logits = self.run_model(input_ids, positions, True)
                 all_logits.append(logits.view(-1))  # [vocab]
                 
-                if slot > 0:
-                    self._swap_linear_state(0, slot)
+                if seq_idx > 0:
+                    self._swap_linear_state(0, seq_idx)
             
             logits = torch.stack(all_logits, dim=0)  # [num_seqs, vocab]
         else:
