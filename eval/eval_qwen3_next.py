@@ -1,21 +1,21 @@
 """
 Math Evaluation for Qwen3-Next with HybridLLMEngine.
 
-Evaluates on MATH500 and GSM8K benchmarks using the paged attention engine.
+Evaluates on MATH500, GSM8K, AIME24, and AIME25 benchmarks using the paged attention engine.
 Supports tensor parallelism.
 
 Usage:
     # Single GPU - MATH500
     python eval/eval_qwen3_next.py --model_path ./models/Qwen_Qwen3-Coder-Next/ --dataset math500
 
-    # Single GPU - GSM8K
-    python eval/eval_qwen3_next.py --model_path ./models/Qwen_Qwen3-Coder-Next/ --dataset gsm8k
+    # Single GPU - AIME24
+    python eval/eval_qwen3_next.py --model_path ./models/Qwen_Qwen3-Coder-Next/ --dataset aime24
 
-    # TP=2
-    torchrun --nproc_per_node=2 eval/eval_qwen3_next.py --model_path ./models/Qwen_Qwen3-Coder-Next/ --dataset math500 --tensor_parallel 2
+    # Single GPU - AIME25
+    python eval/eval_qwen3_next.py --model_path ./models/Qwen_Qwen3-Coder-Next/ --dataset aime25
 
-    # With sampling (pass@k)
-    torchrun --nproc_per_node=2 eval/eval_qwen3_next.py --model_path ./models/Qwen_Qwen3-Coder-Next/ --dataset math500 --n_rollout 8 --temperature 0.7
+    # TP=2 - AIME24 with sampling (pass@k)
+    torchrun --nproc_per_node=2 eval/eval_qwen3_next.py --model_path ./models/Qwen_Qwen3-Coder-Next/ --dataset aime24 --tensor_parallel 2 --n_rollout 8 --temperature 0.7 --top_k 50 --max_batch_size 64 --max_tokens 32768
 """
 
 import os
@@ -146,10 +146,33 @@ def load_aime24(data_path=None):
     return problems
 
 
+def load_aime25(data_path=None):
+    """Load AIME 2025 evaluation dataset."""
+    if data_path is None:
+        data_path = os.path.join(os.path.dirname(__file__), "aime25_test.jsonl")
+
+    if not os.path.exists(data_path):
+        raise FileNotFoundError(f"AIME25 data not found at {data_path}")
+    
+    problems = []
+    with open(data_path, "r") as f:
+        for line in f:
+            data = json.loads(line)
+            problems.append({
+                "id": str(data.get("id", len(problems))),
+                "problem": data["problem"],
+                "answer": str(data["answer"]),
+                "level": "olympiad",
+                "subject": "competition",
+            })
+    return problems
+
+
 DATASET_LOADERS = {
     "math500": load_math500,
     "gsm8k": load_gsm8k,
     "aime24": load_aime24,
+    "aime25": load_aime25,
 }
 
 
@@ -308,7 +331,7 @@ def main():
     parser = argparse.ArgumentParser(description="Math Evaluation for Qwen3-Next")
     parser.add_argument("--model_path", type=str, required=True, help="Path to Qwen3-Next model")
     parser.add_argument("--dataset", type=str, default="math500", 
-                        choices=["math500", "gsm8k", "aime24"],
+                        choices=["math500", "gsm8k", "aime24", "aime25"],
                         help="Evaluation dataset")
     parser.add_argument("--data_path", type=str, default=None, help="Custom data file path")
     parser.add_argument("--tensor_parallel", type=int, default=1, help="TP size")
