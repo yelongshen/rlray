@@ -2580,7 +2580,7 @@ if __name__ == "__main__":
         
         import time
         start = time.time()
-        output_ids = engine.generate([input_ids], max_tokens=256)[0]
+        output_ids = engine.generate([input_ids], max_tokens=64)[0]
         elapsed = time.time() - start
         
         if is_main:
@@ -2617,7 +2617,7 @@ if __name__ == "__main__":
         
         import time
         start = time.time()
-        batch_outputs = engine.generate(batch_input_ids, max_tokens=128)
+        batch_outputs = engine.generate(batch_input_ids, max_tokens=64)
         elapsed = time.time() - start
         
         total_tokens = sum(len(o) for o in batch_outputs)
@@ -2646,7 +2646,7 @@ if __name__ == "__main__":
         engine.model_runner.cache_params.reset()
         
         start = time.time()
-        rollout_outputs = engine.generate(rollout_batch, max_tokens=128)
+        rollout_outputs = engine.generate(rollout_batch, max_tokens=64)
         elapsed = time.time() - start
         
         total_tokens = sum(len(o) for o in rollout_outputs)
