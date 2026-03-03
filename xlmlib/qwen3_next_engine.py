@@ -748,11 +748,17 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         )
         
         # Get conv/recurrent states from cache if exists
+        # Slice to actual batch_size: states are pre-allocated for max_batch_size,
+        # but we only use the first batch_size slots.
         conv_state = None
         recurrent_state = None
         if cache_params is not None and hasattr(cache_params, 'conv_states'):
-            conv_state = cache_params.conv_states[self.layer_idx]
-            recurrent_state = cache_params.recurrent_states[self.layer_idx]
+            conv_state_buf = cache_params.conv_states[self.layer_idx]
+            recurrent_state_buf = cache_params.recurrent_states[self.layer_idx]
+            if conv_state_buf is not None:
+                conv_state = conv_state_buf[:batch_size]
+            if recurrent_state_buf is not None:
+                recurrent_state = recurrent_state_buf[:batch_size]
         
         # Project hidden states
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)
@@ -775,20 +781,25 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             state_len = conv_state.shape[-1]
             hidden_states_new = torch.cat([conv_state, mixed_qkv], dim=-1).to(self.conv1d.weight.dtype)
             if cache_params is not None:
-                cache_params.conv_states[self.layer_idx] = hidden_states_new[:, :, -state_len:]
+                # In-place update: write back to the correct batch slots
+                cache_params.conv_states[self.layer_idx][:batch_size].copy_(
+                    hidden_states_new[:, :, -state_len:]
+                )
             out = F.conv1d(hidden_states_new, self.conv1d.weight, 
                           self.conv1d.bias, padding=0, groups=self.conv_dim)
             mixed_qkv = F.silu(out[:, :, -seq_len:]).to(hidden_states.dtype)
         else:
             # Standard conv path (prefill)
             if cache_params is not None and hasattr(cache_params, 'conv_states'):
-                # Save last (kernel_size - 1) tokens for decode conv state
+                # In-place update: save last (kernel_size - 1) tokens for decode conv state
                 if mixed_qkv.shape[-1] >= self.conv_kernel_size - 1:
-                    cache_params.conv_states[self.layer_idx] = mixed_qkv[:, :, -(self.conv_kernel_size - 1):].clone()
+                    cache_params.conv_states[self.layer_idx][:batch_size].copy_(
+                        mixed_qkv[:, :, -(self.conv_kernel_size - 1):]
+                    )
                 else:
                     # Sequence shorter than kernel - pad with zeros on left
-                    cache_params.conv_states[self.layer_idx] = F.pad(
-                        mixed_qkv, (self.conv_kernel_size - 1 - mixed_qkv.shape[-1], 0)
+                    cache_params.conv_states[self.layer_idx][:batch_size].copy_(
+                        F.pad(mixed_qkv, (self.conv_kernel_size - 1 - mixed_qkv.shape[-1], 0))
                     )
             mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
         
@@ -838,9 +849,9 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
                 use_qk_l2norm_in_kernel=True,
             )
         
-        # Update cache
+        # Update cache: in-place copy to correct batch slots
         if cache_params is not None and hasattr(cache_params, 'recurrent_states'):
-            cache_params.recurrent_states[self.layer_idx] = last_recurrent_state
+            cache_params.recurrent_states[self.layer_idx][:batch_size].copy_(last_recurrent_state)
         
         # Apply gated norm
         z_shape_og = z.shape
@@ -2237,12 +2248,16 @@ class HybridModelRunner:
             self.cache_params.has_previous_state = True
             print(f'  [run_model] prefill done: logits={logits.shape}', flush=True)
         else:
+            # Decode: input_ids is [N], reshape to [N, 1] so each sequence
+            # is a separate batch element (required for linear attention)
+            num_seqs = input_ids.shape[0]
             logits, _ = self.model(
-                input_ids=input_ids.unsqueeze(0),
-                position_ids=positions.unsqueeze(0),
+                input_ids=input_ids.unsqueeze(1),           # [N, 1]
+                position_ids=positions.unsqueeze(1),        # [N, 1]
                 cache_params=self.cache_params,
             )
-        return logits.squeeze(0)
+            logits = logits.squeeze(1)  # [N, vocab] 
+        return logits.squeeze(0) if is_prefill else logits
 
     def run(self, seqs, is_prefill: bool):
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
