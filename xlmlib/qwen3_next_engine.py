@@ -27,6 +27,7 @@ Usage:
 import gc
 import math
 import sys
+import time
 import os as _os
 import torch
 import torch.nn as nn
@@ -2286,15 +2287,18 @@ class HybridModelRunner:
         context = get_context()
         if is_prefill:
             print(f'  [run_model] prefill: input_ids={input_ids.shape}, positions={positions.shape}', flush=True)
+            t0 = time.time()
             logits, _ = self.model(
                 input_ids=input_ids.unsqueeze(0),
                 position_ids=positions.unsqueeze(0),
                 cache_params=self.cache_params,
                 logits_to_keep=context.cu_seqlens_q[1:] - 1,
             )
+            torch.cuda.synchronize()
+            t1 = time.time()
             # Mark that we have state for decode steps (GDN conv/recurrent)
             self.cache_params.has_previous_state = True
-            print(f'  [run_model] prefill done: logits={logits.shape}', flush=True)
+            print(f'  [run_model] prefill done: logits={logits.shape}, time={t1-t0:.3f}s', flush=True)
         else:
             # Decode: input_ids is [N], reshape to [N, 1] so each sequence
             # is a separate batch element (required for linear attention)
@@ -2305,7 +2309,7 @@ class HybridModelRunner:
                 cache_params=self.cache_params,
             )
             logits = logits.squeeze(1)  # [N, vocab] 
-        # Prefill: [1, num_logits, vocab] → [num_logits, vocab]
+        # Prefill: [1, num_logits, vocab] -> [num_logits, vocab]
         # Decode:  [N, vocab] (already correct)
         return logits.squeeze(0)
 
@@ -2324,16 +2328,19 @@ class HybridModelRunner:
                 cache.recurrent_states[i][slot_b].copy_(tmp)
 
     def run(self, seqs, is_prefill: bool):
+        import time as _time
+        t_start = _time.time()
+        
         if is_prefill:
             if FLA_AVAILABLE and len(seqs) > 1:
-                # Packed varlen prefill: all sequences in ONE forward pass.
-                # GatedDeltaNet reads cu_seqlens from context and handles:
-                #   - per-segment conv1d (no cross-contamination)
-                #   - FLA kernel with cu_seqlens (native packed support)
-                #   - per-seq state read/write to slots 0..N-1
+                t_prep = _time.time()
                 input_ids, positions = self.prepare_prefill(seqs)
+                t_prep_done = _time.time()
                 logits = self.run_model(input_ids, positions, True)
-                # logits: [num_seqs, vocab] after squeeze(0)
+                torch.cuda.synchronize()
+                t_model = _time.time()
+                print(f'  [run] varlen prefill: {len(seqs)} seqs, '
+                      f'prep={t_prep_done-t_prep:.3f}s, model={t_model-t_prep_done:.3f}s', flush=True)
             else:
                 # Fallback: per-seq prefill loop (when FLA not available or single seq)
                 all_logits = []
@@ -2347,8 +2354,12 @@ class HybridModelRunner:
                         self._swap_linear_state(0, seq_idx)
                 logits = torch.stack(all_logits, dim=0)  # [num_seqs, vocab]
         else:
+            t_prep = _time.time()
             input_ids, positions = self.prepare_decode(seqs)
+            t_prep_done = _time.time()
             logits = self.run_model(input_ids, positions, is_prefill)
+            torch.cuda.synchronize()
+            t_model = _time.time()
         
         # Ensure logits is always 2D [num_seqs, vocab] for uniform sampling
         if logits.dim() == 1:
@@ -2376,8 +2387,16 @@ class HybridModelRunner:
         # Ensure token_list is always a flat list
         if isinstance(token_list, int):
             token_list = [token_list]
+        
+        t_end = _time.time()
         if is_prefill:
             print(f'  [run] prefill -> sampled tokens: {token_list}', flush=True)
+        # Log timing every 50 decode steps for the first seq
+        if not is_prefill and len(seqs) > 0 and seqs[0].num_completion_tokens % 50 == 1:
+            print(f'  [run] decode timing: batch={len(seqs)}, '
+                  f'prep={t_prep_done-t_prep:.4f}s, model={t_model-t_prep_done:.4f}s, '
+                  f'sample={t_end-t_model:.4f}s, total={t_end-t_start:.4f}s, '
+                  f'throughput={len(seqs)/(t_end-t_start):.1f} tok/s', flush=True)
         return token_list
 
 
@@ -2418,7 +2437,10 @@ class HybridLLMEngine:
         return self.scheduler.is_finished()
 
     def step(self):
+        import time as _time
+        t0 = _time.time()
         seqs, is_prefill = self.scheduler.schedule()
+        t_sched = _time.time()
         
         if is_prefill and self.prefill_one_by_one and len(seqs) > 1:
             # Process only 1 prefill per step to avoid NCCL timeout.
@@ -2429,7 +2451,9 @@ class HybridLLMEngine:
                 self.scheduler.preempt(seq)
         
         token_ids = self.model_runner.call("run", seqs, is_prefill)
+        t_run = _time.time()
         self.scheduler.postprocess(seqs, token_ids)
+        t_post = _time.time()
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
         # Print decode progress every 50 tokens
         if not is_prefill and len(seqs) > 0:
@@ -2437,7 +2461,9 @@ class HybridLLMEngine:
             if seq.num_completion_tokens % 50 == 1:
                 print(f'  [step] decode: seq_id={seq.seq_id}, completion_tokens={seq.num_completion_tokens}, '
                       f'last_token={seq.last_token}, running={len(self.scheduler.running)}, '
-                      f'finished={len(outputs)}', flush=True)
+                      f'finished={len(outputs)}, '
+                      f'sched={t_sched-t0:.4f}s, run={t_run-t_sched:.4f}s, post={t_post-t_run:.4f}s, '
+                      f'step_total={t_post-t0:.4f}s', flush=True)
         return outputs
 
     def generate(self, prompts: List[List[int]], max_tokens: int = 32768) -> List[List[int]]:
