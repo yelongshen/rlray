@@ -2259,9 +2259,46 @@ class HybridModelRunner:
             logits = logits.squeeze(1)  # [N, vocab] 
         return logits.squeeze(0) if is_prefill else logits
 
+    @torch.inference_mode()
+    def _swap_linear_state(self, slot_a, slot_b):
+        """Swap linear attention (conv + recurrent) states between two batch slots."""
+        cache = self.cache_params
+        for i in range(len(cache.conv_states)):
+            if cache.conv_states[i] is not None:
+                tmp = cache.conv_states[i][slot_a].clone()
+                cache.conv_states[i][slot_a].copy_(cache.conv_states[i][slot_b])
+                cache.conv_states[i][slot_b].copy_(tmp)
+            if cache.recurrent_states[i] is not None:
+                tmp = cache.recurrent_states[i][slot_a].clone()
+                cache.recurrent_states[i][slot_a].copy_(cache.recurrent_states[i][slot_b])
+                cache.recurrent_states[i][slot_b].copy_(tmp)
+
     def run(self, seqs, is_prefill: bool):
-        input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
-        logits = self.run_model(input_ids, positions, is_prefill)
+        if is_prefill:
+            # Prefill each sequence INDIVIDUALLY because GatedDeltaNet (linear
+            # attention) can't handle packed varlen format — it would see all
+            # sequences as one continuous sequence, causing cross-contamination.
+            # Full attention is fine since each seq gets its own paged KV blocks.
+            all_logits = []
+            for seq_idx, seq in enumerate(seqs):
+                # Swap slot 0 ↔ seq_idx so the model reads/writes the correct
+                # batch slot (model always uses batch_size=1 → slot 0 during prefill)
+                if seq_idx > 0:
+                    self._swap_linear_state(0, seq_idx)
+                
+                # Prepare context and run for this single sequence
+                input_ids, positions = self.prepare_prefill([seq])
+                logits = self.run_model(input_ids, positions, True)
+                all_logits.append(logits)  # [vocab] after squeeze(0)
+                
+                # Swap back so slot 0 has seq 0's state again
+                if seq_idx > 0:
+                    self._swap_linear_state(0, seq_idx)
+            
+            logits = torch.stack(all_logits, dim=0)  # [num_seqs, vocab]
+        else:
+            input_ids, positions = self.prepare_decode(seqs)
+            logits = self.run_model(input_ids, positions, is_prefill)
         
         if self.temperature <= 0:
             # Greedy decoding
