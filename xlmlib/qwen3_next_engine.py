@@ -2546,18 +2546,30 @@ if __name__ == "__main__":
         print(f"Input: {test_input_text}")
         print(f"Generated ({generated_ids.shape[1] - test_input.shape[1]} new tokens): {generated_text}")
     
-    # Test 2: With HybridLLMEngine
+    # Test 2 & 3: With HybridLLMEngine (single engine, reused across all tests)
     if args.test_engine:
         if is_main:
             print("\n=== Test 2: HybridLLMEngine Generation ===")
         
         config.eos_token_id = tokenizer.eos_token_id
-        engine = HybridLLMEngine(model, config, str(model_device), temperature=0)
         
-        # Prepare prompt with chat template
+        # Batch prompts for Test 3
+        batch_prompts_text = [
+            "What is 2+2?",
+            "What is the capital of France?",
+            "Solve: 3 * 7 =",
+            "Write a haiku about rain.",
+        ]
+        n_rollout = 2
+        
+        # Create ONE engine with max_batch_size covering all tests (2, 3a, 3b)
+        max_bs = max(len(batch_prompts_text), n_rollout, 1)
+        engine = HybridLLMEngine(model, config, str(model_device), 
+                                  temperature=0, max_batch_size=max_bs)
+        
+        # --- Test 2: Single prompt generation ---
         messages = [{"role": "user", "content": args.prompt}]
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        #input_ids = tokenizer.encode(text)
         input_ids = tokenizer.encode(args.prompt)
         
         if is_main:
@@ -2578,33 +2590,18 @@ if __name__ == "__main__":
             print(f"Output string: {full_output}")
             print(f"Response: {response}")
     
-    # Test 3: Batch-wise generation with HybridLLMEngine
+    # Test 3: Batch-wise generation (reusing same engine from Test 2)
     if args.test_engine:
         if is_main:
-            print("\n=== Test 3: Batch-wise Generation ===")
+            print("\n=== Test 3: Batch-wise Generation (reusing engine) ===")
         
-        config.eos_token_id = tokenizer.eos_token_id
-        
-        # Multiple different prompts
-        batch_prompts_text = [
-            "What is 2+2?",
-            "What is the capital of France?",
-            "Solve: 3 * 7 =",
-            "Write a haiku about rain.",
-        ]
         batch_size = len(batch_prompts_text)
-        
-        # Also test n_rollout style: same prompt repeated
-        n_rollout = 2
         rollout_prompt_text = "What is 5+3?"
         
-        # Create ONE engine with max_batch_size covering both tests
-        # This avoids reallocating GPU memory cache between tests
-        max_bs = max(batch_size, n_rollout)
-        engine_batch = HybridLLMEngine(model, config, str(model_device), 
-                                        temperature=0, max_batch_size=max_bs)
-        
         # --- Test 3a: multiple different prompts (greedy) ---
+        engine.model_runner.temperature = 0
+        engine.model_runner.top_k = 0
+        
         if is_main:
             print(f"\n--- Test 3a: {batch_size} different prompts (greedy, reusing engine with max_batch_size={max_bs}) ---")
         
@@ -2615,11 +2612,11 @@ if __name__ == "__main__":
                 print(f"  Prompt {i}: '{text}' ({len(ids)} tokens)")
         
         # Reset cache before new batch
-        engine_batch.model_runner.cache_params.reset()
+        engine.model_runner.cache_params.reset()
         
         import time
         start = time.time()
-        batch_outputs = engine_batch.generate(batch_input_ids, max_tokens=128)
+        batch_outputs = engine.generate(batch_input_ids, max_tokens=128)
         elapsed = time.time() - start
         
         total_tokens = sum(len(o) for o in batch_outputs)
@@ -2632,8 +2629,8 @@ if __name__ == "__main__":
         
         # --- Test 3b: Rollout-style (same prompt, sampling) ---
         # Switch sampling parameters on the same engine (no reallocation)
-        engine_batch.model_runner.temperature = 0.7
-        engine_batch.model_runner.top_k = 50
+        engine.model_runner.temperature = 0.7
+        engine.model_runner.top_k = 50
         
         if is_main:
             print(f"\n--- Test 3b: Same prompt x{n_rollout} rollouts (temperature=0.7, top_k=50, reusing engine) ---")
@@ -2645,10 +2642,10 @@ if __name__ == "__main__":
             print(f"  Prompt: '{rollout_prompt_text}' ({len(rollout_ids)} tokens) x{n_rollout}")
         
         # Reset cache before new batch
-        engine_batch.model_runner.cache_params.reset()
+        engine.model_runner.cache_params.reset()
         
         start = time.time()
-        rollout_outputs = engine_batch.generate(rollout_batch, max_tokens=128)
+        rollout_outputs = engine.generate(rollout_batch, max_tokens=128)
         elapsed = time.time() - start
         
         total_tokens = sum(len(o) for o in rollout_outputs)
