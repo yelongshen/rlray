@@ -612,12 +612,13 @@ class Qwen3NextCacheParams:
     def reset(self):
         """Reset cache for new generation."""
         self.has_previous_state = False
-        for i, state in enumerate(self.recurrent_states):
-            if state is not None:
-                self.recurrent_states[i].zero_()
-        for i, state in enumerate(self.conv_states):
-            if state is not None:
-                self.conv_states[i].zero_()
+        with torch.inference_mode():
+            for i, state in enumerate(self.recurrent_states):
+                if state is not None:
+                    self.recurrent_states[i].zero_()
+            for i, state in enumerate(self.conv_states):
+                if state is not None:
+                    self.conv_states[i].zero_()
     
     def set_seq_position(self, position: int):
         """Mark that we have previous state after prefill."""
