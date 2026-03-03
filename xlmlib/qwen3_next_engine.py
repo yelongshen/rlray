@@ -747,18 +747,33 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             and seq_len == 1
         )
         
-        # Get conv/recurrent states from cache if exists
-        # Slice to actual batch_size: states are pre-allocated for max_batch_size,
-        # but we only use the first batch_size slots.
+        # Detect varlen prefill mode: packed sequences with cu_seqlens.
+        # FLA's chunk_gated_delta_rule supports cu_seqlens natively.
+        cu_seqlens = None
+        num_seqs = batch_size  # default: one state per batch element
+        is_varlen = False
+        
+        if (not use_precomputed_states and cache_params is not None 
+                and batch_size == 1 and FLA_AVAILABLE):
+            context = get_context()
+            if hasattr(context, 'is_prefill') and context.is_prefill:
+                cu_seqlens_q = getattr(context, 'cu_seqlens_q', None)
+                if cu_seqlens_q is not None and len(cu_seqlens_q) > 2:
+                    cu_seqlens = cu_seqlens_q.long()
+                    num_seqs = len(cu_seqlens) - 1
+                    is_varlen = True
+        
+        # Get conv/recurrent states from cache.
+        # Use num_seqs (not batch_size) to handle varlen where batch=1 but N sequences.
         conv_state = None
         recurrent_state = None
         if cache_params is not None and hasattr(cache_params, 'conv_states'):
             conv_state_buf = cache_params.conv_states[self.layer_idx]
             recurrent_state_buf = cache_params.recurrent_states[self.layer_idx]
             if conv_state_buf is not None:
-                conv_state = conv_state_buf[:batch_size]
+                conv_state = conv_state_buf[:num_seqs]
             if recurrent_state_buf is not None:
-                recurrent_state = recurrent_state_buf[:batch_size]
+                recurrent_state = recurrent_state_buf[:num_seqs]
         
         # Project hidden states
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)
@@ -777,28 +792,46 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [B, D, L]
         
         if use_precomputed_states and conv_state is not None:
-            # For single token generation, update conv state
+            # Decode: single token generation, update conv state
             state_len = conv_state.shape[-1]
             hidden_states_new = torch.cat([conv_state, mixed_qkv], dim=-1).to(self.conv1d.weight.dtype)
             if cache_params is not None:
-                # In-place update: write back to the correct batch slots
-                cache_params.conv_states[self.layer_idx][:batch_size].copy_(
+                cache_params.conv_states[self.layer_idx][:num_seqs].copy_(
                     hidden_states_new[:, :, -state_len:]
                 )
             out = F.conv1d(hidden_states_new, self.conv1d.weight, 
                           self.conv1d.bias, padding=0, groups=self.conv_dim)
             mixed_qkv = F.silu(out[:, :, -seq_len:]).to(hidden_states.dtype)
+        elif is_varlen:
+            # Varlen prefill: process each segment through conv1d independently
+            # to prevent cross-contamination across sequence boundaries.
+            conv_state_layer = cache_params.conv_states[self.layer_idx] if cache_params is not None else None
+            cu_list = cu_seqlens.tolist()
+            output_segments = []
+            for i in range(num_seqs):
+                start, end = cu_list[i], cu_list[i + 1]
+                seg = mixed_qkv[:, :, start:end]  # [1, D, seg_len]
+                seg_len = end - start
+                # Save conv state: last (K-1) tokens of pre-conv input for this seq
+                if conv_state_layer is not None:
+                    if seg_len >= self.conv_kernel_size - 1:
+                        conv_state_layer[i].copy_(seg[0, :, -(self.conv_kernel_size - 1):])
+                    else:
+                        conv_state_layer[i].zero_()
+                        conv_state_layer[i, :, -seg_len:].copy_(seg[0])
+                # Apply causal conv per-segment (conv1d has left-padding built in)
+                seg_out = F.silu(self.conv1d(seg)[:, :, :seg_len])
+                output_segments.append(seg_out)
+            mixed_qkv = torch.cat(output_segments, dim=-1)  # [1, D, total_L]
         else:
-            # Standard conv path (prefill)
+            # Standard single-seq prefill conv path
             if cache_params is not None and hasattr(cache_params, 'conv_states'):
-                # In-place update: save last (kernel_size - 1) tokens for decode conv state
                 if mixed_qkv.shape[-1] >= self.conv_kernel_size - 1:
-                    cache_params.conv_states[self.layer_idx][:batch_size].copy_(
+                    cache_params.conv_states[self.layer_idx][:num_seqs].copy_(
                         mixed_qkv[:, :, -(self.conv_kernel_size - 1):]
                     )
                 else:
-                    # Sequence shorter than kernel - pad with zeros on left
-                    cache_params.conv_states[self.layer_idx][:batch_size].copy_(
+                    cache_params.conv_states[self.layer_idx][:num_seqs].copy_(
                         F.pad(mixed_qkv, (self.conv_kernel_size - 1 - mixed_qkv.shape[-1], 0))
                     )
             mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
@@ -828,10 +861,8 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             key = key.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
         
         # Apply gated delta rule
-        # Use recurrent kernel for single-token decode (chunk kernel pads to chunk_size
-        # and the padding corrupts the recurrent state)
         if use_precomputed_states:
-            # Prefer FLA's fused Triton recurrent kernel, fallback to pure PyTorch
+            # Decode: recurrent kernel for single-token generation
             recurrent_fn = fla_recurrent_gated_delta_rule if FLA_AVAILABLE else torch_recurrent_gated_delta_rule
             core_attn_out, last_recurrent_state = recurrent_fn(
                 query, key, value,
@@ -840,7 +871,19 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
                 output_final_state=True,
                 use_qk_l2norm_in_kernel=True,
             )
+        elif is_varlen:
+            # Varlen prefill: pass cu_seqlens to FLA for native packed-sequence support.
+            # FLA handles per-sequence initial/final states with shape [N, H, K, V].
+            core_attn_out, last_recurrent_state = fla_chunk_gated_delta_rule(
+                query, key, value,
+                g=g, beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=cache_params is not None,
+                use_qk_l2norm_in_kernel=True,
+                cu_seqlens=cu_seqlens,
+            )
         else:
+            # Standard single-seq prefill (or PyTorch fallback)
             core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
                 query, key, value,
                 g=g, beta=beta,
@@ -849,9 +892,9 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
                 use_qk_l2norm_in_kernel=True,
             )
         
-        # Update cache: in-place copy to correct batch slots
+        # Update cache: write per-seq states back
         if cache_params is not None and hasattr(cache_params, 'recurrent_states'):
-            cache_params.recurrent_states[self.layer_idx][:batch_size].copy_(last_recurrent_state)
+            cache_params.recurrent_states[self.layer_idx][:num_seqs].copy_(last_recurrent_state)
         
         # Apply gated norm
         z_shape_og = z.shape
@@ -2282,27 +2325,27 @@ class HybridModelRunner:
 
     def run(self, seqs, is_prefill: bool):
         if is_prefill:
-            # Prefill each sequence individually because GatedDeltaNet (linear
-            # attention) can't handle packed varlen format.
-            # Each seq gets its own forward pass with correct linear attention slot.
-            # IMPORTANT: slot = seq_idx (position in batch), NOT seq.seq_id,
-            # because decode reads states in batch order (running queue order).
-            all_logits = []
-            for seq_idx, seq in enumerate(seqs):
-                # Swap slot 0 ↔ seq_idx so model writes to the correct position.
-                # During decode, running[i] reads state[i], so prefill must place
-                # seq i's state at slot i.
-                if seq_idx > 0:
-                    self._swap_linear_state(0, seq_idx)
-                
-                input_ids, positions = self.prepare_prefill([seq])
+            if FLA_AVAILABLE and len(seqs) > 1:
+                # Packed varlen prefill: all sequences in ONE forward pass.
+                # GatedDeltaNet reads cu_seqlens from context and handles:
+                #   - per-segment conv1d (no cross-contamination)
+                #   - FLA kernel with cu_seqlens (native packed support)
+                #   - per-seq state read/write to slots 0..N-1
+                input_ids, positions = self.prepare_prefill(seqs)
                 logits = self.run_model(input_ids, positions, True)
-                all_logits.append(logits.view(-1))  # [vocab]
-                
-                if seq_idx > 0:
-                    self._swap_linear_state(0, seq_idx)
-            
-            logits = torch.stack(all_logits, dim=0)  # [num_seqs, vocab]
+                # logits: [num_seqs, vocab] after squeeze(0)
+            else:
+                # Fallback: per-seq prefill loop (when FLA not available or single seq)
+                all_logits = []
+                for seq_idx, seq in enumerate(seqs):
+                    if seq_idx > 0:
+                        self._swap_linear_state(0, seq_idx)
+                    input_ids, positions = self.prepare_prefill([seq])
+                    logits = self.run_model(input_ids, positions, True)
+                    all_logits.append(logits.view(-1))  # [vocab]
+                    if seq_idx > 0:
+                        self._swap_linear_state(0, seq_idx)
+                logits = torch.stack(all_logits, dim=0)  # [num_seqs, vocab]
         else:
             input_ids, positions = self.prepare_decode(seqs)
             logits = self.run_model(input_ids, positions, is_prefill)
