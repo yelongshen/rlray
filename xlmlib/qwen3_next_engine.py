@@ -972,6 +972,8 @@ class Qwen3NextExpertsForEngine(nn.Module):
     
     def forward(self, hidden_states, top_k_indices, top_k_weights):
         """
+        Fused MoE forward: replaces 64-iteration Python loop with vectorized bmm.
+        
         Args:
             hidden_states: [num_tokens, hidden_size]
             top_k_indices: [num_tokens, top_k]
@@ -980,32 +982,64 @@ class Qwen3NextExpertsForEngine(nn.Module):
         tp_rank = get_tp_rank() if self.use_tp else 0
         tp_world_size = get_tp_world_size() if self.use_tp else 1
         
-        final_output = torch.zeros_like(hidden_states)
+        num_tokens = hidden_states.shape[0]
+        top_k = top_k_indices.shape[1]
         
-        # Process each expert
-        for expert_local_idx in range(self.experts_per_rank):
-            expert_global_idx = expert_local_idx + tp_rank * self.experts_per_rank
-            
-            # Find tokens routed to this expert
-            expert_mask = (top_k_indices == expert_global_idx)
-            if not expert_mask.any():
-                continue
-            
-            # Get positions where this expert is selected
-            token_indices, top_k_positions = torch.where(expert_mask)
-            
-            # Get input states and weights
-            expert_input = hidden_states[token_indices]
-            expert_weights = top_k_weights[token_indices, top_k_positions].unsqueeze(-1)
-            
-            # Forward through expert
-            gate, up = F.linear(expert_input, self.gate_up_proj[expert_local_idx]).chunk(2, dim=-1)
-            expert_output = self.act_fn(gate) * up
-            expert_output = F.linear(expert_output, self.down_proj[expert_local_idx])
-            
-            # Weight and accumulate
-            expert_output = expert_output * expert_weights
-            final_output.index_add_(0, token_indices, expert_output.to(final_output.dtype))
+        # Map global expert indices to local indices for this TP rank
+        if self.use_tp and tp_world_size > 1:
+            local_indices = top_k_indices - tp_rank * self.experts_per_rank
+            # Mask out experts not on this rank
+            valid_mask = (local_indices >= 0) & (local_indices < self.experts_per_rank)
+        else:
+            local_indices = top_k_indices
+            valid_mask = None
+        
+        # Flatten: each (token, expert_slot) pair becomes one computation
+        flat_local_indices = local_indices.view(-1)              # [N * top_k]
+        flat_weights = top_k_weights.view(-1, 1)                 # [N * top_k, 1]
+        
+        # Clamp indices to valid range for gathering (masked ones will be zeroed)
+        flat_local_indices_clamped = flat_local_indices.clamp(0, self.experts_per_rank - 1)
+        
+        # Expand hidden states: each token repeated top_k times
+        expanded_hidden = hidden_states.unsqueeze(1).expand(-1, top_k, -1).reshape(-1, hidden_states.shape[-1])
+        # expanded_hidden: [N * top_k, hidden_size]
+        
+        # Gather expert weights for each pair — ONE indexing op instead of 64 loop iterations
+        # gate_up_proj: [E, 2*I, H], down_proj: [E, H, I]
+        selected_gate_up = self.gate_up_proj[flat_local_indices_clamped]  # [N*K, 2*I, H]
+        selected_down = self.down_proj[flat_local_indices_clamped]        # [N*K, H, I]
+        
+        # Fused batched matmul: all expert computations in ONE kernel launch
+        # gate_up: [N*K, H] @ [N*K, H, 2*I]^T → [N*K, 2*I]
+        gate_up_out = torch.bmm(
+            expanded_hidden.unsqueeze(1),           # [N*K, 1, H]
+            selected_gate_up.transpose(1, 2)        # [N*K, H, 2*I] → [N*K, 2*I, H]^T ... wait
+        ).squeeze(1)  # → [N*K, 2*I]
+        
+        gate, up = gate_up_out.chunk(2, dim=-1)
+        expert_out = self.act_fn(gate) * up         # [N*K, I]
+        
+        # down_proj: [N*K, I] @ [N*K, I, H]^T → [N*K, H]
+        expert_out = torch.bmm(
+            expert_out.unsqueeze(1),                # [N*K, 1, I]
+            selected_down.transpose(1, 2)           # [N*K, H, I] → [N*K, I, H]^T
+        ).squeeze(1)  # → [N*K, H]
+        
+        # Apply routing weights
+        expert_out = expert_out * flat_weights
+        
+        # Zero out invalid experts (for TP)
+        if valid_mask is not None:
+            flat_valid = valid_mask.view(-1).unsqueeze(-1)  # [N*K, 1]
+            expert_out = expert_out * flat_valid.to(expert_out.dtype)
+        
+        # Scatter-add back to token positions
+        token_indices = torch.arange(num_tokens, device=hidden_states.device
+                                     ).unsqueeze(1).expand(-1, top_k).reshape(-1)
+        
+        final_output = torch.zeros_like(hidden_states)
+        final_output.index_add_(0, token_indices, expert_out.to(final_output.dtype))
         
         # All-reduce if using TP for experts
         if self.use_tp and tp_world_size > 1:
