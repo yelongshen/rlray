@@ -2291,7 +2291,8 @@ class HybridModelRunner:
                 # Prepare context and run for this single sequence
                 input_ids, positions = self.prepare_prefill([seq])
                 logits = self.run_model(input_ids, positions, True)
-                all_logits.append(logits)  # [vocab] after squeeze(0)
+                # run_model may return [1, vocab] or [vocab] — flatten to [vocab]
+                all_logits.append(logits.view(-1))
                 
                 # Swap back so slot 0 has seq 0's state again
                 if seq_idx > 0:
