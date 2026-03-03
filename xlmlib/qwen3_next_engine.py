@@ -2337,10 +2337,11 @@ class HybridLLMEngine:
     Works with any model that implements the allocate_cache() + forward(cache_params=) protocol.
     Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
     """
-    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64):
+    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64, prefill_one_by_one=True):
         # Increase NCCL timeout for batch prefill (many sequential forward passes)
         if 'NCCL_TIMEOUT' not in _os.environ:
             _os.environ['NCCL_TIMEOUT'] = '3600'  # 1 hour
+        self.prefill_one_by_one = prefill_one_by_one
         # Ensure imports work for both `from phi4 import ...` (needs xlmlib/ on path)
         # and `from xlmlib.fused_linear_cross_entropy import ...` (needs parent on path).
         # We register xlmlib as a namespace to avoid triggering __init__.py -> samba.
@@ -2367,6 +2368,15 @@ class HybridLLMEngine:
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
+        
+        if is_prefill and self.prefill_one_by_one and len(seqs) > 1:
+            # Process only 1 prefill per step to avoid NCCL timeout.
+            # Preempt the rest back to waiting for next step().
+            extra_seqs = seqs[1:]
+            seqs = seqs[:1]
+            for seq in extra_seqs:
+                self.scheduler.preempt(seq)
+        
         token_ids = self.model_runner.call("run", seqs, is_prefill)
         self.scheduler.postprocess(seqs, token_ids)
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
