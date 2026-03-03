@@ -2136,16 +2136,21 @@ class HybridModelRunner:
     def allocate_cache(self, model, llm_config, gpu_memory_utilization=0.85, max_batch_size=1):
         """Allocate cache by calling model.allocate_cache().
         
-        Uses torch.cuda.mem_get_info for accurate free memory on the current device.
+        Uses torch.cuda.mem_get_info for accurate free memory on the target device.
         The batch_size controls linear attention state allocation (conv + recurrent).
         """
-        free, total = torch.cuda.mem_get_info()
+        # Query free memory on the correct device (not the default device)
+        device_idx = self.device.index if self.device.index is not None else 0
+        free, total = torch.cuda.mem_get_info(device_idx)
         # Reserve some memory for activations and overhead
         usable_free = int(free * gpu_memory_utilization)
         
         if usable_free <= 0:
-            print(f"WARNING: No free GPU memory for cache allocation! free={free/1e9:.2f} GB")
+            print(f"WARNING: No free GPU memory for cache allocation on device {device_idx}! free={free/1e9:.2f} GB")
             usable_free = int(free * 0.5)  # Try with 50% of whatever is left
+        
+        print(f'[allocate_cache] device={device_idx}, free={free/1e9:.2f} GB, '
+              f'total={total/1e9:.2f} GB, usable={usable_free/1e9:.2f} GB', flush=True)
         
         cache = model.allocate_cache(
             batch_size=max_batch_size,  # Allocate linear attention states for full batch
