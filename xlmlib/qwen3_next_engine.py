@@ -2342,7 +2342,7 @@ class HybridLLMEngine:
     Works with any model that implements the allocate_cache() + forward(cache_params=) protocol.
     Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
     """
-    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64, prefill_one_by_one=True):
+    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64, prefill_one_by_one=False):
         # Increase NCCL timeout for batch prefill (many sequential forward passes)
         if 'NCCL_TIMEOUT' not in _os.environ:
             _os.environ['NCCL_TIMEOUT'] = '3600'  # 1 hour
