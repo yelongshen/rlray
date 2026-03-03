@@ -2577,4 +2577,82 @@ if __name__ == "__main__":
             print(f"Generated {new_tokens} tokens in {elapsed:.2f}s ({new_tokens/elapsed:.1f} tok/s)")
             print(f"Output string: {full_output}")
             print(f"Response: {response}")
+    
+    # Test 3: Batch-wise generation with HybridLLMEngine
+    if args.test_engine:
+        if is_main:
+            print("\n=== Test 3: Batch-wise Generation ===")
+        
+        config.eos_token_id = tokenizer.eos_token_id
+        
+        # Multiple different prompts
+        batch_prompts_text = [
+            "What is 2+2?",
+            "What is the capital of France?",
+            "Solve: 3 * 7 =",
+            "Write a haiku about rain.",
+        ]
+        batch_size = len(batch_prompts_text)
+        
+        # Also test n_rollout style: same prompt repeated
+        n_rollout = 2
+        rollout_prompt_text = "What is 5+3?"
+        
+        if is_main:
+            print(f"\n--- Test 3a: {batch_size} different prompts (greedy) ---")
+        
+        # Create engine with max_batch_size matching our batch
+        engine_batch = HybridLLMEngine(model, config, str(model_device), 
+                                        temperature=0, max_batch_size=batch_size)
+        
+        batch_input_ids = [tokenizer.encode(p) for p in batch_prompts_text]
+        
+        if is_main:
+            for i, (text, ids) in enumerate(zip(batch_prompts_text, batch_input_ids)):
+                print(f"  Prompt {i}: '{text}' ({len(ids)} tokens)")
+        
+        import time
+        start = time.time()
+        batch_outputs = engine_batch.generate(batch_input_ids, max_tokens=128)
+        elapsed = time.time() - start
+        
+        total_tokens = sum(len(o) for o in batch_outputs)
+        if is_main:
+            print(f"\n  Batch generation: {batch_size} prompts, {total_tokens} total tokens in {elapsed:.2f}s "
+                  f"({total_tokens/elapsed:.1f} tok/s)")
+            for i, output_ids in enumerate(batch_outputs):
+                response = tokenizer.decode(output_ids, skip_special_tokens=True)
+                print(f"  Output {i} ({len(output_ids)} tokens): {response[:150]}...")
+        
+        # Test 3b: Rollout-style (same prompt, multiple copies with sampling)
+        if is_main:
+            print(f"\n--- Test 3b: Same prompt x{n_rollout} rollouts (temperature=0.7, top_k=50) ---")
+        
+        engine_rollout = HybridLLMEngine(model, config, str(model_device), 
+                                          temperature=0.7, top_k=50, max_batch_size=n_rollout)
+        
+        rollout_ids = tokenizer.encode(rollout_prompt_text)
+        rollout_batch = [rollout_ids] * n_rollout
+        
+        if is_main:
+            print(f"  Prompt: '{rollout_prompt_text}' ({len(rollout_ids)} tokens) x{n_rollout}")
+        
+        start = time.time()
+        rollout_outputs = engine_rollout.generate(rollout_batch, max_tokens=128)
+        elapsed = time.time() - start
+        
+        total_tokens = sum(len(o) for o in rollout_outputs)
+        if is_main:
+            print(f"  Rollout generation: {n_rollout} copies, {total_tokens} total tokens in {elapsed:.2f}s "
+                  f"({total_tokens/elapsed:.1f} tok/s)")
+            for i, output_ids in enumerate(rollout_outputs):
+                response = tokenizer.decode(output_ids, skip_special_tokens=True)
+                print(f"  Rollout {i} ({len(output_ids)} tokens): {response[:150]}...")
+            
+            # Check diversity: with temperature>0, outputs should differ
+            if n_rollout >= 2:
+                same = rollout_outputs[0] == rollout_outputs[1]
+                print(f"  Rollout 0 == Rollout 1: {same} (expect False with temperature>0)")
+        
+        print("\nBatch-wise generation test: OK")
 
