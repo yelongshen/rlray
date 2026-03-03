@@ -2257,7 +2257,9 @@ class HybridModelRunner:
                 cache_params=self.cache_params,
             )
             logits = logits.squeeze(1)  # [N, vocab] 
-        return logits.squeeze(0) if is_prefill else logits
+        # Prefill: [1, num_logits, vocab] → [num_logits, vocab]
+        # Decode:  [N, vocab] (already correct)
+        return logits.squeeze(0)
 
     @torch.inference_mode()
     def _swap_linear_state(self, slot_a, slot_b):
