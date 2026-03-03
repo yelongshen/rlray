@@ -2275,30 +2275,24 @@ class HybridModelRunner:
                 cache.recurrent_states[i][slot_a].copy_(cache.recurrent_states[i][slot_b])
                 cache.recurrent_states[i][slot_b].copy_(tmp)
 
-    def run(self, seqs, is_prefill: bool):
+    def run(self, seqs, is_prefill: bool, prefill_slot: int = 0):
         if is_prefill:
-            # Prefill each sequence INDIVIDUALLY because GatedDeltaNet (linear
-            # attention) can't handle packed varlen format — it would see all
-            # sequences as one continuous sequence, causing cross-contamination.
-            # Full attention is fine since each seq gets its own paged KV blocks.
-            all_logits = []
-            for seq_idx, seq in enumerate(seqs):
-                # Swap slot 0 ↔ seq_idx so the model reads/writes the correct
-                # batch slot (model always uses batch_size=1 → slot 0 during prefill)
-                if seq_idx > 0:
-                    self._swap_linear_state(0, seq_idx)
-                
-                # Prepare context and run for this single sequence
-                input_ids, positions = self.prepare_prefill([seq])
-                logits = self.run_model(input_ids, positions, True)
-                # run_model may return [1, vocab] or [vocab] — flatten to [vocab]
-                all_logits.append(logits.view(-1))
-                
-                # Swap back so slot 0 has seq 0's state again
-                if seq_idx > 0:
-                    self._swap_linear_state(0, seq_idx)
+            # Process single prefill sequence (step() ensures only 1 seq at a time)
+            assert len(seqs) == 1, f"Expected 1 prefill seq, got {len(seqs)}"
+            seq = seqs[0]
+            # Swap linear attention state: model writes to slot 0, but this seq
+            # needs slot `prefill_slot` (its position in the running queue for decode)
+            slot = prefill_slot
+            if slot > 0:
+                self._swap_linear_state(0, slot)
             
-            logits = torch.stack(all_logits, dim=0)  # [num_seqs, vocab]
+            input_ids, positions = self.prepare_prefill([seq])
+            logits = self.run_model(input_ids, positions, True)
+            
+            if slot > 0:
+                self._swap_linear_state(0, slot)
+            
+            logits = logits.view(-1)  # [vocab]
         else:
             input_ids, positions = self.prepare_decode(seqs)
             logits = self.run_model(input_ids, positions, is_prefill)
@@ -2368,7 +2362,23 @@ class HybridLLMEngine:
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
-        token_ids = self.model_runner.call("run", seqs, is_prefill)
+        
+        if is_prefill and len(seqs) > 1:
+            # GatedDeltaNet requires per-sequence prefill (can't handle packed varlen).
+            # Process only 1 sequence per step to keep each step fast and avoid
+            # NCCL timeout. Preempt the rest back to waiting for next step().
+            extra_seqs = seqs[1:]
+            seqs = seqs[:1]
+            for seq in extra_seqs:
+                self.scheduler.preempt(seq)
+            # Pass the prefill slot: this seq's position in the running queue
+            # (it's the last one added, so its index = len(running) - 1)
+            prefill_slot = len(self.scheduler.running) - 1
+        
+        if is_prefill:
+            token_ids = self.model_runner.call("run", seqs, is_prefill, prefill_slot)
+        else:
+            token_ids = self.model_runner.call("run", seqs, is_prefill)
         self.scheduler.postprocess(seqs, token_ids)
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
         # Print decode progress every 50 tokens
