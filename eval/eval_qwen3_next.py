@@ -343,8 +343,14 @@ def main():
     parser.add_argument("--prompt_type", type=str, default="v17", help="Prompt template version")
     parser.add_argument("--max_problems", type=int, default=None, help="Max problems to evaluate (for testing)")
     parser.add_argument("--debug", action="store_true", help="Print detailed output")
+    parser.add_argument("--gpu_ids", type=str, default=None, help="GPU IDs to use (e.g. '0,1' or '2,3')")
     parser.add_argument("--output", type=str, default=None, help="Save results to JSON file")
     args = parser.parse_args()
+    
+    # Set visible GPUs before any CUDA operations
+    if args.gpu_ids is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
+        print(f"Using GPUs: {args.gpu_ids}")
     
     # Load model
     model, tokenizer, config = load_qwen3_next_for_engine(
