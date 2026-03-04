@@ -1009,10 +1009,23 @@ class Qwen3NextExpertsForEngine(nn.Module):
             )
         
         self.act_fn = nn.SiLU()
+        
+        # Pre-transposed weight caches (populated by prepare_pretransposed_weights)
+        self._w1_transposed = None  # [E, H, 2*I]
+        self._w2_transposed = None  # [E, I, H]
     
-    def forward(self, hidden_states, top_k_indices, top_k_weights):
+    def prepare_pretransposed_weights(self):
+        """Pre-transpose expert weights for the Triton kernel.
+        
+        Eliminates ~11 GB of memory copies per forward call (512 experts).
+        Call once after weight loading. Stores transposed copies as non-parameter
+        buffers (not saved in state_dict, not updated by optimizer).
         """
-        MoE forward with three strategies:
+        self._w1_transposed = self.gate_up_proj.data.transpose(1, 2).contiguous()
+        self._w2_transposed = self.down_proj.data.transpose(1, 2).contiguous()
+        mem_mb = (self._w1_transposed.numel() + self._w2_transposed.numel()) * self._w1_transposed.element_size() / 1e6
+        print(f'    [MoE] Pre-transposed weights: w1={self._w1_transposed.shape}, '
+              f'w2={self._w2_transposed.shape}, extra_mem={mem_mb:.1f} MB', flush=True)
         1. Triton fused kernel (preferred) — zero temp memory, 2 kernel launches
         2. bmm (small decode batches) — fast but gathers weights into temp memory
         3. Expert loop (fallback) — memory-safe for large prefill batches
@@ -1099,6 +1112,8 @@ class Qwen3NextExpertsForEngine(nn.Module):
             local_indices,
             top_k=top_k,
             num_experts=self.experts_per_rank,
+            w1_pre_transposed=self._w1_transposed,
+            w2_pre_transposed=self._w2_transposed,
         )
         
         # All-reduce across TP ranks (each rank computed its subset of experts)
@@ -1959,6 +1974,16 @@ def load_qwen3_next_for_engine(
     _copy_weights(hf_model, model, hf_config, use_tp=use_tp, target_device=device, target_dtype=torch_dtype)
     
     model.eval()
+    
+    # Pre-transpose MoE expert weights for Triton kernel (eliminates runtime copies)
+    if TRITON_MOE_AVAILABLE:
+        if is_main:
+            print("Pre-transposing MoE expert weights for Triton kernel...")
+        for layer in model.model.layers:
+            if hasattr(layer, 'mlp') and hasattr(layer.mlp, 'experts'):
+                layer.mlp.experts.prepare_pretransposed_weights()
+        if is_main:
+            print("Pre-transposed MoE weights ready.")
     
     # Create LLMEngine-compatible config
     # Use hf_config directly — it has all fields needed by both LLMEngine and Qwen3NextCacheParams
