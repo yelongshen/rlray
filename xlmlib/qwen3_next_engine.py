@@ -2913,11 +2913,12 @@ class HybridLLMEngine:
     Works with any model that implements the allocate_cache() + forward(cache_params=) protocol.
     Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
     """
-    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64, prefill_one_by_one=False):
+    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64, prefill_one_by_one=False, tokenizer=None):
         # Increase NCCL timeout for batch prefill (many sequential forward passes)
         if 'NCCL_TIMEOUT' not in _os.environ:
             _os.environ['NCCL_TIMEOUT'] = '3600'  # 1 hour
         self.prefill_one_by_one = prefill_one_by_one
+        self.tokenizer = tokenizer  # Optional: used for printing partial generations
         # Ensure imports work for both `from phi4 import ...` (needs xlmlib/ on path)
         # and `from xlmlib.fused_linear_cross_entropy import ...` (needs parent on path).
         # We register xlmlib as a namespace to avoid triggering __init__.py -> samba.
@@ -2970,6 +2971,14 @@ class HybridLLMEngine:
                       f'finished={len(outputs)}, '
                       f'sched={t_sched-t0:.4f}s, run={t_run-t_sched:.4f}s, post={t_post-t_run:.4f}s, '
                       f'step_total={t_post-t0:.4f}s', flush=True)
+            # Print partial generation every 300 steps for seq 0
+            if seq.num_completion_tokens % 300 == 0 and self.tokenizer is not None and get_tp_rank() == 0:
+                try:
+                    partial_text = self.tokenizer.decode(seq.completion_token_ids[-200:], skip_special_tokens=True)
+                    print(f'  [generation preview seq={seq.seq_id} step={seq.num_completion_tokens}] '
+                          f'...{partial_text[-300:]}', flush=True)
+                except:
+                    pass
         return outputs
 
     def generate(self, prompts: List[List[int]], max_tokens: int = 32768) -> List[List[int]]:
