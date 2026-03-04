@@ -1628,6 +1628,7 @@ class Qwen3NextModelForEngine(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         cache_params = None,
+        _profile_layers: bool = False,
     ) -> Tuple[torch.Tensor, List]:
         batch_size, seq_length = input_ids.shape[:2]
         
@@ -1643,24 +1644,98 @@ class Qwen3NextModelForEngine(nn.Module):
         next_cache = []
         num_layers = len(self.layers)
         tp_rank = get_tp_rank()
+        
+        # Per-layer profiling: uses CUDA events for accurate GPU timing
+        if _profile_layers:
+            events_start = [torch.cuda.Event(enable_timing=True) for _ in range(num_layers)]
+            events_attn = [torch.cuda.Event(enable_timing=True) for _ in range(num_layers)]
+            events_end = [torch.cuda.Event(enable_timing=True) for _ in range(num_layers)]
+        
         for layer_idx, layer in enumerate(self.layers):
             if _tp_debug_enabled and (layer_idx % 4 == 0 or layer_idx == num_layers - 1):
                 torch.cuda.synchronize()
                 print(f'    [backbone rank={tp_rank}] layer {layer_idx}/{num_layers} '
                       f'type={layer.layer_type} hidden={hidden_states.shape}', flush=True)
-            hidden_states, k_cache, v_cache = layer(
-                hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                cos=cos,
-                sin=sin,
-                cache_params=cache_params,
-            )
-            next_cache.append((k_cache, v_cache))
+            
+            if _profile_layers:
+                events_start[layer_idx].record()
+                # --- Attention ---
+                residual = hidden_states
+                hidden_states_ln = layer.input_layernorm(hidden_states)
+                if layer.layer_type == "linear_attention" and layer.linear_attn is not None:
+                    hidden_states_attn = layer.linear_attn(
+                        hidden_states_ln, attention_mask=attention_mask, cache_params=cache_params,
+                    )
+                    k_cache, v_cache = None, None
+                else:
+                    hidden_states_attn, k_cache, v_cache = layer.self_attn(
+                        hidden_states_ln, attention_mask=attention_mask,
+                        position_ids=position_ids, cos=cos, sin=sin, cache_params=cache_params,
+                    )
+                hidden_states = residual + hidden_states_attn
+                events_attn[layer_idx].record()
+                # --- MLP/MoE ---
+                residual = hidden_states
+                hidden_states = layer.post_attention_layernorm(hidden_states)
+                hidden_states = layer.mlp(hidden_states)
+                hidden_states = residual + hidden_states
+                events_end[layer_idx].record()
+                next_cache.append((k_cache, v_cache))
+            else:
+                hidden_states, k_cache, v_cache = layer(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    cos=cos,
+                    sin=sin,
+                    cache_params=cache_params,
+                )
+                next_cache.append((k_cache, v_cache))
         
         if _tp_debug_enabled:
             torch.cuda.synchronize()
             print(f'    [backbone rank={tp_rank}] all {num_layers} layers done', flush=True)
+        
+        if _profile_layers:
+            torch.cuda.synchronize()
+            layer_types = getattr(self.config, 'layer_types', ['full_attention'] * num_layers)
+            attn_times = []
+            mlp_times = []
+            total_times = []
+            for i in range(num_layers):
+                attn_ms = events_start[i].elapsed_time(events_attn[i])
+                mlp_ms = events_attn[i].elapsed_time(events_end[i])
+                total_ms = events_start[i].elapsed_time(events_end[i])
+                lt = layer_types[i] if i < len(layer_types) else "full_attention"
+                attn_times.append((i, lt, attn_ms))
+                mlp_times.append((i, lt, mlp_ms))
+                total_times.append((i, lt, total_ms))
+            
+            # Summary
+            linear_attn_total = sum(t for _, lt, t in attn_times if lt == "linear_attention")
+            full_attn_total = sum(t for _, lt, t in attn_times if lt == "full_attention")
+            moe_total = sum(t for i, lt, t in mlp_times if hasattr(self.layers[i], 'is_moe') and self.layers[i].is_moe)
+            dense_mlp_total = sum(t for i, lt, t in mlp_times if not (hasattr(self.layers[i], 'is_moe') and self.layers[i].is_moe))
+            all_total = sum(t for _, _, t in total_times)
+            
+            print(f'\n  === LAYER PROFILING (rank={tp_rank}, batch={batch_size}, seq_len={seq_length}) ===', flush=True)
+            print(f'  {"Layer":>6} {"Type":>17} {"Attn(ms)":>10} {"MLP(ms)":>10} {"Total(ms)":>10}', flush=True)
+            print(f'  {"-"*57}', flush=True)
+            for i in range(num_layers):
+                _, lt, attn_ms = attn_times[i]
+                _, _, mlp_ms = mlp_times[i]
+                _, _, tot_ms = total_times[i]
+                is_moe = hasattr(self.layers[i], 'is_moe') and self.layers[i].is_moe
+                mlp_label = "MoE" if is_moe else "MLP"
+                print(f'  {i:>6} {lt:>17} {attn_ms:>10.2f} {mlp_ms:>10.2f} {tot_ms:>10.2f}  {mlp_label}', flush=True)
+            print(f'  {"-"*57}', flush=True)
+            print(f'  GatedDeltaNet (36 layers): {linear_attn_total:>8.1f} ms', flush=True)
+            print(f'  Full Attention (12 layers): {full_attn_total:>7.1f} ms', flush=True)
+            print(f'  MoE MLP:                   {moe_total:>8.1f} ms', flush=True)
+            print(f'  Dense MLP:                 {dense_mlp_total:>8.1f} ms', flush=True)
+            print(f'  All layers total:          {all_total:>8.1f} ms', flush=True)
+            print(f'  ===================================================\n', flush=True)
+        
         hidden_states = self.norm(hidden_states)
         return hidden_states, next_cache
 
@@ -1727,6 +1802,7 @@ class Qwen3NextForLLMEngine(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         logits_to_keep: Optional[torch.Tensor] = None,
         cache_params = None,
+        _profile_layers: bool = False,
     ) -> Tuple[torch.Tensor, List]:
         """
         Forward pass compatible with LLMEngine.
@@ -1742,6 +1818,7 @@ class Qwen3NextForLLMEngine(nn.Module):
             position_ids=position_ids,
             attention_mask=attention_mask,
             cache_params=cache_params,
+            _profile_layers=_profile_layers,
         )
         
         # Handle logits_to_keep for efficient prefill
@@ -2351,6 +2428,8 @@ class HybridModelRunner:
         self.graph_static_inputs = {}  # batch_size -> static input buffers
         self.graph_static_outputs = {} # batch_size -> static output buffer
         self._decode_warmup_done = False
+        self._decode_step_counter = 0
+        self._profile_done = False
 
     def call(self, method_name, *args):
         method = getattr(self, method_name, None)
@@ -2521,6 +2600,11 @@ class HybridModelRunner:
                   f'time={t1-t0:.3f}s, tp_collectives={_tp_collective_counter}', flush=True)
         else:
             num_seqs = input_ids.shape[0]
+            self._decode_step_counter += 1
+            
+            # Profile on decode step 10 (after warmup, before too long)
+            do_profile = (self._decode_step_counter == 10 and not self._profile_done
+                          and get_tp_rank() == 0)
             
             # Try CUDA graph replay for decode
             if self.use_cuda_graph and num_seqs in self.cuda_graphs:
@@ -2531,8 +2615,12 @@ class HybridModelRunner:
                     input_ids=input_ids.unsqueeze(1),
                     position_ids=positions.unsqueeze(1),
                     cache_params=self.cache_params,
+                    _profile_layers=do_profile,
                 )
                 logits = logits.squeeze(1)
+                
+                if do_profile:
+                    self._profile_done = True
                 
                 # After first eager decode, try to capture graph for this batch size
                 if not self._decode_warmup_done and num_seqs > 1:
