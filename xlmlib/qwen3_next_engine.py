@@ -972,7 +972,8 @@ class Qwen3NextExpertsForEngine(nn.Module):
     
     def forward(self, hidden_states, top_k_indices, top_k_weights):
         """
-        Fused MoE forward: replaces 64-iteration Python loop with vectorized bmm.
+        Fused MoE forward: uses vectorized bmm for small batches (decode),
+        falls back to expert-by-expert loop for large batches (prefill) to avoid OOM.
         
         Args:
             hidden_states: [num_tokens, hidden_size]
@@ -984,6 +985,49 @@ class Qwen3NextExpertsForEngine(nn.Module):
         
         num_tokens = hidden_states.shape[0]
         top_k = top_k_indices.shape[1]
+        
+        # Use fused bmm for small batches (decode), loop for large (prefill avoids OOM)
+        # Threshold: N*top_k * 2*intermediate * hidden * 2bytes must fit in memory
+        # For decode: 30*8=240 pairs → ~3MB per gather → fine
+        # For prefill: 4000*8=32000 pairs → ~157GB per gather → OOM
+        use_fused = (num_tokens * top_k <= 1024)
+        
+        if use_fused:
+            return self._forward_fused(hidden_states, top_k_indices, top_k_weights,
+                                       tp_rank, tp_world_size, num_tokens, top_k)
+        else:
+            return self._forward_loop(hidden_states, top_k_indices, top_k_weights,
+                                      tp_rank, tp_world_size)
+    
+    def _forward_loop(self, hidden_states, top_k_indices, top_k_weights, tp_rank, tp_world_size):
+        """Expert-by-expert loop (memory-efficient for large batches like prefill)."""
+        final_output = torch.zeros_like(hidden_states)
+        
+        for expert_local_idx in range(self.experts_per_rank):
+            expert_global_idx = expert_local_idx + tp_rank * self.experts_per_rank
+            
+            expert_mask = (top_k_indices == expert_global_idx)
+            if not expert_mask.any():
+                continue
+            
+            token_indices, top_k_positions = torch.where(expert_mask)
+            expert_input = hidden_states[token_indices]
+            expert_weights = top_k_weights[token_indices, top_k_positions].unsqueeze(-1)
+            
+            gate, up = F.linear(expert_input, self.gate_up_proj[expert_local_idx]).chunk(2, dim=-1)
+            expert_output = self.act_fn(gate) * up
+            expert_output = F.linear(expert_output, self.down_proj[expert_local_idx])
+            
+            expert_output = expert_output * expert_weights
+            final_output.index_add_(0, token_indices, expert_output.to(final_output.dtype))
+        
+        if self.use_tp and tp_world_size > 1:
+            final_output = reduce_from_tp(final_output)
+        return final_output
+    
+    def _forward_fused(self, hidden_states, top_k_indices, top_k_weights,
+                       tp_rank, tp_world_size, num_tokens, top_k):
+        """Fused bmm approach (fast for small batches like decode)."""
         
         # Map global expert indices to local indices for this TP rank
         if self.use_tp and tp_world_size > 1:
