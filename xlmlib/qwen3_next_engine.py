@@ -1012,24 +1012,38 @@ class Qwen3NextExpertsForEngine(nn.Module):
         
         # Flag: whether weights are stored in transposed layout for Triton
         self._weights_transposed = False
+        # Pre-allocated intermediate buffers for Triton kernel (set by prepare_buffers)
+        self._intermediate_cache = None  # [max_N*K, 2*I]
+        self._output_cache = None        # [max_N*K, H]
     
-    def prepare_pretransposed_weights(self):
-        """Transpose expert weights IN-PLACE for the Triton kernel.
+    def prepare_pretransposed_weights(self, max_batch_size: int = 64):
+        """Transpose expert weights IN-PLACE and pre-allocate intermediate buffers.
         
         Changes weight layout from [E, 2I, H] / [E, H, I] (original HF)
         to [E, H, 2I] / [E, I, H] (what Triton kernel expects).
         
-        Zero extra memory — replaces the original parameters.
-        The loop/bmm fallback paths will transpose back on the fly if needed.
+        Also pre-allocates intermediate buffers to avoid torch.zeros per call.
         """
         new_gate_up = self.gate_up_proj.data.transpose(1, 2).contiguous()
         new_down = self.down_proj.data.transpose(1, 2).contiguous()
         self.gate_up_proj = nn.Parameter(new_gate_up, requires_grad=False)
         self.down_proj = nn.Parameter(new_down, requires_grad=False)
         self._weights_transposed = True
-        mem_mb = (new_gate_up.numel() + new_down.numel()) * new_gate_up.element_size() / 1e6
-        print(f'    [MoE] Weights transposed in-place: gate_up={new_gate_up.shape}, '
-              f'down={new_down.shape}, mem={mem_mb:.1f} MB', flush=True)
+        
+        # Pre-allocate intermediate buffers for Triton MoE
+        # max_flat = max_batch_size * top_k
+        top_k = getattr(self, '_top_k', 8)  # fallback
+        max_flat = max_batch_size * top_k
+        two_intermediate = new_gate_up.shape[2]  # 2*I (transposed layout)
+        self._intermediate_cache = torch.zeros(
+            max_flat, two_intermediate, dtype=torch.bfloat16, device=new_gate_up.device)
+        self._output_cache = torch.zeros(
+            max_flat, self.hidden_size, dtype=torch.bfloat16, device=new_gate_up.device)
+        
+        buf_mb = (self._intermediate_cache.numel() + self._output_cache.numel()) * 2 / 1e6
+        print(f'    [MoE] Weights transposed + buffers allocated: '
+              f'gate_up={new_gate_up.shape}, down={new_down.shape}, '
+              f'buf={buf_mb:.1f} MB (max_batch={max_batch_size})', flush=True)
     
     def forward(self, hidden_states, top_k_indices, top_k_weights):
         """
@@ -1124,21 +1138,23 @@ class Qwen3NextExpertsForEngine(nn.Module):
             # Weights already in Triton layout: gate_up=[E, H, 2I], down=[E, I, H]
             output = triton_fused_moe(
                 hidden_states,
-                self.gate_up_proj,   # [E, H, 2*I] (transposed layout)
-                self.down_proj,      # [E, I, H] (transposed layout)
+                self.gate_up_proj,
+                self.down_proj,
                 local_weights,
                 local_indices,
                 top_k=top_k,
                 num_experts=self.experts_per_rank,
                 w1_pre_transposed=self.gate_up_proj.data,
                 w2_pre_transposed=self.down_proj.data,
+                intermediate_cache=self._intermediate_cache,
+                output_cache=self._output_cache,
             )
         else:
             # Original layout — fused_moe will transpose internally
             output = triton_fused_moe(
                 hidden_states,
-                self.gate_up_proj,   # [E, 2*I, H]
-                self.down_proj,      # [E, H, I]
+                self.gate_up_proj,
+                self.down_proj,
                 local_weights,
                 local_indices,
                 top_k=top_k,
@@ -2017,12 +2033,16 @@ def load_qwen3_next_for_engine(
     model.eval()
     
     # Pre-transpose MoE expert weights for Triton kernel (eliminates runtime copies)
+    # Also pre-allocate intermediate buffers to avoid malloc per forward call
     if TRITON_MOE_AVAILABLE:
+        # Use a reasonable default max_batch_size for buffer pre-allocation
+        # (will be overridden if HybridLLMEngine is created with different size)
+        default_max_batch = 64
         if is_main:
-            print("Pre-transposing MoE expert weights for Triton kernel...")
+            print(f"Pre-transposing MoE expert weights + allocating buffers (max_batch={default_max_batch})...")
         for layer in model.model.layers:
             if hasattr(layer, 'mlp') and hasattr(layer.mlp, 'experts'):
-                layer.mlp.experts.prepare_pretransposed_weights()
+                layer.mlp.experts.prepare_pretransposed_weights(max_batch_size=default_max_batch)
         if is_main:
             print("Pre-transposed MoE weights ready.")
     

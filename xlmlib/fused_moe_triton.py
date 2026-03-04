@@ -92,7 +92,8 @@ def fused_moe_kernel(
 def moe_align_block_size(topk_ids, block_size, num_experts):
     """Sort tokens by expert and pad to block_size alignment.
     
-    Fully vectorized on GPU — no Python loops or .item() calls.
+    Fully vectorized on GPU — no Python loops or .item() calls
+    (except the final total_padded which is needed for grid sizing).
     """
     flat_ids = topk_ids.view(-1).long()
     num_flat = flat_ids.shape[0]
@@ -112,42 +113,28 @@ def moe_align_block_size(topk_ids, block_size, num_experts):
     total_padded = expert_offsets[-1].item()
     
     # --- Vectorized sorted_token_ids construction ---
-    # For each flat index i, compute its write position:
-    #   write_pos = expert_offsets[flat_ids[i]] + rank_within_expert[i]
-    # where rank_within_expert[i] = how many tokens with the same expert appear before i.
+    sorted_order = flat_ids.argsort(stable=True)
     
-    # Sort flat indices by expert to group them
-    sorted_order = flat_ids.argsort(stable=True)  # indices that sort by expert
-    
-    # Compute rank within each expert group
-    # After sorting: expert_of_sorted = flat_ids[sorted_order]
-    # The rank within group = position - first_position_of_this_expert
-    # We can compute this using the expert offsets (before padding)
     expert_start_in_sorted = torch.zeros(num_experts + 1, dtype=torch.int64, device=device)
     expert_start_in_sorted[1:] = expert_counts.long().cumsum(0)
     
-    # For each position in sorted order, its rank = pos - expert_start_in_sorted[expert]
     pos_in_sorted = torch.arange(num_flat, dtype=torch.int64, device=device)
     expert_of_sorted = flat_ids[sorted_order]
     rank_in_expert = pos_in_sorted - expert_start_in_sorted[expert_of_sorted]
     
-    # Write position = expert_offsets[expert] + rank_in_expert (padded offsets)
     write_positions = expert_offsets[expert_of_sorted].long() + rank_in_expert
     
-    # Build sorted_token_ids
     sorted_token_ids = torch.full((total_padded,), num_flat, dtype=torch.int32, device=device)
     sorted_token_ids[write_positions] = sorted_order.int()
     
-    # --- Vectorized expert_ids construction ---
+    # --- Vectorized expert_ids construction (no Python loop) ---
     num_blocks = total_padded // block_size
-    expert_ids = torch.empty(num_blocks, dtype=torch.int32, device=device)
-    # Each expert e owns blocks from expert_offsets[e]//block_size to expert_offsets[e+1]//block_size
-    block_offsets = expert_offsets // block_size  # [num_experts+1]
-    for e in range(num_experts):
-        bs = block_offsets[e].item()
-        be = block_offsets[e + 1].item()
-        if be > bs:
-            expert_ids[bs:be] = e
+    # Create expert_ids by expanding each expert's block range
+    block_offsets = (expert_offsets // block_size).long()  # [num_experts+1]
+    # For each block, find which expert it belongs to via searchsorted
+    block_indices = torch.arange(num_blocks, dtype=torch.int64, device=device)
+    # searchsorted finds the rightmost expert_offset <= block_index
+    expert_ids = torch.searchsorted(block_offsets[1:], block_indices, right=True).int()
     
     num_tokens_post_padded = torch.tensor([total_padded], dtype=torch.int32, device=device)
     return sorted_token_ids, expert_ids, num_tokens_post_padded
@@ -155,14 +142,17 @@ def moe_align_block_size(topk_ids, block_size, num_experts):
 
 def fused_moe(hidden_states, gate_up_proj, down_proj, topk_weights, topk_ids,
               top_k, num_experts=-1, activation="silu",
-              w1_pre_transposed=None, w2_pre_transposed=None):
+              w1_pre_transposed=None, w2_pre_transposed=None,
+              intermediate_cache=None, output_cache=None):
     """Fused MoE forward: 2 Triton kernel launches + SiLU activation.
     
     Args:
-        gate_up_proj: [E, 2*I, H] (original) or [E, H, 2*I] (if pre-transposed)
-        down_proj: [E, H, I] (original) or [E, I, H] (if pre-transposed)
+        gate_up_proj: [E, 2*I, H] (original) or unused if w1_pre_transposed given
+        down_proj: [E, H, I] (original) or unused if w2_pre_transposed given 
         w1_pre_transposed: [E, H, 2*I] — if provided, use directly (skip transpose)
         w2_pre_transposed: [E, I, H] — if provided, use directly (skip transpose)
+        intermediate_cache: Pre-allocated [N*K, 2*I] buffer (optional, avoids alloc)
+        output_cache: Pre-allocated [N*K, H] buffer (optional, avoids alloc)
     """
     # Ensure CUDA device is set correctly for Triton (required for multi-GPU)
     if hidden_states.is_cuda:
@@ -170,14 +160,11 @@ def fused_moe(hidden_states, gate_up_proj, down_proj, topk_weights, topk_ids,
     num_tokens = hidden_states.shape[0]
     hidden_size = hidden_states.shape[1]
     
-    # Derive dimensions from pre-transposed weights if available,
-    # otherwise from original layout
+    # Derive dimensions from pre-transposed weights if available
     if w1_pre_transposed is not None:
-        # w1_pre_transposed: [E, H, 2*I]
         E = w1_pre_transposed.shape[0]
         two_intermediate = w1_pre_transposed.shape[2]
     else:
-        # gate_up_proj: [E, 2*I, H]
         E = gate_up_proj.shape[0]
         two_intermediate = gate_up_proj.shape[1]
     intermediate_size = two_intermediate // 2
@@ -193,57 +180,64 @@ def fused_moe(hidden_states, gate_up_proj, down_proj, topk_weights, topk_ids,
     total_padded = num_tokens_post_padded.item()
     
     # --- Kernel 1: gate_up projection ---
-    # Input: hidden_states [N, H], Output: intermediate [N*K, 2*I]
-    intermediate_cache = torch.zeros(num_flat, two_intermediate,
-                                      dtype=hidden_states.dtype, device=hidden_states.device)
+    # Use pre-allocated buffer or allocate new one
+    if intermediate_cache is not None and intermediate_cache.shape[0] >= num_flat:
+        int_cache = intermediate_cache[:num_flat]
+        int_cache.zero_()
+    else:
+        int_cache = torch.zeros(num_flat, two_intermediate,
+                                dtype=hidden_states.dtype, device=hidden_states.device)
+    
     hidden_c = hidden_states.contiguous()
     
-    # Use pre-transposed weights if available (avoids ~5GB copy per call)
     if w1_pre_transposed is not None:
         w1 = w1_pre_transposed
     else:
-        w1 = gate_up_proj.transpose(1, 2).contiguous()  # [E, H, 2*I]
+        w1 = gate_up_proj.transpose(1, 2).contiguous()
     
     grid1 = (triton.cdiv(total_padded, BLOCK_SIZE_M) * triton.cdiv(two_intermediate, BLOCK_SIZE_N),)
     fused_moe_kernel[grid1](
-        hidden_c, w1, intermediate_cache,
+        hidden_c, w1, int_cache,
         topk_weights.view(-1), sorted_token_ids, expert_ids, num_tokens_post_padded,
         two_intermediate, hidden_size, num_flat,
         hidden_c.stride(0), hidden_c.stride(1),
         w1.stride(0), w1.stride(1), w1.stride(2),
-        intermediate_cache.stride(0), intermediate_cache.stride(1),
+        int_cache.stride(0), int_cache.stride(1),
         MUL_ROUTED_WEIGHT=False, top_k=top_k, A_DIVIDE_BY_TOPK=True,
         BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
     )
     
     # --- Activation ---
-    gate = intermediate_cache[:, :intermediate_size]
-    up = intermediate_cache[:, intermediate_size:]
+    gate = int_cache[:, :intermediate_size]
+    up = int_cache[:, intermediate_size:]
     activated = torch.nn.functional.silu(gate) * up  # [N*K, I]
     
     # --- Kernel 2: down projection ---
-    # Input: activated [N*K, I], Output: output_cache [N*K, H]
-    output_cache = torch.zeros(num_flat, hidden_size,
+    if output_cache is not None and output_cache.shape[0] >= num_flat:
+        out_cache = output_cache[:num_flat]
+        out_cache.zero_()
+    else:
+        out_cache = torch.zeros(num_flat, hidden_size,
                                 dtype=hidden_states.dtype, device=hidden_states.device)
+    
     activated_c = activated.contiguous()
     
-    # Use pre-transposed weights if available
     if w2_pre_transposed is not None:
         w2 = w2_pre_transposed
     else:
-        w2 = down_proj.transpose(1, 2).contiguous()  # [E, I, H]
+        w2 = down_proj.transpose(1, 2).contiguous()
     
     grid2 = (triton.cdiv(total_padded, BLOCK_SIZE_M) * triton.cdiv(hidden_size, BLOCK_SIZE_N),)
     fused_moe_kernel[grid2](
-        activated_c, w2, output_cache,
+        activated_c, w2, out_cache,
         topk_weights.view(-1), sorted_token_ids, expert_ids, num_tokens_post_padded,
         hidden_size, intermediate_size, num_flat,
         activated_c.stride(0), activated_c.stride(1),
         w2.stride(0), w2.stride(1), w2.stride(2),
-        output_cache.stride(0), output_cache.stride(1),
+        out_cache.stride(0), out_cache.stride(1),
         MUL_ROUTED_WEIGHT=True, top_k=top_k, A_DIVIDE_BY_TOPK=False,
         BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
     )
     
     # Reduce over top_k
-    return output_cache.view(num_tokens, top_k, hidden_size).sum(dim=1)
+    return out_cache.view(num_tokens, top_k, hidden_size).sum(dim=1)

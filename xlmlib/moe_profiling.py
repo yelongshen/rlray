@@ -119,6 +119,19 @@ def moe_forward_triton_pretrans(hidden_states, gate_up_proj, down_proj,
     )
 
 
+def moe_forward_triton_optimized(hidden_states, gate_up_proj, down_proj, 
+                                  top_k_indices, top_k_weights, top_k, num_experts,
+                                  w1_pre, w2_pre, int_cache, out_cache):
+    """Triton fused MoE: pre-transposed weights + pre-allocated buffers."""
+    return triton_fused_moe(
+        hidden_states, gate_up_proj, down_proj,
+        top_k_weights, top_k_indices,
+        top_k=top_k, num_experts=num_experts,
+        w1_pre_transposed=w1_pre, w2_pre_transposed=w2_pre,
+        intermediate_cache=int_cache, output_cache=out_cache,
+    )
+
+
 def benchmark_fn(fn, warmup=3, repeats=10, sync=True):
     """Benchmark a function with warmup and timing."""
     # Warmup
@@ -179,12 +192,17 @@ def run_profiling():
     w1_pre = gate_up_proj.transpose(1, 2).contiguous()  # [E, H, 2*I]
     w2_pre = down_proj.transpose(1, 2).contiguous()      # [E, I, H]
     
+    # Pre-allocate intermediate buffers for the largest batch
+    max_flat = max(batch_sizes) * top_k
+    int_cache = torch.zeros(max_flat, 2 * intermediate_size, dtype=dtype, device=device)
+    out_cache = torch.zeros(max_flat, hidden_size, dtype=dtype, device=device)
+    
     print(f"Expert weights: gate_up_proj={gate_up_proj.shape}, down_proj={down_proj.shape}")
     print(f"Pre-transposed: w1={w1_pre.shape}, w2={w2_pre.shape}")
     print(f"Weight memory: {(gate_up_proj.numel() + down_proj.numel()) * 2 / 1e6:.1f} MB")
-    print(f"Pre-trans extra: {(w1_pre.numel() + w2_pre.numel()) * 2 / 1e6:.1f} MB\n")
+    print(f"Pre-alloc bufs: int_cache={int_cache.shape}, out_cache={out_cache.shape}\n")
     
-    header = f"{'Batch':>6} | {'N*K':>6} | {'Loop (ms)':>10} | {'BMM (ms)':>10} | {'Triton (ms)':>12} | {'PreTrans (ms)':>13} | {'Speedup':>8} | {'Match':>5}"
+    header = f"{'Batch':>6} | {'N*K':>6} | {'Loop (ms)':>10} | {'BMM (ms)':>10} | {'Triton (ms)':>12} | {'PreTrans (ms)':>13} | {'Optimized (ms)':>14} | {'Speedup':>8} | {'Match':>5}"
     print(header)
     print("-" * len(header))
     
@@ -234,25 +252,36 @@ def run_profiling():
                 )
                 pretrans_str = f"{pretrans_result['mean_ms']:13.3f}"
                 
-                # Speedup: pre-trans vs original triton
-                speedup = triton_result['mean_ms'] / pretrans_result['mean_ms']
+                # ---- Triton Optimized (pre-trans + pre-alloc buffers) ----
+                optimized_result = benchmark_fn(
+                    lambda: moe_forward_triton_optimized(hidden_states, gate_up_proj, down_proj,
+                                                          top_k_indices, top_k_weights, top_k, num_experts,
+                                                          w1_pre, w2_pre, int_cache, out_cache),
+                    warmup=2, repeats=5
+                )
+                optimized_str = f"{optimized_result['mean_ms']:14.3f}"
+                
+                # Speedup: optimized vs original triton
+                speedup = triton_result['mean_ms'] / optimized_result['mean_ms']
                 speedup_str = f"{speedup:7.1f}x"
                 
                 # Check correctness vs loop
-                diff = (pretrans_result['output'] - loop_result['output']).abs().max().item()
+                diff = (optimized_result['output'] - loop_result['output']).abs().max().item()
                 match_str = f"{'✓' if diff < 0.1 else '✗'} {diff:.4f}"
             except Exception as e:
                 triton_str = f"{'ERR':>12}"
                 pretrans_str = f"{'ERR':>13}"
+                optimized_str = f"{'ERR':>14}"
                 speedup_str = f"{'N/A':>8}"
                 match_str = str(e)[:20]
         else:
             triton_str = f"{'N/A':>12}"
             pretrans_str = f"{'N/A':>13}"
+            optimized_str = f"{'N/A':>14}"
             speedup_str = f"{'N/A':>8}"
             match_str = "N/A"
         
-        print(f"{batch_size:>6} | {nk:>6} | {loop_result['mean_ms']:10.3f} | {bmm_str} | {triton_str} | {pretrans_str} | {speedup_str} | {match_str}")
+        print(f"{batch_size:>6} | {nk:>6} | {loop_result['mean_ms']:10.3f} | {bmm_str} | {triton_str} | {pretrans_str} | {optimized_str} | {speedup_str} | {match_str}")
     
     # Memory profiling for the largest batch
     print(f"\n{'='*80}")
