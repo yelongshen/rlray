@@ -1005,10 +1005,10 @@ class Qwen3NextExpertsForEngine(nn.Module):
         # 1. Triton fused kernel: no temp memory, works for all batch sizes
         # 2. bmm: fast for small batches, OOMs for large (weight gather)
         # 3. Loop: always works, slowest (64 Python iterations)
-        if TRITON_MOE_AVAILABLE and not (self.use_tp and tp_world_size > 1):
-            # Triton path: works for all sizes, no TP support yet
+        if TRITON_MOE_AVAILABLE:
+            # Triton path: works for all sizes, supports TP via index remapping
             return self._forward_triton(hidden_states, top_k_indices, top_k_weights,
-                                         num_tokens, top_k)
+                                         tp_rank, tp_world_size, num_tokens, top_k)
         elif num_tokens * top_k <= 1024:
             # bmm path: fast for decode, small temp memory
             return self._forward_fused(hidden_states, top_k_indices, top_k_weights,
@@ -1045,21 +1045,38 @@ class Qwen3NextExpertsForEngine(nn.Module):
         return final_output
     
     def _forward_triton(self, hidden_states, top_k_indices, top_k_weights,
-                        num_tokens, top_k):
+                        tp_rank, tp_world_size, num_tokens, top_k):
         """Triton fused MoE kernel: zero temp memory, 2 kernel launches.
         
         Works for all batch sizes (decode and prefill).
-        Currently only supports single-GPU (no TP expert sharding).
+        Supports TP via expert index remapping + all-reduce.
         """
+        if self.use_tp and tp_world_size > 1:
+            # Remap global expert indices to local: subtract rank offset
+            local_indices = top_k_indices - tp_rank * self.experts_per_rank
+            # Zero out weights for experts not on this rank
+            valid_mask = (local_indices >= 0) & (local_indices < self.experts_per_rank)
+            local_weights = top_k_weights * valid_mask.to(top_k_weights.dtype)
+            # Clamp to valid range (masked experts have weight=0 so output is zeroed)
+            local_indices = local_indices.clamp(0, self.experts_per_rank - 1)
+        else:
+            local_indices = top_k_indices
+            local_weights = top_k_weights
+        
         output = triton_fused_moe(
             hidden_states,
-            self.gate_up_proj,   # [E, 2*I, H]
-            self.down_proj,      # [E, H, I]
-            top_k_weights,
-            top_k_indices,
+            self.gate_up_proj,   # [experts_per_rank, 2*I, H]
+            self.down_proj,      # [experts_per_rank, H, I]
+            local_weights,
+            local_indices,
             top_k=top_k,
             num_experts=self.experts_per_rank,
         )
+        
+        # All-reduce across TP ranks (each rank computed its subset of experts)
+        if self.use_tp and tp_world_size > 1:
+            output = reduce_from_tp(output)
+        
         return output
     
     def _forward_fused(self, hidden_states, top_k_indices, top_k_weights,
