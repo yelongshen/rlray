@@ -2307,7 +2307,7 @@ class HybridModelRunner:
         self.max_batch_size = max_batch_size
         
         # Allocate hybrid cache (paged KV + linear attention states)
-        self.cache_params = self.allocate_cache(self.model, self.llm_config, 0.80, max_batch_size)
+        self.cache_params = self.allocate_cache(self.model, self.llm_config, 0.70, max_batch_size)
         self.num_kvcache_blocks = self.cache_params.num_kvcache_blocks
 
     def call(self, method_name, *args):
