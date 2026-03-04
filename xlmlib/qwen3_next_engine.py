@@ -2351,41 +2351,6 @@ class HybridModelRunner:
         self.graph_static_inputs = {}  # batch_size -> static input buffers
         self.graph_static_outputs = {} # batch_size -> static output buffer
         self._decode_warmup_done = False
-        
-        # Apply torch.compile to GatedDeltaNet layers for faster decode
-        self._apply_torch_compile()
-
-    def _apply_torch_compile(self):
-        """Apply torch.compile to GatedDeltaNet (linear attention) layers.
-        
-        Fuses the many small PyTorch ops in the decode path:
-        - Projections (in_proj_qkvz, in_proj_ba)
-        - Conv1d decode (cat + conv + silu)
-        - Beta/g computation (sigmoid, exp, softplus)
-        - Gated RMSNorm + output projection
-        
-        The FLA Triton kernel in the middle causes a graph break, so torch.compile
-        creates 2-3 fused kernel regions per layer instead of ~15+ separate launches.
-        For 36 linear attention layers, this saves ~400 kernel launches per decode step.
-        
-        Uses fullgraph=False to handle graph breaks at FLA kernels and cache mutations.
-        Uses mode="default" (not "reduce-overhead") to avoid internal CUDAGraph conflicts.
-        """
-        try:
-            compiled_count = 0
-            for layer in self.model.model.layers:
-                if hasattr(layer, 'linear_attn') and layer.linear_attn is not None:
-                    layer.linear_attn = torch.compile(
-                        layer.linear_attn,
-                        mode="default",
-                        fullgraph=False,
-                    )
-                    compiled_count += 1
-            if compiled_count > 0:
-                print(f'[torch.compile] Applied to {compiled_count} GatedDeltaNet layers', flush=True)
-        except Exception as e:
-            print(f'[torch.compile] Failed: {e}', flush=True)
-            print(f'[torch.compile] Falling back to eager mode', flush=True)
 
     def call(self, method_name, *args):
         method = getattr(self, method_name, None)
