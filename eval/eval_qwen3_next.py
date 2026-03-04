@@ -286,10 +286,19 @@ def evaluate(
                 results[pid] = []
             results[pid].append(reward)
             
-            if is_main and prob_idx < 3:
-                print(f"  Rollout {rollout}: reward={reward}, extracted='{extracted_answer}', len={len(output_ids)}")
-                if debug:
-                    print(f"  Response: {response[:300]}...")
+            # Print sample outputs for first 5 problems (all rollouts) + every 10th problem (rollout 0)
+            show_sample = is_main and (prob_idx < 5 or (prob_idx % 10 == 0 and rollout == 0))
+            if show_sample:
+                print(f"\n  [Problem {prob_idx} id={pid}] rollout={rollout}, reward={reward}, "
+                      f"gold='{problem['answer']}', extracted='{extracted_answer}', len={len(output_ids)}")
+                # Show first 500 chars and last 300 chars of response
+                if len(response) > 800:
+                    print(f"  Response (first 500): {response[:500]}")
+                    print(f"  Response (last 300):  ...{response[-300:]}")
+                else:
+                    print(f"  Response: {response}")
+            elif is_main and prob_idx < 10:
+                print(f"  [Problem {prob_idx}] r={rollout} reward={reward} extracted='{extracted_answer}' len={len(output_ids)}")
         
         # Progress
         batch_end = batch_start + len(batch_problems)
