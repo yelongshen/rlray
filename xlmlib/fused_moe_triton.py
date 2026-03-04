@@ -90,44 +90,66 @@ def fused_moe_kernel(
 
 
 def moe_align_block_size(topk_ids, block_size, num_experts):
-    """Sort tokens by expert and pad to block_size alignment."""
-    flat_ids = topk_ids.view(-1)
-    num_flat = flat_ids.shape[0]
+    """Sort tokens by expert and pad to block_size alignment.
     
-    # Count tokens per expert
-    expert_counts = torch.zeros(num_experts, dtype=torch.int32, device=topk_ids.device)
-    ones = torch.ones_like(flat_ids, dtype=torch.int32)
-    expert_counts.scatter_add_(0, flat_ids.long(), ones)
+    Fully vectorized on GPU — no Python loops or .item() calls.
+    """
+    flat_ids = topk_ids.view(-1).long()
+    num_flat = flat_ids.shape[0]
+    device = topk_ids.device
+    
+    # Count tokens per expert (vectorized)
+    expert_counts = torch.zeros(num_experts, dtype=torch.int32, device=device)
+    ones = torch.ones(num_flat, dtype=torch.int32, device=device)
+    expert_counts.scatter_add_(0, flat_ids, ones)
     
     # Pad to block_size
     padded_counts = ((expert_counts + block_size - 1) // block_size) * block_size
     
-    # Cumulative offsets
-    expert_offsets = torch.zeros(num_experts + 1, dtype=torch.int32, device=topk_ids.device)
+    # Cumulative offsets per expert
+    expert_offsets = torch.zeros(num_experts + 1, dtype=torch.int32, device=device)
     expert_offsets[1:] = padded_counts.cumsum(0)
     total_padded = expert_offsets[-1].item()
     
-    # Build sorted_token_ids (padded positions = num_flat = out of range)
-    sorted_token_ids = torch.full((total_padded,), num_flat, dtype=torch.int32, device=topk_ids.device)
-    expert_write_pos = expert_offsets[:-1].clone()
+    # --- Vectorized sorted_token_ids construction ---
+    # For each flat index i, compute its write position:
+    #   write_pos = expert_offsets[flat_ids[i]] + rank_within_expert[i]
+    # where rank_within_expert[i] = how many tokens with the same expert appear before i.
     
-    # Fill: for each flat index, place it in its expert's section
-    for i in range(num_flat):
-        e = flat_ids[i].item()
-        pos = expert_write_pos[e].item()
-        sorted_token_ids[pos] = i
-        expert_write_pos[e] += 1
+    # Sort flat indices by expert to group them
+    sorted_order = flat_ids.argsort(stable=True)  # indices that sort by expert
     
-    # Build expert_ids per block
+    # Compute rank within each expert group
+    # After sorting: expert_of_sorted = flat_ids[sorted_order]
+    # The rank within group = position - first_position_of_this_expert
+    # We can compute this using the expert offsets (before padding)
+    expert_start_in_sorted = torch.zeros(num_experts + 1, dtype=torch.int64, device=device)
+    expert_start_in_sorted[1:] = expert_counts.long().cumsum(0)
+    
+    # For each position in sorted order, its rank = pos - expert_start_in_sorted[expert]
+    pos_in_sorted = torch.arange(num_flat, dtype=torch.int64, device=device)
+    expert_of_sorted = flat_ids[sorted_order]
+    rank_in_expert = pos_in_sorted - expert_start_in_sorted[expert_of_sorted]
+    
+    # Write position = expert_offsets[expert] + rank_in_expert (padded offsets)
+    write_positions = expert_offsets[expert_of_sorted].long() + rank_in_expert
+    
+    # Build sorted_token_ids
+    sorted_token_ids = torch.full((total_padded,), num_flat, dtype=torch.int32, device=device)
+    sorted_token_ids[write_positions] = sorted_order.int()
+    
+    # --- Vectorized expert_ids construction ---
     num_blocks = total_padded // block_size
-    expert_ids = torch.empty(num_blocks, dtype=torch.int32, device=topk_ids.device)
+    expert_ids = torch.empty(num_blocks, dtype=torch.int32, device=device)
+    # Each expert e owns blocks from expert_offsets[e]//block_size to expert_offsets[e+1]//block_size
+    block_offsets = expert_offsets // block_size  # [num_experts+1]
     for e in range(num_experts):
-        bs = expert_offsets[e].item() // block_size
-        be = expert_offsets[e + 1].item() // block_size
+        bs = block_offsets[e].item()
+        be = block_offsets[e + 1].item()
         if be > bs:
             expert_ids[bs:be] = e
     
-    num_tokens_post_padded = torch.tensor([total_padded], dtype=torch.int32, device=topk_ids.device)
+    num_tokens_post_padded = torch.tensor([total_padded], dtype=torch.int32, device=device)
     return sorted_token_ids, expert_ids, num_tokens_post_padded
 
 
