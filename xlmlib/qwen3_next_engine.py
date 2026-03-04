@@ -2309,6 +2309,13 @@ class HybridModelRunner:
         # Allocate hybrid cache (paged KV + linear attention states)
         self.cache_params = self.allocate_cache(self.model, self.llm_config, 0.70, max_batch_size)
         self.num_kvcache_blocks = self.cache_params.num_kvcache_blocks
+        
+        # CUDA Graph support for decode
+        self.use_cuda_graph = False  # Will be enabled after first decode warmup
+        self.cuda_graphs = {}        # batch_size -> captured graph
+        self.graph_static_inputs = {}  # batch_size -> static input buffers
+        self.graph_static_outputs = {} # batch_size -> static output buffer
+        self._decode_warmup_done = False
 
     def call(self, method_name, *args):
         method = getattr(self, method_name, None)
@@ -2412,6 +2419,42 @@ class HybridModelRunner:
             context_lens.append(len(seq))
             slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1)
 
+        num_seqs = len(seqs)
+        
+        # For CUDA graph: use static context buffers if available
+        if self.use_cuda_graph and num_seqs in self.cuda_graphs:
+            key = num_seqs
+            if not hasattr(self, '_static_context'):
+                self._static_context = {}
+            if key not in self._static_context:
+                # Create static buffers for context
+                max_blocks = max(len(seq.block_table) for seq in seqs)
+                self._static_context[key] = {
+                    'slot_mapping': torch.zeros(num_seqs, dtype=torch.int32, device=self.device),
+                    'context_lens': torch.zeros(num_seqs, dtype=torch.int32, device=self.device),
+                    'block_tables': torch.zeros(num_seqs, max_blocks, dtype=torch.int32, device=self.device),
+                }
+            
+            ctx = self._static_context[key]
+            ctx['slot_mapping'].copy_(torch.tensor(slot_mapping, dtype=torch.int32))
+            ctx['context_lens'].copy_(torch.tensor(context_lens, dtype=torch.int32))
+            
+            # Update block tables (may need to resize if max_blocks changed)
+            max_blocks = max(len(seq.block_table) for seq in seqs)
+            if ctx['block_tables'].shape[1] < max_blocks:
+                ctx['block_tables'] = torch.zeros(num_seqs, max_blocks, dtype=torch.int32, device=self.device)
+            bt = self.prepare_block_tables(seqs)
+            ctx['block_tables'][:, :bt.shape[1]].copy_(bt)
+            
+            set_context(False, slot_mapping=ctx['slot_mapping'], 
+                       context_lens=ctx['context_lens'], 
+                       block_tables=ctx['block_tables'][:, :bt.shape[1]])
+            
+            input_ids_t = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
+            positions_t = torch.tensor(positions, dtype=torch.int64, device=self.device)
+            return input_ids_t, positions_t
+        
+        # Standard path (non-graph)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
@@ -2433,22 +2476,83 @@ class HybridModelRunner:
                 logits_to_keep=context.cu_seqlens_q[1:] - 1,
             )
             t1 = time.time()
-            # Mark that we have state for decode steps (GDN conv/recurrent)
             self.cache_params.has_previous_state = True
             print(f'  [run_model] prefill done: logits={logits.shape}, time={t1-t0:.3f}s', flush=True)
         else:
-            # Decode: input_ids is [N], reshape to [N, 1] so each sequence
-            # is a separate batch element (required for linear attention)
             num_seqs = input_ids.shape[0]
-            logits, _ = self.model(
-                input_ids=input_ids.unsqueeze(1),           # [N, 1]
-                position_ids=positions.unsqueeze(1),        # [N, 1]
-                cache_params=self.cache_params,
-            )
-            logits = logits.squeeze(1)  # [N, vocab] 
-        # Prefill: [1, num_logits, vocab] -> [num_logits, vocab]
-        # Decode:  [N, vocab] (already correct)
+            
+            # Try CUDA graph replay for decode
+            if self.use_cuda_graph and num_seqs in self.cuda_graphs:
+                logits = self._run_decode_graph(input_ids, positions, num_seqs)
+            else:
+                # Eager decode (also used for warmup before graph capture)
+                logits, _ = self.model(
+                    input_ids=input_ids.unsqueeze(1),
+                    position_ids=positions.unsqueeze(1),
+                    cache_params=self.cache_params,
+                )
+                logits = logits.squeeze(1)
+                
+                # After first eager decode, try to capture graph for this batch size
+                if not self._decode_warmup_done and num_seqs > 1:
+                    self._try_capture_decode_graph(num_seqs)
+                    self._decode_warmup_done = True
+        
         return logits.squeeze(0)
+    
+    def _try_capture_decode_graph(self, batch_size):
+        """Attempt to capture a CUDA graph for decode with the given batch size."""
+        try:
+            print(f'  [CUDA Graph] Attempting to capture graph for batch_size={batch_size}...', flush=True)
+            
+            # Create static input buffers (fixed addresses for graph)
+            static_input_ids = torch.zeros(batch_size, 1, dtype=torch.int64, device=self.device)
+            static_positions = torch.zeros(batch_size, 1, dtype=torch.int64, device=self.device)
+            
+            # Warmup run (required before capture)
+            torch.cuda.synchronize(self.device)
+            for _ in range(3):
+                static_logits, _ = self.model(
+                    input_ids=static_input_ids,
+                    position_ids=static_positions,
+                    cache_params=self.cache_params,
+                )
+            torch.cuda.synchronize(self.device)
+            
+            # Capture the graph
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph, stream=torch.cuda.current_stream(self.device)):
+                static_logits, _ = self.model(
+                    input_ids=static_input_ids,
+                    position_ids=static_positions,
+                    cache_params=self.cache_params,
+                )
+            
+            self.cuda_graphs[batch_size] = graph
+            self.graph_static_inputs[batch_size] = (static_input_ids, static_positions)
+            self.graph_static_outputs[batch_size] = static_logits
+            self.use_cuda_graph = True
+            
+            print(f'  [CUDA Graph] Successfully captured for batch_size={batch_size}', flush=True)
+            
+        except Exception as e:
+            print(f'  [CUDA Graph] Failed to capture for batch_size={batch_size}: {e}', flush=True)
+            print(f'  [CUDA Graph] Falling back to eager decode', flush=True)
+            self.use_cuda_graph = False
+    
+    def _run_decode_graph(self, input_ids, positions, batch_size):
+        """Replay captured CUDA graph for decode."""
+        static_input_ids, static_positions = self.graph_static_inputs[batch_size]
+        
+        # Copy new inputs into static buffers (graph captures these addresses)
+        static_input_ids.copy_(input_ids.unsqueeze(1))
+        static_positions.copy_(positions.unsqueeze(1))
+        
+        # Replay the graph
+        self.cuda_graphs[batch_size].replay()
+        
+        # Return output from static buffer
+        return self.graph_static_outputs[batch_size].squeeze(1).clone()
 
     @torch.inference_mode()
     def _swap_linear_state(self, slot_a, slot_b):
