@@ -1003,9 +1003,10 @@ class Qwen3NextExpertsForEngine(nn.Module):
         
         # Strategy selection:
         # 1. Triton fused kernel: 3.2x faster than loop, correct, works for all sizes
+        #    Note: disabled for TP>1 due to multi-GPU synchronization issues
         # 2. bmm: fast for small batches, OOMs for large (weight gather)
         # 3. Loop: always works, slowest (64 Python iterations)
-        if TRITON_MOE_AVAILABLE:
+        if TRITON_MOE_AVAILABLE and not (self.use_tp and tp_world_size > 1):
             # Triton path: DISABLED pending correctness fix
             return self._forward_triton(hidden_states, top_k_indices, top_k_weights,
                                          tp_rank, tp_world_size, num_tokens, top_k)
