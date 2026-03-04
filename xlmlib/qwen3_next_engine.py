@@ -2509,24 +2509,30 @@ class HybridModelRunner:
             static_input_ids = torch.zeros(batch_size, 1, dtype=torch.int64, device=self.device)
             static_positions = torch.zeros(batch_size, 1, dtype=torch.int64, device=self.device)
             
-            # Warmup run (required before capture)
+            # CUDA graphs must be captured on a non-default stream
+            capture_stream = torch.cuda.Stream(device=self.device)
+            
+            # Warmup runs on the capture stream (required before capture)
             torch.cuda.synchronize(self.device)
-            for _ in range(3):
-                static_logits, _ = self.model(
-                    input_ids=static_input_ids,
-                    position_ids=static_positions,
-                    cache_params=self.cache_params,
-                )
+            with torch.cuda.stream(capture_stream):
+                for _ in range(3):
+                    static_logits, _ = self.model(
+                        input_ids=static_input_ids,
+                        position_ids=static_positions,
+                        cache_params=self.cache_params,
+                    )
             torch.cuda.synchronize(self.device)
             
-            # Capture the graph
+            # Capture the graph on the non-default stream
             graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph, stream=torch.cuda.current_stream(self.device)):
-                static_logits, _ = self.model(
-                    input_ids=static_input_ids,
-                    position_ids=static_positions,
-                    cache_params=self.cache_params,
-                )
+            with torch.cuda.stream(capture_stream):
+                with torch.cuda.graph(graph, stream=capture_stream):
+                    static_logits, _ = self.model(
+                        input_ids=static_input_ids,
+                        position_ids=static_positions,
+                        cache_params=self.cache_params,
+                    )
+            torch.cuda.synchronize(self.device)
             
             self.cuda_graphs[batch_size] = graph
             self.graph_static_inputs[batch_size] = (static_input_ids, static_positions)
