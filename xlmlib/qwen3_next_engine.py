@@ -56,12 +56,15 @@ except ImportError:
 try:
     from fused_moe_triton import fused_moe as triton_fused_moe
     TRITON_MOE_AVAILABLE = True
+    print("Triton fused MoE kernel loaded successfully")
 except ImportError:
     try:
         from xlmlib.fused_moe_triton import fused_moe as triton_fused_moe
         TRITON_MOE_AVAILABLE = True
+        print("Triton fused MoE kernel loaded successfully (via xlmlib)")
     except ImportError:
         TRITON_MOE_AVAILABLE = False
+        print("Warning: Triton fused MoE kernel not available, using fallback")
 
 try:
     from context import set_context, get_context, reset_context
