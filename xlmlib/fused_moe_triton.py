@@ -154,8 +154,16 @@ def moe_align_block_size(topk_ids, block_size, num_experts):
 
 
 def fused_moe(hidden_states, gate_up_proj, down_proj, topk_weights, topk_ids,
-              top_k, num_experts=-1, activation="silu"):
-    """Fused MoE forward: 2 Triton kernel launches + SiLU activation."""
+              top_k, num_experts=-1, activation="silu",
+              w1_pre_transposed=None, w2_pre_transposed=None):
+    """Fused MoE forward: 2 Triton kernel launches + SiLU activation.
+    
+    Args:
+        gate_up_proj: [E, 2*I, H] — original weight layout
+        down_proj: [E, H, I] — original weight layout
+        w1_pre_transposed: [E, H, 2*I] — if provided, skip transpose+contiguous for kernel1
+        w2_pre_transposed: [E, I, H] — if provided, skip transpose+contiguous for kernel2
+    """
     # Ensure CUDA device is set correctly for Triton (required for multi-GPU)
     if hidden_states.is_cuda:
         torch.cuda.set_device(hidden_states.device)
@@ -179,7 +187,12 @@ def fused_moe(hidden_states, gate_up_proj, down_proj, topk_weights, topk_ids,
     intermediate_cache = torch.zeros(num_flat, two_intermediate,
                                       dtype=hidden_states.dtype, device=hidden_states.device)
     hidden_c = hidden_states.contiguous()
-    w1 = gate_up_proj.transpose(1, 2).contiguous()  # [E, H, 2*I]
+    
+    # Use pre-transposed weights if available (avoids ~5GB copy per call)
+    if w1_pre_transposed is not None:
+        w1 = w1_pre_transposed
+    else:
+        w1 = gate_up_proj.transpose(1, 2).contiguous()  # [E, H, 2*I]
     
     grid1 = (triton.cdiv(total_padded, BLOCK_SIZE_M) * triton.cdiv(two_intermediate, BLOCK_SIZE_N),)
     fused_moe_kernel[grid1](
@@ -203,7 +216,12 @@ def fused_moe(hidden_states, gate_up_proj, down_proj, topk_weights, topk_ids,
     output_cache = torch.zeros(num_flat, hidden_size,
                                 dtype=hidden_states.dtype, device=hidden_states.device)
     activated_c = activated.contiguous()
-    w2 = down_proj.transpose(1, 2).contiguous()  # [E, I, H]
+    
+    # Use pre-transposed weights if available
+    if w2_pre_transposed is not None:
+        w2 = w2_pre_transposed
+    else:
+        w2 = down_proj.transpose(1, 2).contiguous()  # [E, I, H]
     
     grid2 = (triton.cdiv(total_padded, BLOCK_SIZE_M) * triton.cdiv(hidden_size, BLOCK_SIZE_N),)
     fused_moe_kernel[grid2](

@@ -99,11 +99,23 @@ def moe_forward_bmm(hidden_states, gate_up_proj, down_proj, top_k_indices, top_k
 
 
 def moe_forward_triton(hidden_states, gate_up_proj, down_proj, top_k_indices, top_k_weights, top_k, num_experts):
-    """Triton fused MoE."""
+    """Triton fused MoE (original: transposes weights every call)."""
     return triton_fused_moe(
         hidden_states, gate_up_proj, down_proj,
         top_k_weights, top_k_indices,
         top_k=top_k, num_experts=num_experts,
+    )
+
+
+def moe_forward_triton_pretrans(hidden_states, gate_up_proj, down_proj, 
+                                 top_k_indices, top_k_weights, top_k, num_experts,
+                                 w1_pre, w2_pre):
+    """Triton fused MoE with pre-transposed weights (no runtime transpose)."""
+    return triton_fused_moe(
+        hidden_states, gate_up_proj, down_proj,
+        top_k_weights, top_k_indices,
+        top_k=top_k, num_experts=num_experts,
+        w1_pre_transposed=w1_pre, w2_pre_transposed=w2_pre,
     )
 
 
@@ -145,7 +157,7 @@ def run_profiling():
     dtype = torch.bfloat16
     
     # Model dimensions (Qwen3-Next)
-    num_experts = 64
+    num_experts = 512
     top_k = 8
     intermediate_size = 1408
     hidden_size = 2048
@@ -163,10 +175,16 @@ def run_profiling():
         num_experts, intermediate_size, hidden_size, device, dtype
     )
     
-    print(f"Expert weights: gate_up_proj={gate_up_proj.shape}, down_proj={down_proj.shape}")
-    print(f"Weight memory: {(gate_up_proj.numel() + down_proj.numel()) * 2 / 1e6:.1f} MB\n")
+    # Pre-transpose weights once (the optimization we're testing)
+    w1_pre = gate_up_proj.transpose(1, 2).contiguous()  # [E, H, 2*I]
+    w2_pre = down_proj.transpose(1, 2).contiguous()      # [E, I, H]
     
-    header = f"{'Batch':>6} | {'N*K':>6} | {'Loop (ms)':>10} | {'BMM (ms)':>10} | {'Triton (ms)':>12} | {'Speedup':>8} | {'Match':>5}"
+    print(f"Expert weights: gate_up_proj={gate_up_proj.shape}, down_proj={down_proj.shape}")
+    print(f"Pre-transposed: w1={w1_pre.shape}, w2={w2_pre.shape}")
+    print(f"Weight memory: {(gate_up_proj.numel() + down_proj.numel()) * 2 / 1e6:.1f} MB")
+    print(f"Pre-trans extra: {(w1_pre.numel() + w2_pre.numel()) * 2 / 1e6:.1f} MB\n")
+    
+    header = f"{'Batch':>6} | {'N*K':>6} | {'Loop (ms)':>10} | {'BMM (ms)':>10} | {'Triton (ms)':>12} | {'PreTrans (ms)':>13} | {'Speedup':>8} | {'Match':>5}"
     print(header)
     print("-" * len(header))
     
@@ -207,23 +225,34 @@ def run_profiling():
                 )
                 triton_str = f"{triton_result['mean_ms']:12.3f}"
                 
-                # Speedup vs loop
-                speedup = loop_result['mean_ms'] / triton_result['mean_ms']
+                # ---- Triton Pre-transposed ----
+                pretrans_result = benchmark_fn(
+                    lambda: moe_forward_triton_pretrans(hidden_states, gate_up_proj, down_proj,
+                                                        top_k_indices, top_k_weights, top_k, num_experts,
+                                                        w1_pre, w2_pre),
+                    warmup=2, repeats=5
+                )
+                pretrans_str = f"{pretrans_result['mean_ms']:13.3f}"
+                
+                # Speedup: pre-trans vs original triton
+                speedup = triton_result['mean_ms'] / pretrans_result['mean_ms']
                 speedup_str = f"{speedup:7.1f}x"
                 
                 # Check correctness vs loop
-                diff = (triton_result['output'] - loop_result['output']).abs().max().item()
+                diff = (pretrans_result['output'] - loop_result['output']).abs().max().item()
                 match_str = f"{'✓' if diff < 0.1 else '✗'} {diff:.4f}"
             except Exception as e:
                 triton_str = f"{'ERR':>12}"
+                pretrans_str = f"{'ERR':>13}"
                 speedup_str = f"{'N/A':>8}"
                 match_str = str(e)[:20]
         else:
             triton_str = f"{'N/A':>12}"
+            pretrans_str = f"{'N/A':>13}"
             speedup_str = f"{'N/A':>8}"
             match_str = "N/A"
         
-        print(f"{batch_size:>6} | {nk:>6} | {loop_result['mean_ms']:10.3f} | {bmm_str} | {triton_str} | {speedup_str} | {match_str}")
+        print(f"{batch_size:>6} | {nk:>6} | {loop_result['mean_ms']:10.3f} | {bmm_str} | {triton_str} | {pretrans_str} | {speedup_str} | {match_str}")
     
     # Memory profiling for the largest batch
     print(f"\n{'='*80}")
