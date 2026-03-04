@@ -104,7 +104,12 @@ def init_tensor_parallel(tensor_parallel_size: int = 1):
         return
     
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        import datetime
+        # Set NCCL timeout BEFORE init_process_group (env var has no effect after init)
+        dist.init_process_group(
+            backend="nccl",
+            timeout=datetime.timedelta(hours=2),  # 2 hours for large MoE prefill
+        )
     
     world_size = dist.get_world_size()
     rank = dist.get_rank()
