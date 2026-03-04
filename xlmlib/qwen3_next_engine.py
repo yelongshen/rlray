@@ -1063,28 +1063,19 @@ class Qwen3NextExpertsForEngine(nn.Module):
         num_tokens = hidden_states.shape[0]
         top_k = top_k_indices.shape[1]
         
-        # Strategy selection (ordered by speed for each regime):
-        # - BMM: fastest for small decode batches (batch≤64). Gathers expert weights
-        #   into [N*K, dim1, dim2] then does batched matmul. At batch=1: 0.48ms vs 
-        #   Triton's 28ms (58x faster!) because Triton has fixed overhead from
-        #   moe_align_block_size + .item() + grid launch.
-        # - Triton: fastest for large batches (batch>64). Fixed overhead amortized.
-        # - Loop: memory-safe fallback for very large prefill (>1024 token-expert pairs
-        #   where BMM would OOM from weight gathering).
-        num_flat = num_tokens * top_k
-        if num_flat <= 1024:
-            # BMM path: fast for decode (batch≤128 with top_k=8)
-            return self._forward_fused(hidden_states, top_k_indices, top_k_weights,
-                                       tp_rank, tp_world_size, num_tokens, top_k)
-        elif TRITON_MOE_AVAILABLE:
-            # Triton path: efficient for large batches where fixed overhead is amortized
+        # Strategy selection:
+        # - Triton (pre-transposed): fastest at ALL batch sizes (1.2ms@bs=1 to 2.1ms@bs=256)
+        #   With pre-transposed weights + pre-allocated buffers, Triton beats BMM even at bs=1.
+        # - Loop: memory-safe fallback when Triton is not available
+        if TRITON_MOE_AVAILABLE:
             return self._forward_triton(hidden_states, top_k_indices, top_k_weights,
                                          tp_rank, tp_world_size, num_tokens, top_k)
-            # bmm path: fast for decode, small temp memory
+        elif num_tokens * top_k <= 1024:
+            # BMM fallback for small batches when Triton unavailable
             return self._forward_fused(hidden_states, top_k_indices, top_k_weights,
                                        tp_rank, tp_world_size, num_tokens, top_k)
         else:
-            # Loop path: memory-safe for prefill
+            # Loop fallback for large batches when Triton unavailable
             return self._forward_loop(hidden_states, top_k_indices, top_k_weights,
                                       tp_rank, tp_world_size)
     
