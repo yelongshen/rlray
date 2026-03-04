@@ -1644,7 +1644,7 @@ class Qwen3NextModelForEngine(nn.Module):
         num_layers = len(self.layers)
         tp_rank = get_tp_rank()
         for layer_idx, layer in enumerate(self.layers):
-            if layer_idx % 4 == 0 or layer_idx == num_layers - 1:
+            if _tp_debug_enabled and (layer_idx % 4 == 0 or layer_idx == num_layers - 1):
                 torch.cuda.synchronize()
                 print(f'    [backbone rank={tp_rank}] layer {layer_idx}/{num_layers} '
                       f'type={layer.layer_type} hidden={hidden_states.shape}', flush=True)
@@ -1658,9 +1658,9 @@ class Qwen3NextModelForEngine(nn.Module):
             )
             next_cache.append((k_cache, v_cache))
         
-        if True:
+        if _tp_debug_enabled:
             torch.cuda.synchronize()
-            print(f'    [backbone rank={tp_rank}] all {num_layers} layers done, applying final norm', flush=True)
+            print(f'    [backbone rank={tp_rank}] all {num_layers} layers done', flush=True)
         hidden_states = self.norm(hidden_states)
         return hidden_states, next_cache
 
@@ -1737,10 +1737,6 @@ class Qwen3NextForLLMEngine(nn.Module):
         
         Returns: (logits, past_key_values)
         """
-        _rank = get_tp_rank()
-        print(f'    [Qwen3NextForLLMEngine rank={_rank}] forward: input={input_ids.shape}, '
-              f'logits_to_keep={logits_to_keep is not None}', flush=True)
-        
         hidden_states, next_cache = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -1748,16 +1744,16 @@ class Qwen3NextForLLMEngine(nn.Module):
             cache_params=cache_params,
         )
         
-        print(f'    [Qwen3NextForLLMEngine rank={_rank}] backbone done, hidden={hidden_states.shape}', flush=True)
-        
         # Handle logits_to_keep for efficient prefill
         if logits_to_keep is not None:
             hidden_states = hidden_states.squeeze(0)[logits_to_keep]
             hidden_states = hidden_states.unsqueeze(0)
         
-        print(f'    [Qwen3NextForLLMEngine rank={_rank}] computing lm_head...', flush=True)
+        if _tp_debug_enabled:
+            print(f'    [rank={get_tp_rank()}] lm_head start, hidden={hidden_states.shape}', flush=True)
         logits = self.lm_head(hidden_states)
-        print(f'    [Qwen3NextForLLMEngine rank={_rank}] lm_head done, logits={logits.shape}', flush=True)
+        if _tp_debug_enabled:
+            print(f'    [rank={get_tp_rank()}] lm_head done, logits={logits.shape}', flush=True)
         
         return logits, next_cache
 
