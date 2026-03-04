@@ -1550,20 +1550,32 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
         cache_params = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
+        # Sub-component debug: only during prefill (when _tp_debug_enabled), first 2 layers
+        _dbg = _tp_debug_enabled and self.layer_idx < 2
+        if _dbg:
+            _r = get_tp_rank()
+        
         # Token mixer
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         
         if self.layer_type == "linear_attention" and self.linear_attn is not None:
-            # Linear attention - pass cache_params for conv/recurrent states
+            if _dbg:
+                torch.cuda.synchronize()
+                print(f'      [layer {self.layer_idx} rank={_r}] entering GatedDeltaNet', flush=True)
             hidden_states = self.linear_attn(
                 hidden_states,
                 attention_mask=attention_mask,
                 cache_params=cache_params,
             )
+            if _dbg:
+                torch.cuda.synchronize()
+                print(f'      [layer {self.layer_idx} rank={_r}] GatedDeltaNet done', flush=True)
             k_cache, v_cache = None, None
         else:
-            # Full attention - pass cache_params for paged KV cache lookup
+            if _dbg:
+                torch.cuda.synchronize()
+                print(f'      [layer {self.layer_idx} rank={_r}] entering FullAttn', flush=True)
             hidden_states, k_cache, v_cache = self.self_attn(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -1572,13 +1584,22 @@ class Qwen3NextDecoderLayerForEngine(nn.Module):
                 sin=sin,
                 cache_params=cache_params,
             )
+            if _dbg:
+                torch.cuda.synchronize()
+                print(f'      [layer {self.layer_idx} rank={_r}] FullAttn done', flush=True)
         
         hidden_states = residual + hidden_states
         
         # MLP
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        if _dbg:
+            torch.cuda.synchronize()
+            print(f'      [layer {self.layer_idx} rank={_r}] entering MLP/MoE (is_moe={self.is_moe})', flush=True)
         hidden_states = self.mlp(hidden_states)
+        if _dbg:
+            torch.cuda.synchronize()
+            print(f'      [layer {self.layer_idx} rank={_r}] MLP/MoE done', flush=True)
         hidden_states = residual + hidden_states
         
         return hidden_states, k_cache, v_cache
