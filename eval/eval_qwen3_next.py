@@ -230,7 +230,16 @@ def evaluate(
         batch_meta = []  # (problem_index_in_chunk, rollout_index) for each prompt
         for local_idx, problem in enumerate(batch_problems):
             prompt_text = process_math_prompt(problem["problem"], prompt_type=prompt_type)
-            input_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+            
+            # Apply chat template if available (wraps with <|im_start|>user\n...<|im_end|>\n<|im_start|>assistant\n)
+            if hasattr(tokenizer, 'apply_chat_template') and prompt_type in ('v_chat', 'chat'):
+                messages = [{"role": "user", "content": prompt_text}]
+                prompt_text = tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+                input_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+            else:
+                input_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
             
             prob_idx = batch_start + local_idx
             pid = problem["id"]

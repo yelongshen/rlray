@@ -165,6 +165,11 @@ def process_math_prompt(original_question, prompt_type = "v8"):
     elif prompt_type == 'v17':
         prefix_instruct = candidate_prompt_17
         postfix_instruct = '<|end|>'
+    elif prompt_type in ('chat', 'v_chat'):
+        # For chat template: just instruction + question, no special tokens
+        # The chat template wrapper (tokenizer.apply_chat_template) handles the framing
+        prefix_instruct = candidate_prompt_17
+        postfix_instruct = ''
     prompt = prefix_instruct + original_question + postfix_instruct
 
     return prompt
