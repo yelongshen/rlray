@@ -143,13 +143,28 @@ def get_tp_group():
     return _TENSOR_PARALLEL_GROUP
 
 
+# TP debug: counter for tracing collective operations
+_tp_collective_counter = 0
+_tp_debug_enabled = False  # Set True to trace every collective (very verbose)
+
+def enable_tp_debug(enabled=True):
+    global _tp_debug_enabled
+    _tp_debug_enabled = enabled
+
 class _ReduceFromTP(torch.autograd.Function):
     """All-reduce in tensor parallel group."""
     @staticmethod
     def forward(ctx, input_):
         if get_tp_world_size() == 1:
             return input_
+        global _tp_collective_counter
+        _tp_collective_counter += 1
+        cnt = _tp_collective_counter
+        if _tp_debug_enabled and cnt <= 20:
+            print(f'    [TP rank={get_tp_rank()}] all_reduce #{cnt} shape={input_.shape}', flush=True)
         dist.all_reduce(input_, group=get_tp_group())
+        if _tp_debug_enabled and cnt <= 20:
+            print(f'    [TP rank={get_tp_rank()}] all_reduce #{cnt} DONE', flush=True)
         return input_
 
     @staticmethod
@@ -167,9 +182,16 @@ class _AllGatherFromTP(torch.autograd.Function):
     def forward(ctx, input_):
         if get_tp_world_size() == 1:
             return input_
+        global _tp_collective_counter
+        _tp_collective_counter += 1
+        cnt = _tp_collective_counter
+        if _tp_debug_enabled and cnt <= 20:
+            print(f'    [TP rank={get_tp_rank()}] all_gather #{cnt} shape={input_.shape}', flush=True)
         world_size = get_tp_world_size()
         output_list = [torch.empty_like(input_) for _ in range(world_size)]
         dist.all_gather(output_list, input_, group=get_tp_group())
+        if _tp_debug_enabled and cnt <= 20:
+            print(f'    [TP rank={get_tp_rank()}] all_gather #{cnt} DONE', flush=True)
         return torch.cat(output_list, dim=-1)
 
     @staticmethod
@@ -1619,7 +1641,13 @@ class Qwen3NextModelForEngine(nn.Module):
         cos, sin = self.rotary_emb(hidden_states, position_ids)
         
         next_cache = []
-        for layer in self.layers:
+        num_layers = len(self.layers)
+        tp_rank = get_tp_rank()
+        for layer_idx, layer in enumerate(self.layers):
+            if layer_idx % 4 == 0 or layer_idx == num_layers - 1:
+                torch.cuda.synchronize()
+                print(f'    [backbone rank={tp_rank}] layer {layer_idx}/{num_layers} '
+                      f'type={layer.layer_type} hidden={hidden_states.shape}', flush=True)
             hidden_states, k_cache, v_cache = layer(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -1630,6 +1658,9 @@ class Qwen3NextModelForEngine(nn.Module):
             )
             next_cache.append((k_cache, v_cache))
         
+        if True:
+            torch.cuda.synchronize()
+            print(f'    [backbone rank={tp_rank}] all {num_layers} layers done, applying final norm', flush=True)
         hidden_states = self.norm(hidden_states)
         return hidden_states, next_cache
 
@@ -1706,6 +1737,10 @@ class Qwen3NextForLLMEngine(nn.Module):
         
         Returns: (logits, past_key_values)
         """
+        _rank = get_tp_rank()
+        print(f'    [Qwen3NextForLLMEngine rank={_rank}] forward: input={input_ids.shape}, '
+              f'logits_to_keep={logits_to_keep is not None}', flush=True)
+        
         hidden_states, next_cache = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -1713,12 +1748,16 @@ class Qwen3NextForLLMEngine(nn.Module):
             cache_params=cache_params,
         )
         
+        print(f'    [Qwen3NextForLLMEngine rank={_rank}] backbone done, hidden={hidden_states.shape}', flush=True)
+        
         # Handle logits_to_keep for efficient prefill
         if logits_to_keep is not None:
             hidden_states = hidden_states.squeeze(0)[logits_to_keep]
             hidden_states = hidden_states.unsqueeze(0)
         
+        print(f'    [Qwen3NextForLLMEngine rank={_rank}] computing lm_head...', flush=True)
         logits = self.lm_head(hidden_states)
+        print(f'    [Qwen3NextForLLMEngine rank={_rank}] lm_head done, logits={logits.shape}', flush=True)
         
         return logits, next_cache
 
@@ -2467,7 +2506,11 @@ class HybridModelRunner:
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill):
         context = get_context()
         if is_prefill:
-            print(f'  [run_model] prefill: input_ids={input_ids.shape}, positions={positions.shape}', flush=True)
+            print(f'  [run_model rank={get_tp_rank()}] prefill: input_ids={input_ids.shape}, positions={positions.shape}', flush=True)
+            # Enable TP collective tracing for first prefill to debug hangs
+            global _tp_collective_counter
+            _tp_collective_counter = 0
+            enable_tp_debug(get_tp_world_size() > 1)
             t0 = time.time()
             logits, _ = self.model(
                 input_ids=input_ids.unsqueeze(0),
@@ -2477,7 +2520,9 @@ class HybridModelRunner:
             )
             t1 = time.time()
             self.cache_params.has_previous_state = True
-            print(f'  [run_model] prefill done: logits={logits.shape}, time={t1-t0:.3f}s', flush=True)
+            enable_tp_debug(False)  # Disable verbose TP tracing after prefill
+            print(f'  [run_model rank={get_tp_rank()}] prefill done: logits={logits.shape}, '
+                  f'time={t1-t0:.3f}s, tp_collectives={_tp_collective_counter}', flush=True)
         else:
             num_seqs = input_ids.shape[0]
             
