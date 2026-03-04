@@ -2443,6 +2443,15 @@ class HybridModelRunner:
         self.cache_params = self.allocate_cache(self.model, self.llm_config, 0.70, max_batch_size)
         self.num_kvcache_blocks = self.cache_params.num_kvcache_blocks
         
+        # Synchronize all TP ranks after cache allocation, before any forward pass.
+        # Without this barrier, rank 0 may start the first model forward (which contains
+        # NCCL all_reduce ops) while rank 1 is still doing large cudaMalloc for cache.
+        # This can cause NCCL deadlock because the large allocation blocks the GPU.
+        if get_tp_world_size() > 1:
+            torch.cuda.synchronize(self.device)
+            dist.barrier(group=get_tp_group())
+            print(f'  [rank={get_tp_rank()}] TP barrier after cache allocation - all ranks ready', flush=True)
+        
         # CUDA Graph support for decode
         self.use_cuda_graph = False  # Will be enabled after first decode warmup
         self.cuda_graphs = {}        # batch_size -> captured graph
