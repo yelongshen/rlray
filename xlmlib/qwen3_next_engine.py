@@ -1010,22 +1010,30 @@ class Qwen3NextExpertsForEngine(nn.Module):
         
         self.act_fn = nn.SiLU()
         
-        # Pre-transposed weight caches (populated by prepare_pretransposed_weights)
-        self._w1_transposed = None  # [E, H, 2*I]
-        self._w2_transposed = None  # [E, I, H]
+        # Flag: whether weights are stored in transposed layout for Triton
+        self._weights_transposed = False
     
     def prepare_pretransposed_weights(self):
-        """Pre-transpose expert weights for the Triton kernel.
+        """Transpose expert weights IN-PLACE for the Triton kernel.
         
-        Eliminates ~11 GB of memory copies per forward call (512 experts).
-        Call once after weight loading. Stores transposed copies as non-parameter
-        buffers (not saved in state_dict, not updated by optimizer).
+        Changes weight layout from [E, 2I, H] / [E, H, I] (original HF)
+        to [E, H, 2I] / [E, I, H] (what Triton kernel expects).
+        
+        Zero extra memory — replaces the original parameters.
+        The loop/bmm fallback paths will transpose back on the fly if needed.
         """
-        self._w1_transposed = self.gate_up_proj.data.transpose(1, 2).contiguous()
-        self._w2_transposed = self.down_proj.data.transpose(1, 2).contiguous()
-        mem_mb = (self._w1_transposed.numel() + self._w2_transposed.numel()) * self._w1_transposed.element_size() / 1e6
-        print(f'    [MoE] Pre-transposed weights: w1={self._w1_transposed.shape}, '
-              f'w2={self._w2_transposed.shape}, extra_mem={mem_mb:.1f} MB', flush=True)
+        new_gate_up = self.gate_up_proj.data.transpose(1, 2).contiguous()
+        new_down = self.down_proj.data.transpose(1, 2).contiguous()
+        self.gate_up_proj = nn.Parameter(new_gate_up, requires_grad=False)
+        self.down_proj = nn.Parameter(new_down, requires_grad=False)
+        self._weights_transposed = True
+        mem_mb = (new_gate_up.numel() + new_down.numel()) * new_gate_up.element_size() / 1e6
+        print(f'    [MoE] Weights transposed in-place: gate_up={new_gate_up.shape}, '
+              f'down={new_down.shape}, mem={mem_mb:.1f} MB', flush=True)
+    
+    def forward(self, hidden_states, top_k_indices, top_k_weights):
+        """
+        MoE forward with three strategies:
         1. Triton fused kernel (preferred) — zero temp memory, 2 kernel launches
         2. bmm (small decode batches) — fast but gathers weights into temp memory
         3. Expert loop (fallback) — memory-safe for large prefill batches
@@ -1074,9 +1082,17 @@ class Qwen3NextExpertsForEngine(nn.Module):
             expert_input = hidden_states[token_indices]
             expert_weights = top_k_weights[token_indices, top_k_positions].unsqueeze(-1)
             
-            gate, up = F.linear(expert_input, self.gate_up_proj[expert_local_idx]).chunk(2, dim=-1)
-            expert_output = self.act_fn(gate) * up
-            expert_output = F.linear(expert_output, self.down_proj[expert_local_idx])
+            if self._weights_transposed:
+                # gate_up_proj[i] is [H, 2I], need input @ weight = [N, 2I]
+                gate_up = expert_input @ self.gate_up_proj[expert_local_idx]
+                gate, up = gate_up.chunk(2, dim=-1)
+                expert_output = self.act_fn(gate) * up
+                # down_proj[i] is [I, H], need intermediate @ weight = [N, H]
+                expert_output = expert_output @ self.down_proj[expert_local_idx]
+            else:
+                gate, up = F.linear(expert_input, self.gate_up_proj[expert_local_idx]).chunk(2, dim=-1)
+                expert_output = self.act_fn(gate) * up
+                expert_output = F.linear(expert_output, self.down_proj[expert_local_idx])
             
             expert_output = expert_output * expert_weights
             final_output.index_add_(0, token_indices, expert_output.to(final_output.dtype))
@@ -1104,17 +1120,30 @@ class Qwen3NextExpertsForEngine(nn.Module):
             local_indices = top_k_indices
             local_weights = top_k_weights
         
-        output = triton_fused_moe(
-            hidden_states,
-            self.gate_up_proj,   # [experts_per_rank, 2*I, H]
-            self.down_proj,      # [experts_per_rank, H, I]
-            local_weights,
-            local_indices,
-            top_k=top_k,
-            num_experts=self.experts_per_rank,
-            w1_pre_transposed=self._w1_transposed,
-            w2_pre_transposed=self._w2_transposed,
-        )
+        if self._weights_transposed:
+            # Weights already in Triton layout: gate_up=[E, H, 2I], down=[E, I, H]
+            output = triton_fused_moe(
+                hidden_states,
+                self.gate_up_proj,   # [E, H, 2*I] (transposed layout)
+                self.down_proj,      # [E, I, H] (transposed layout)
+                local_weights,
+                local_indices,
+                top_k=top_k,
+                num_experts=self.experts_per_rank,
+                w1_pre_transposed=self.gate_up_proj.data,
+                w2_pre_transposed=self.down_proj.data,
+            )
+        else:
+            # Original layout — fused_moe will transpose internally
+            output = triton_fused_moe(
+                hidden_states,
+                self.gate_up_proj,   # [E, 2*I, H]
+                self.down_proj,      # [E, H, I]
+                local_weights,
+                local_indices,
+                top_k=top_k,
+                num_experts=self.experts_per_rank,
+            )
         
         # All-reduce across TP ranks (each rank computed its subset of experts)
         if self.use_tp and tp_world_size > 1:
@@ -1146,26 +1175,38 @@ class Qwen3NextExpertsForEngine(nn.Module):
         expanded_hidden = hidden_states.unsqueeze(1).expand(-1, top_k, -1).reshape(-1, hidden_states.shape[-1])
         # expanded_hidden: [N * top_k, hidden_size]
         
-        # Gather expert weights for each pair — ONE indexing op instead of 64 loop iterations
-        # gate_up_proj: [E, 2*I, H], down_proj: [E, H, I]
-        selected_gate_up = self.gate_up_proj[flat_local_indices_clamped]  # [N*K, 2*I, H]
-        selected_down = self.down_proj[flat_local_indices_clamped]        # [N*K, H, I]
+        # Gather expert weights for each pair
+        selected_gate_up = self.gate_up_proj[flat_local_indices_clamped]
+        selected_down = self.down_proj[flat_local_indices_clamped]
         
-        # Fused batched matmul: all expert computations in ONE kernel launch
-        # gate_up: [N*K, H] @ [N*K, H, 2*I]^T → [N*K, 2*I]
-        gate_up_out = torch.bmm(
-            expanded_hidden.unsqueeze(1),           # [N*K, 1, H]
-            selected_gate_up.transpose(1, 2)        # [N*K, H, 2*I] → [N*K, 2*I, H]^T ... wait
-        ).squeeze(1)  # → [N*K, 2*I]
+        if self._weights_transposed:
+            # gate_up: [N*K, H, 2*I], input [N*K, 1, H] @ [N*K, H, 2*I] → [N*K, 2*I]
+            gate_up_out = torch.bmm(
+                expanded_hidden.unsqueeze(1),
+                selected_gate_up,
+            ).squeeze(1)
+        else:
+            # gate_up: [N*K, 2*I, H], input [N*K, 1, H] @ [N*K, 2*I, H]^T → [N*K, 2*I]
+            gate_up_out = torch.bmm(
+                expanded_hidden.unsqueeze(1),
+                selected_gate_up.transpose(1, 2),
+            ).squeeze(1)
         
         gate, up = gate_up_out.chunk(2, dim=-1)
         expert_out = self.act_fn(gate) * up         # [N*K, I]
         
-        # down_proj: [N*K, I] @ [N*K, I, H]^T → [N*K, H]
-        expert_out = torch.bmm(
-            expert_out.unsqueeze(1),                # [N*K, 1, I]
-            selected_down.transpose(1, 2)           # [N*K, H, I] → [N*K, I, H]^T
-        ).squeeze(1)  # → [N*K, H]
+        if self._weights_transposed:
+            # down: [N*K, I, H], input [N*K, 1, I] @ [N*K, I, H] → [N*K, H]
+            expert_out = torch.bmm(
+                expert_out.unsqueeze(1),
+                selected_down,
+            ).squeeze(1)
+        else:
+            # down: [N*K, H, I], input [N*K, 1, I] @ [N*K, H, I]^T → [N*K, H]
+            expert_out = torch.bmm(
+                expert_out.unsqueeze(1),
+                selected_down.transpose(1, 2),
+            ).squeeze(1)
         
         # Apply routing weights
         expert_out = expert_out * flat_weights

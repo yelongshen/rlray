@@ -159,17 +159,27 @@ def fused_moe(hidden_states, gate_up_proj, down_proj, topk_weights, topk_ids,
     """Fused MoE forward: 2 Triton kernel launches + SiLU activation.
     
     Args:
-        gate_up_proj: [E, 2*I, H] — original weight layout
-        down_proj: [E, H, I] — original weight layout
-        w1_pre_transposed: [E, H, 2*I] — if provided, skip transpose+contiguous for kernel1
-        w2_pre_transposed: [E, I, H] — if provided, skip transpose+contiguous for kernel2
+        gate_up_proj: [E, 2*I, H] (original) or [E, H, 2*I] (if pre-transposed)
+        down_proj: [E, H, I] (original) or [E, I, H] (if pre-transposed)
+        w1_pre_transposed: [E, H, 2*I] — if provided, use directly (skip transpose)
+        w2_pre_transposed: [E, I, H] — if provided, use directly (skip transpose)
     """
     # Ensure CUDA device is set correctly for Triton (required for multi-GPU)
     if hidden_states.is_cuda:
         torch.cuda.set_device(hidden_states.device)
     num_tokens = hidden_states.shape[0]
     hidden_size = hidden_states.shape[1]
-    E, two_intermediate, _ = gate_up_proj.shape
+    
+    # Derive dimensions from pre-transposed weights if available,
+    # otherwise from original layout
+    if w1_pre_transposed is not None:
+        # w1_pre_transposed: [E, H, 2*I]
+        E = w1_pre_transposed.shape[0]
+        two_intermediate = w1_pre_transposed.shape[2]
+    else:
+        # gate_up_proj: [E, 2*I, H]
+        E = gate_up_proj.shape[0]
+        two_intermediate = gate_up_proj.shape[1]
     intermediate_size = two_intermediate // 2
     if num_experts < 0:
         num_experts = E
