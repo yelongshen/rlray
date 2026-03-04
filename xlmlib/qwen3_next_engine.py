@@ -2501,7 +2501,25 @@ class HybridModelRunner:
         return logits.squeeze(0)
     
     def _try_capture_decode_graph(self, batch_size):
-        """Attempt to capture a CUDA graph for decode with the given batch size."""
+        """Attempt to capture a CUDA graph for decode with the given batch size.
+        
+        Known limitations:
+        - TP > 1: DISABLED. If capture fails on one rank but succeeds on another,
+          NCCL collectives (all_reduce/all_gather) inside the graph won't match
+          the eager path on the failed rank → deadlock.
+        - Triton MoE kernel: Incompatible with CUDA graphs because:
+          (a) moe_align_block_size() allocates dynamic tensors (torch.zeros, argsort, scatter)
+          (b) .item() call causes CPU-GPU sync during capture
+          (c) Grid sizes depend on router decisions which change every step
+        - FLA recurrent kernel: May use internal Triton ops with dynamic allocations.
+        The try/except fallback handles (b) and (c) gracefully for TP=1.
+        """
+        # Skip CUDA graph capture for tensor parallel — partial capture failure
+        # across ranks would cause NCCL deadlock (mismatched collectives).
+        if get_tp_world_size() > 1:
+            print(f'  [CUDA Graph] Skipped: not supported with tensor parallelism (TP={get_tp_world_size()})', flush=True)
+            return
+        
         try:
             print(f'  [CUDA Graph] Attempting to capture graph for batch_size={batch_size}...', flush=True)
             
