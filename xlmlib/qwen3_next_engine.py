@@ -54,6 +54,16 @@ except ImportError:
     print("Warning: fla not available, using pure PyTorch GatedDeltaNet (slow)")
 
 try:
+    from fused_moe_triton import fused_moe as triton_fused_moe
+    TRITON_MOE_AVAILABLE = True
+except ImportError:
+    try:
+        from xlmlib.fused_moe_triton import fused_moe as triton_fused_moe
+        TRITON_MOE_AVAILABLE = True
+    except ImportError:
+        TRITON_MOE_AVAILABLE = False
+
+try:
     from context import set_context, get_context, reset_context
 except ImportError:
     print("Warning: context module not found, using dummy implementation")
@@ -972,8 +982,10 @@ class Qwen3NextExpertsForEngine(nn.Module):
     
     def forward(self, hidden_states, top_k_indices, top_k_weights):
         """
-        Fused MoE forward: uses vectorized bmm for small batches (decode),
-        falls back to expert-by-expert loop for large batches (prefill) to avoid OOM.
+        MoE forward with three strategies:
+        1. Triton fused kernel (preferred) — zero temp memory, 2 kernel launches
+        2. bmm (small decode batches) — fast but gathers weights into temp memory
+        3. Expert loop (fallback) — memory-safe for large prefill batches
         
         Args:
             hidden_states: [num_tokens, hidden_size]
@@ -986,16 +998,20 @@ class Qwen3NextExpertsForEngine(nn.Module):
         num_tokens = hidden_states.shape[0]
         top_k = top_k_indices.shape[1]
         
-        # Use fused bmm for small batches (decode), loop for large (prefill avoids OOM)
-        # Threshold: N*top_k * 2*intermediate * hidden * 2bytes must fit in memory
-        # For decode: 30*8=240 pairs → ~3MB per gather → fine
-        # For prefill: 4000*8=32000 pairs → ~157GB per gather → OOM
-        use_fused = (num_tokens * top_k <= 1024)
-        
-        if use_fused:
+        # Strategy selection:
+        # 1. Triton fused kernel: no temp memory, works for all batch sizes
+        # 2. bmm: fast for small batches, OOMs for large (weight gather)
+        # 3. Loop: always works, slowest (64 Python iterations)
+        if TRITON_MOE_AVAILABLE and not (self.use_tp and tp_world_size > 1):
+            # Triton path: works for all sizes, no TP support yet
+            return self._forward_triton(hidden_states, top_k_indices, top_k_weights,
+                                         num_tokens, top_k)
+        elif num_tokens * top_k <= 1024:
+            # bmm path: fast for decode, small temp memory
             return self._forward_fused(hidden_states, top_k_indices, top_k_weights,
                                        tp_rank, tp_world_size, num_tokens, top_k)
         else:
+            # Loop path: memory-safe for prefill
             return self._forward_loop(hidden_states, top_k_indices, top_k_weights,
                                       tp_rank, tp_world_size)
     
@@ -1024,6 +1040,24 @@ class Qwen3NextExpertsForEngine(nn.Module):
         if self.use_tp and tp_world_size > 1:
             final_output = reduce_from_tp(final_output)
         return final_output
+    
+    def _forward_triton(self, hidden_states, top_k_indices, top_k_weights,
+                        num_tokens, top_k):
+        """Triton fused MoE kernel: zero temp memory, 2 kernel launches.
+        
+        Works for all batch sizes (decode and prefill).
+        Currently only supports single-GPU (no TP expert sharding).
+        """
+        output = triton_fused_moe(
+            hidden_states,
+            self.gate_up_proj,   # [E, 2*I, H]
+            self.down_proj,      # [E, H, I]
+            top_k_weights,
+            top_k_indices,
+            top_k=top_k,
+            num_experts=self.experts_per_rank,
+        )
+        return output
     
     def _forward_fused(self, hidden_states, top_k_indices, top_k_weights,
                        tp_rank, tp_world_size, num_tokens, top_k):
