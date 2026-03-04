@@ -156,6 +156,9 @@ def moe_align_block_size(topk_ids, block_size, num_experts):
 def fused_moe(hidden_states, gate_up_proj, down_proj, topk_weights, topk_ids,
               top_k, num_experts=-1, activation="silu"):
     """Fused MoE forward: 2 Triton kernel launches + SiLU activation."""
+    # Ensure CUDA device is set correctly for Triton (required for multi-GPU)
+    if hidden_states.is_cuda:
+        torch.cuda.set_device(hidden_states.device)
     num_tokens = hidden_states.shape[0]
     hidden_size = hidden_states.shape[1]
     E, two_intermediate, _ = gate_up_proj.shape
