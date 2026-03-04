@@ -170,6 +170,10 @@ def process_math_prompt(original_question, prompt_type = "v8"):
         # The chat template wrapper (tokenizer.apply_chat_template) handles the framing
         prefix_instruct = candidate_prompt_17
         postfix_instruct = ''
+    else:
+        # Default fallback
+        prefix_instruct = candidate_prompt_17
+        postfix_instruct = ''
     prompt = prefix_instruct + original_question + postfix_instruct
 
     return prompt
@@ -219,7 +223,7 @@ def process_math_answer(response, answers, tokenizer, prompt_type = "v8", alg = 
     elif prompt_type == 'v9' or prompt_type == 'v10':
         pattern_prefix = 'answer is:'
         pattern = r'answer is: \\boxed\{(.*?)\}'
-    elif prompt_type == 'v11' or prompt_type == 'v12' or prompt_type == 'v13' or prompt_type == 'v14' or prompt_type == 'v15' or prompt_type == 'v16' or prompt_type == 'v17':
+    elif prompt_type == 'v11' or prompt_type == 'v12' or prompt_type == 'v13' or prompt_type == 'v14' or prompt_type == 'v15' or prompt_type == 'v16' or prompt_type == 'v17' or prompt_type in ('chat', 'v_chat'):
         pattern_prefix = ''
         #pattern = r'\\boxed{([^}]*)}'
         #pattern = r'\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}'
