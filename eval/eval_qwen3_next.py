@@ -249,6 +249,11 @@ def evaluate(
                 print(f"  Question: {problem['problem'][:100]}...")
                 print(f"  Gold answer: {problem['answer']}")
                 print(f"  Prompt tokens: {len(input_ids)}")
+                print(f"  Prompt text:\n{prompt_text}")
+                print(f"  Prompt token IDs (first 20): {input_ids[:20]}")
+                print(f"  Prompt token IDs (last 10): {input_ids[-10:]}")
+                # Decode last few tokens to verify chat template framing
+                print(f"  Prompt ending (decoded): '{tokenizer.decode(input_ids[-10:], skip_special_tokens=False)}'")
             
             # Replicate for n_rollout
             for r in range(n_rollout):
