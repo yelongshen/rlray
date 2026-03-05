@@ -233,63 +233,6 @@ def test_engine(args):
         engine_final = engine_model.model.norm(engine_hidden)
         final_diff = (engine_final[0, -1, :].float().cpu() - hf_layer_states['final_norm']).abs().max().item()
         print(f"\nFinal norm:         max_diff={final_diff:.6f}")
-    
-    # === Test: Engine prefill WITH cache + 5 decode steps ===
-    print(f"\n{'='*60}")
-    print("ENGINE GENERATION TEST (prefill + 5 decode steps)")
-    print(f"{'='*60}")
-    
-    from qwen3_next_engine import HybridLLMEngine
-    hf_config.eos_token_id = tokenizer.eos_token_id
-    
-    # Collect stop tokens
-    stop_ids = set()
-    if tokenizer.eos_token_id is not None:
-        stop_ids.add(tokenizer.eos_token_id)
-    for name in ['<|im_end|>', '<|endoftext|>']:
-        try:
-            tid = tokenizer.convert_tokens_to_ids(name)
-            if tid is not None: stop_ids.add(tid)
-        except: pass
-    hf_config.stop_token_ids = stop_ids
-    
-    engine = HybridLLMEngine(
-        engine_model, hf_config, device,
-        temperature=0.0, max_batch_size=1, tokenizer=tokenizer
-    )
-    
-    from llm_engine import Sequence
-    seq = Sequence(input_ids)
-    seq.max_tokens = 5
-    engine.scheduler.add(seq)
-    
-    gen_tokens = []
-    while not engine.is_finished():
-        seqs, is_prefill = engine.scheduler.schedule()
-        token_ids_out = engine.model_runner.call("run", seqs, is_prefill)
-        engine.scheduler.postprocess(seqs, token_ids_out)
-        
-        if is_prefill:
-            print(f"  Prefill: token={token_ids_out} = '{tokenizer.decode(token_ids_out, skip_special_tokens=False)}'")
-            gen_tokens.extend(token_ids_out)
-        else:
-            for tid in token_ids_out:
-                tok_str = tokenizer.decode([tid], skip_special_tokens=False)
-                print(f"  Decode: token={tid} = '{tok_str}'")
-                gen_tokens.append(tid)
-        
-        # Check stop
-        if engine._stop_token_ids:
-            from llm_engine import SequenceStatus
-            for s, tid in zip(seqs, token_ids_out):
-                if not s.is_finished and tid in engine._stop_token_ids:
-                    s.status = SequenceStatus.FINISHED
-                    engine.scheduler.block_manager.deallocate(s)
-                    if s in engine.scheduler.running:
-                        engine.scheduler.running.remove(s)
-    
-    print(f"\nEngine first 5 tokens: {gen_tokens}")
-    print(f"Decoded: '{tokenizer.decode(gen_tokens, skip_special_tokens=False)}'")
 
 
 if __name__ == "__main__":
