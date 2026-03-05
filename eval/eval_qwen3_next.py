@@ -235,7 +235,8 @@ def evaluate(
             #if hasattr(tokenizer, 'apply_chat_template') and prompt_type in ('v_chat', 'chat'):
             messages = [{"role": "user", "content": prompt_text}]
             prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            input_ids = tokenizer.encode(prompt_text)
+            # Use add_special_tokens=False since chat template already includes all special tokens
+            input_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
             #else:
             #    input_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
             
