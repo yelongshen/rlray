@@ -108,11 +108,7 @@ def test_engine(args):
         print("TEST 2: HF model.generate() - first 20 tokens (ground truth)")
         print(f"{'='*60}")
     
-    # Use HF generate for reference (greedy, 20 tokens)
-    with torch.no_grad():
-        hf_output = model.model.model  # This is our Qwen3NextModelForEngine, not HF
-    # Actually we can't easily run HF generate with our custom model.
-    # Instead, do autoregressive decode manually WITHOUT KV cache (slow but correct)
+    # Use autoregressive decode manually WITHOUT KV cache (slow but correct)
     
     manual_ids = list(input_ids)
     manual_greedy_tokens = []
