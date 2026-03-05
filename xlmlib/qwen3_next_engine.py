@@ -2971,12 +2971,13 @@ class HybridLLMEngine:
                       f'finished={len(outputs)}, '
                       f'sched={t_sched-t0:.4f}s, run={t_run-t_sched:.4f}s, post={t_post-t_run:.4f}s, '
                       f'step_total={t_post-t0:.4f}s', flush=True)
-            # Print partial generation every 300 steps for seq 0
+            # Print full generation every 300 steps for seq 0
             if seq.num_completion_tokens % 300 == 0 and self.tokenizer is not None and get_tp_rank() == 0:
                 try:
-                    partial_text = self.tokenizer.decode(seq.completion_token_ids[-200:], skip_special_tokens=True)
-                    print(f'  [generation preview seq={seq.seq_id} step={seq.num_completion_tokens}] '
-                          f'...{partial_text[-300:]}', flush=True)
+                    full_text = self.tokenizer.decode(seq.completion_token_ids, skip_special_tokens=True)
+                    print(f'\n  ===== GENERATION PREVIEW seq={seq.seq_id} step={seq.num_completion_tokens} =====', flush=True)
+                    print(full_text, flush=True)
+                    print(f'  ===== END PREVIEW ({len(seq.completion_token_ids)} tokens) =====\n', flush=True)
                 except:
                     pass
         return outputs
