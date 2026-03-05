@@ -82,10 +82,11 @@ def test_engine(args):
     # ===== Test 1: Direct forward pass (no KV cache) =====
     if is_main:
         print(f"\n{'='*60}")
-        print("TEST 1: Direct forward pass (no KV cache)")
+        print("TEST 1: Direct forward pass (no KV cache) - first token logits")
         print(f"{'='*60}")
     
-    input_tensor = torch.tensor([input_ids], device=next(model.parameters()).device)
+    model_device = next(model.parameters()).device
+    input_tensor = torch.tensor([input_ids], device=model_device)
     with torch.no_grad():
         logits, _ = model(input_tensor)
     
@@ -93,51 +94,137 @@ def test_engine(args):
         last_logits = logits[0, -1, :]
         top5_vals, top5_ids = torch.topk(last_logits, 5)
         print(f"Logits shape: {logits.shape}")
-        print(f"Top-5 next tokens (greedy):")
+        print(f"Top-5 next tokens (greedy, no cache):")
         for val, tid in zip(top5_vals, top5_ids):
             token_str = tokenizer.decode([tid.item()], skip_special_tokens=False)
             print(f"  {tid.item():>8} ({val.item():>8.3f}): '{token_str}'")
         
-        greedy_token = top5_ids[0].item()
-        print(f"\nGreedy next token: {greedy_token} = '{tokenizer.decode([greedy_token])}'")
+        greedy_token_nocache = top5_ids[0].item()
+        print(f"\nGreedy next token: {greedy_token_nocache} = '{tokenizer.decode([greedy_token_nocache])}'")
     
-    # ===== Test 2: Engine generation (with KV cache) =====
+    # ===== Test 2: HF generate for first 10 tokens (ground truth) =====
     if is_main:
         print(f"\n{'='*60}")
-        print("TEST 2: Engine generation (HybridLLMEngine)")
+        print("TEST 2: HF model.generate() - first 20 tokens (ground truth)")
         print(f"{'='*60}")
     
+    # Use HF generate for reference (greedy, 20 tokens)
+    with torch.no_grad():
+        hf_output = model.model.model  # This is our Qwen3NextModelForEngine, not HF
+    # Actually we can't easily run HF generate with our custom model.
+    # Instead, do autoregressive decode manually WITHOUT KV cache (slow but correct)
+    
+    manual_ids = list(input_ids)
+    manual_greedy_tokens = []
+    if is_main:
+        print("Manual autoregressive decode (no KV cache, ground truth):")
+    with torch.no_grad():
+        for step in range(20):
+            inp = torch.tensor([manual_ids], device=model_device)
+            logits_step, _ = model(inp)
+            next_logits = logits_step[0, -1, :]
+            next_token = next_logits.argmax().item()
+            manual_greedy_tokens.append(next_token)
+            manual_ids.append(next_token)
+            if is_main:
+                token_str = tokenizer.decode([next_token], skip_special_tokens=False)
+                top3_vals, top3_ids = torch.topk(next_logits, 3)
+                print(f"  Step {step:>2}: token={next_token:>8} '{token_str:>15}' | "
+                      f"top3: {[f'{tid.item()}({v.item():.2f})' for v, tid in zip(top3_vals, top3_ids)]}")
+    
+    if is_main:
+        manual_text = tokenizer.decode(manual_greedy_tokens, skip_special_tokens=False)
+        print(f"\nManual decode (20 tokens): '{manual_text}'")
+    
+    # ===== Test 3: Engine prefill + first decode steps =====
+    if is_main:
+        print(f"\n{'='*60}")
+        print("TEST 3: Engine prefill + decode (with KV cache) - first 20 tokens")
+        print(f"{'='*60}")
+    
+    # We need to trace the engine's token-by-token output.
+    # Create engine and generate, capturing first 20 tokens from the step() loop.
     config.eos_token_id = tokenizer.eos_token_id
     engine = HybridLLMEngine(
-        model, config, str(next(model.parameters()).device),
+        model, config, str(model_device),
         temperature=0.0, max_batch_size=1, tokenizer=tokenizer
     )
     
-    t0 = time.time()
-    output_ids = engine.generate([input_ids], max_tokens=2048)[0]
-    t1 = time.time()
+    from llm_engine import Sequence
+    seq = Sequence(input_ids)
+    seq.max_tokens = 20  # Only generate 20 tokens for comparison
+    engine.scheduler.add(seq)
+    
+    engine_tokens = []
+    step_count = 0
+    while not engine.is_finished():
+        seqs, is_prefill = engine.scheduler.schedule()
+        
+        if is_prefill:
+            token_ids_out = engine.model_runner.call("run", seqs, True)
+            engine.scheduler.postprocess(seqs, token_ids_out)
+            # Check stop tokens
+            if engine._stop_token_ids:
+                from llm_engine import SequenceStatus
+                for s, tid in zip(seqs, token_ids_out):
+                    if not s.is_finished and tid in engine._stop_token_ids:
+                        s.status = SequenceStatus.FINISHED
+                        engine.scheduler.block_manager.deallocate(s)
+                        if s in engine.scheduler.running:
+                            engine.scheduler.running.remove(s)
+            if is_main:
+                print(f"  Prefill done, first token: {token_ids_out}")
+                engine_tokens.extend(token_ids_out if isinstance(token_ids_out, list) else [token_ids_out])
+        else:
+            # Decode step - capture the logits before sampling
+            input_ids_t, positions_t = engine.model_runner.prepare_decode(seqs)
+            logits_engine = engine.model_runner.run_model(input_ids_t, positions_t, False)
+            
+            if logits_engine.dim() == 1:
+                logits_engine = logits_engine.unsqueeze(0)
+            
+            # Greedy
+            token_id = logits_engine.argmax(dim=-1).item()
+            
+            if is_main and step_count < 20:
+                top3_vals, top3_ids = torch.topk(logits_engine[0], 3)
+                token_str = tokenizer.decode([token_id], skip_special_tokens=False)
+                
+                # Compare with manual decode
+                match = "✓" if step_count < len(manual_greedy_tokens) and token_id == manual_greedy_tokens[step_count] else "✗"
+                manual_tok = manual_greedy_tokens[step_count] if step_count < len(manual_greedy_tokens) else -1
+                manual_str = tokenizer.decode([manual_tok], skip_special_tokens=False) if manual_tok >= 0 else "N/A"
+                
+                print(f"  Step {step_count:>2}: engine={token_id:>8} '{token_str:>15}' | "
+                      f"manual={manual_tok:>8} '{manual_str:>15}' | {match} | "
+                      f"top3: {[f'{tid.item()}({v.item():.2f})' for v, tid in zip(top3_vals, top3_ids)]}")
+            
+            engine_tokens.append(token_id)
+            
+            from context import reset_context
+            reset_context()
+            engine.scheduler.postprocess(seqs, [token_id])
+            # Check stop tokens
+            if engine._stop_token_ids:
+                from llm_engine import SequenceStatus
+                for s in seqs:
+                    if not s.is_finished and token_id in engine._stop_token_ids:
+                        s.status = SequenceStatus.FINISHED
+                        engine.scheduler.block_manager.deallocate(s)
+                        if s in engine.scheduler.running:
+                            engine.scheduler.running.remove(s)
+            step_count += 1
     
     if is_main:
-        response = tokenizer.decode(output_ids, skip_special_tokens=False)
-        print(f"\nGeneration time: {t1-t0:.1f}s")
-        print(f"Output tokens: {len(output_ids)}")
-        print(f"Throughput: {len(output_ids)/(t1-t0):.1f} tok/s")
-        print(f"\n--- Engine Response ---")
-        print(response[:2000])
-        if len(response) > 2000:
-            print(f"\n... ({len(response)} total chars)")
-        print(f"--- End Response ---")
+        engine_text = tokenizer.decode(engine_tokens, skip_special_tokens=False)
+        print(f"\nEngine tokens ({len(engine_tokens)}): '{engine_text}'")
+        manual_text = tokenizer.decode(manual_greedy_tokens, skip_special_tokens=False)
+        print(f"Manual tokens ({len(manual_greedy_tokens)}): '{manual_text}'")
         
-        # Check if answer is correct
-        from math_util import safe_math_answer_timeout
-        _, extracted, reward = safe_math_answer_timeout(
-            response, [gold_answer], tokenizer,
-            prompt_type="chat", alg=['is_equiv', 'text'], timeout=30
-        )
-        print(f"\nExtracted answer: '{extracted}'")
-        print(f"Gold answer: '{gold_answer}'")
-        print(f"Reward: {reward}")
-        print(f"Correct: {reward > 0.5}")
+        # Count matches
+        matches = sum(1 for a, b in zip(engine_tokens, manual_greedy_tokens) if a == b)
+        total = min(len(engine_tokens), len(manual_greedy_tokens))
+        print(f"\nMatch: {matches}/{total} tokens agree")
 
 
 if __name__ == "__main__":
