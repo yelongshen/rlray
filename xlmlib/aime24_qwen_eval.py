@@ -234,7 +234,7 @@ class AIME24Evaluator:
         )
         
         print(f"  [DEBUG] Tokenizing (prompt len: {len(text)} chars)...", flush=True)
-        inputs = self.tokenizer([text], return_tensors="pt").to(self.device)
+        inputs = self.tokenizer([text], return_tensors="pt", add_special_tokens=False).to(self.device)
         print(f"  [DEBUG] Input tokens: {inputs['input_ids'].shape[1]}", flush=True)
         
         print(f"  [DEBUG] Starting generation (max_new_tokens={self.max_new_tokens})...", flush=True)
