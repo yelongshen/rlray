@@ -776,9 +776,6 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         cache_params = None,
     ) -> torch.Tensor:
-        # Apply padding mask
-        hidden_states = apply_mask_to_padding_states(hidden_states, attention_mask)
-        
         batch_size, seq_len, _ = hidden_states.shape
         
         use_precomputed_states = (
