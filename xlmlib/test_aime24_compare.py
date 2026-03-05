@@ -153,115 +153,154 @@ def test_engine(args):
         print("\n✗ LARGE logit differences — investigating per-layer...")
     
     # ===== Per-layer hidden state comparison =====
+    # Strategy: run HF model layer-by-layer, save per-layer outputs to CPU,
+    # then free HF model, then run engine model and compare.
     print(f"\n{'='*60}")
     print("PER-LAYER HIDDEN STATE COMPARISON")
     print(f"{'='*60}")
-    print("Running HF model layer-by-layer and comparing with engine model...")
     
-    # We need to re-load HF model for per-layer comparison
-    print("\nRe-loading HF model for per-layer comparison...", flush=True)
+    # Step 1: Re-load HF model, collect per-layer hidden states, save to CPU
+    print("\n[Phase 1] Re-loading HF model to collect per-layer states...", flush=True)
+    
+    # Free engine model first to make room
+    del model
+    torch.cuda.empty_cache()
+    
     hf_model2 = AutoModelForCausalLM.from_pretrained(
         args.model_path, torch_dtype=torch.bfloat16,
         device_map=device, trust_remote_code=True
     )
     hf_model2.eval()
     
+    hf_layer_states = {}  # layer_idx -> {ln, attn, mlp, hidden} on CPU
+    
     with torch.no_grad():
-        # === Embedding ===
-        hf_embed = hf_model2.model.embed_tokens(input_tensor)
-        engine_embed = model.model.embed_tokens(input_tensor)
-        embed_diff = (hf_embed.float() - engine_embed.float()).abs().max().item()
-        print(f"Embedding:          max_diff={embed_diff:.6f}")
+        hf_hidden = hf_model2.model.embed_tokens(input_tensor)
+        hf_layer_states['embedding'] = hf_hidden[0, -1, :10].float().cpu().clone()
         
-        # === RoPE ===
-        seq_len = input_tensor.shape[1]
-        position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
-        
-        hf_cos, hf_sin = hf_model2.model.rotary_emb(hf_embed, position_ids)
-        engine_cos, engine_sin = model.model.rotary_emb(engine_embed, position_ids)
-        rope_diff = max(
-            (hf_cos.float() - engine_cos.float()).abs().max().item(),
-            (hf_sin.float() - engine_sin.float()).abs().max().item()
-        )
-        print(f"RoPE cos/sin:       max_diff={rope_diff:.6f}")
-        
-        # === Layer by layer ===
-        hf_hidden = hf_embed
-        engine_hidden = engine_embed
+        position_ids = torch.arange(input_tensor.shape[1], device=device).unsqueeze(0)
         
         num_layers = len(hf_model2.model.layers)
         for layer_idx in range(num_layers):
             hf_layer = hf_model2.model.layers[layer_idx]
-            engine_layer = model.model.layers[layer_idx]
             
-            # Get layer type
-            layer_type = engine_layer.layer_type
-            
-            # --- Input layernorm ---
+            # Input layernorm
             hf_ln = hf_layer.input_layernorm(hf_hidden)
-            engine_ln = engine_layer.input_layernorm(engine_hidden)
-            ln_diff = (hf_ln.float() - engine_ln.float()).abs().max().item()
             
-            # --- Attention ---
-            if layer_type == "linear_attention":
+            # Detect layer type
+            if hasattr(hf_layer, 'linear_attn') and hf_layer.linear_attn is not None:
+                lt = "linear_attention"
                 hf_attn_out = hf_layer.linear_attn(hf_ln)
                 if isinstance(hf_attn_out, tuple):
                     hf_attn_out = hf_attn_out[0]
-                engine_attn_out = engine_layer.linear_attn(engine_ln)
             else:
+                lt = "full_attention"
                 hf_attn_out = hf_layer.self_attn(hf_ln, position_ids=position_ids)
                 if isinstance(hf_attn_out, tuple):
                     hf_attn_out = hf_attn_out[0]
+            
+            hf_hidden = hf_hidden + hf_attn_out
+            hf_post_ln = hf_layer.post_attention_layernorm(hf_hidden)
+            hf_mlp_out = hf_layer.mlp(hf_post_ln)
+            hf_hidden = hf_hidden + hf_mlp_out
+            
+            # Save last-token hidden state to CPU (small: just [hidden_size])
+            hf_layer_states[layer_idx] = {
+                'type': lt,
+                'ln': hf_ln[0, -1, :].float().cpu().clone(),
+                'attn': hf_attn_out[0, -1, :].float().cpu().clone(),
+                'mlp': hf_mlp_out[0, -1, :].float().cpu().clone(),
+                'hidden': hf_hidden[0, -1, :].float().cpu().clone(),
+            }
+            
+            if layer_idx % 8 == 0:
+                print(f"  HF layer {layer_idx}/{num_layers} done", flush=True)
+        
+        # Final norm + lm_head
+        hf_final = hf_model2.model.norm(hf_hidden)
+        hf_final_logits = hf_model2.lm_head(hf_final)[0, -1, :]
+        hf_layer_states['final_norm'] = hf_final[0, -1, :].float().cpu().clone()
+        hf_layer_states['final_logits'] = hf_final_logits.float().cpu().clone()
+    
+    print(f"  HF states collected for {num_layers} layers", flush=True)
+    
+    # Free HF model
+    del hf_model2
+    torch.cuda.empty_cache()
+    
+    # Step 2: Re-load engine model, run per-layer, compare
+    print("\n[Phase 2] Re-loading engine model to compare...", flush=True)
+    model, tokenizer2, config = load_qwen3_next_for_engine(
+        args.model_path, device=device, tensor_parallel_size=1
+    )
+    
+    print(f"\n{'='*60}")
+    print("Layer-by-layer comparison (last token hidden state):")
+    print(f"{'='*60}")
+    
+    with torch.no_grad():
+        engine_hidden = model.model.embed_tokens(input_tensor)
+        
+        embed_diff = (engine_hidden[0, -1, :10].float().cpu() - hf_layer_states['embedding']).abs().max().item()
+        print(f"Embedding:          max_diff={embed_diff:.6f}")
+        
+        seq_len = input_tensor.shape[1]
+        position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
+        engine_cos, engine_sin = model.model.rotary_emb(engine_hidden, position_ids)
+        
+        causal_mask = torch.triu(
+            torch.full((seq_len, seq_len), float('-inf'), device=device, dtype=torch.bfloat16),
+            diagonal=1
+        ).unsqueeze(0).unsqueeze(0)
+        
+        for layer_idx in range(num_layers):
+            engine_layer = model.model.layers[layer_idx]
+            hf_state = hf_layer_states[layer_idx]
+            lt = hf_state['type']
+            
+            # Input layernorm
+            engine_ln = engine_layer.input_layernorm(engine_hidden)
+            ln_diff = (engine_ln[0, -1, :].float().cpu() - hf_state['ln']).abs().max().item()
+            
+            # Attention
+            if lt == "linear_attention":
+                engine_attn_out = engine_layer.linear_attn(engine_ln)
+            else:
                 engine_attn_out, _, _ = engine_layer.self_attn(
                     engine_ln, position_ids=position_ids,
                     cos=engine_cos, sin=engine_sin,
                     attention_mask=causal_mask,
                 )
-            attn_diff = (hf_attn_out.float() - engine_attn_out.float()).abs().max().item()
+            attn_diff = (engine_attn_out[0, -1, :].float().cpu() - hf_state['attn']).abs().max().item()
             
-            # --- Residual ---
-            hf_hidden = hf_hidden + hf_attn_out
             engine_hidden = engine_hidden + engine_attn_out
             
-            # --- Post-attn layernorm ---
-            hf_post_ln = hf_layer.post_attention_layernorm(hf_hidden)
+            # MLP
             engine_post_ln = engine_layer.post_attention_layernorm(engine_hidden)
-            
-            # --- MLP/MoE ---
-            hf_mlp_out = hf_layer.mlp(hf_post_ln)
             engine_mlp_out = engine_layer.mlp(engine_post_ln)
-            mlp_diff = (hf_mlp_out.float() - engine_mlp_out.float()).abs().max().item()
+            mlp_diff = (engine_mlp_out[0, -1, :].float().cpu() - hf_state['mlp']).abs().max().item()
             
-            # --- Residual ---
-            hf_hidden = hf_hidden + hf_mlp_out
             engine_hidden = engine_hidden + engine_mlp_out
             
-            hidden_diff = (hf_hidden.float() - engine_hidden.float()).abs().max().item()
+            hidden_diff = (engine_hidden[0, -1, :].float().cpu() - hf_state['hidden']).abs().max().item()
             
             flag = " ⚠" if hidden_diff > 0.5 else ""
-            print(f"Layer {layer_idx:>2} ({layer_type:>17}): "
+            print(f"Layer {layer_idx:>2} ({lt:>17}): "
                   f"ln={ln_diff:.4f}, attn={attn_diff:.4f}, mlp={mlp_diff:.4f}, "
                   f"hidden={hidden_diff:.4f}{flag}")
             
-            # Stop early if divergence is huge
             if hidden_diff > 10.0:
                 print(f"  *** DIVERGENCE TOO LARGE, stopping ***")
                 break
         
-        # --- Final norm ---
-        hf_final = hf_model2.model.norm(hf_hidden)
+        # Final norm + lm_head
         engine_final = model.model.norm(engine_hidden)
-        final_diff = (hf_final.float() - engine_final.float()).abs().max().item()
-        print(f"\nFinal norm:         max_diff={final_diff:.6f}")
-        
-        # --- LM head ---
-        hf_final_logits = hf_model2.lm_head(hf_final)[0, -1, :]
         engine_final_logits = model.lm_head(engine_final)[0, -1, :]
-        lmhead_diff = (hf_final_logits.float() - engine_final_logits.float()).abs().max().item()
-        print(f"LM head logits:     max_diff={lmhead_diff:.6f}")
-    
-    del hf_model2
-    torch.cuda.empty_cache()
+        
+        final_diff = (engine_final[0, -1, :].float().cpu() - hf_layer_states['final_norm']).abs().max().item()
+        logit_diff = (engine_final_logits.float().cpu() - hf_layer_states['final_logits']).abs().max().item()
+        print(f"\nFinal norm:         max_diff={final_diff:.6f}")
+        print(f"LM head logits:     max_diff={logit_diff:.6f}")
 
 
 if __name__ == "__main__":
