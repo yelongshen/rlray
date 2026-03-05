@@ -252,21 +252,6 @@ def test_engine(args):
         print("\n✗ LARGE differences — KV cache or recurrent state bug!")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", type=str, default="./models/Qwen_Qwen3-Coder-Next/")
-    parser.add_argument("--gpu_ids", type=str, default=None)
-    parser.add_argument("--tensor_parallel", type=int, default=1)
-    parser.add_argument("--test", type=str, default="ab", choices=["ab", "hf", "both"],
-                        help="ab=A vs B (prefill+decode), hf=HF vs Engine layer-wise, both=run both")
-    args = parser.parse_args()
-    
-    if args.test in ("ab", "both"):
-        test_engine(args)
-    if args.test in ("hf", "both"):
-        test_hf_vs_engine(args)
-
-
 def test_hf_vs_engine(args):
     """
     Compare HF model vs Engine model layer-by-layer hidden states.
@@ -453,3 +438,18 @@ def test_hf_vs_engine(args):
         logit_diff = (engine_final_logits.float().cpu() - hf_layer_states['final_logits']).abs().max().item()
         print(f"\nFinal norm:     max_diff={final_diff:.6f}")
         print(f"LM head logits: max_diff={logit_diff:.6f}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_path", type=str, default="./models/Qwen_Qwen3-Coder-Next/")
+    parser.add_argument("--gpu_ids", type=str, default=None)
+    parser.add_argument("--tensor_parallel", type=int, default=1)
+    parser.add_argument("--test", type=str, default="ab", choices=["ab", "hf", "both"],
+                        help="ab=A vs B (prefill+decode), hf=HF vs Engine layer-wise, both=run both")
+    args = parser.parse_args()
+    
+    if args.test in ("ab", "both"):
+        test_engine(args)
+    if args.test in ("hf", "both"):
+        test_hf_vs_engine(args)
