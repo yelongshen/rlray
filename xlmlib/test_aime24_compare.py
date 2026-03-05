@@ -195,7 +195,18 @@ def test_engine(args):
                     hf_attn_out = hf_attn_out[0]
             else:
                 lt = "full_attention"
-                hf_attn_out = hf_layer.self_attn(hf_ln, position_ids=position_ids)
+                # HF Qwen3NextAttention requires position_embeddings=(cos,sin) and attention_mask
+                hf_cos, hf_sin = hf_model2.model.rotary_emb(hf_ln, position_ids)
+                # Create causal mask for HF model
+                hf_causal = torch.triu(
+                    torch.full((seq_len, seq_len), float('-inf'), device=device, dtype=torch.bfloat16),
+                    diagonal=1
+                ).unsqueeze(0).unsqueeze(0)
+                hf_attn_out = hf_layer.self_attn(
+                    hf_ln, 
+                    position_embeddings=(hf_cos, hf_sin),
+                    attention_mask=hf_causal,
+                )
                 if isinstance(hf_attn_out, tuple):
                     hf_attn_out = hf_attn_out[0]
             
