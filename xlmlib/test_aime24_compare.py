@@ -150,35 +150,118 @@ def test_engine(args):
     elif diff.max().item() < 1.0:
         print("\n⚠ Small logit differences — likely bf16 rounding, but tokens match")
     else:
-        print("\n✗ LARGE logit differences — weight loading or model structure bug!")
+        print("\n✗ LARGE logit differences — investigating per-layer...")
     
-    # ===== Debug: inspect norm weights =====
+    # ===== Per-layer hidden state comparison =====
     print(f"\n{'='*60}")
-    print("DEBUG: Norm weight inspection")
+    print("PER-LAYER HIDDEN STATE COMPARISON")
     print(f"{'='*60}")
+    print("Running HF model layer-by-layer and comparing with engine model...")
     
-    # Engine norm weights
-    layer0 = model.model.layers[0]
-    ln_w = layer0.input_layernorm.weight.data
-    print(f"Engine layer0.input_layernorm.weight: mean={ln_w.mean().item():.6f}, std={ln_w.std().item():.6f}, "
-          f"min={ln_w.min().item():.6f}, max={ln_w.max().item():.6f}")
-    print(f"  First 10: {ln_w[:10].tolist()}")
-    print(f"  NOTE: Engine uses (1 + weight) formula, so effective weight = {(1 + ln_w.mean()).item():.6f}")
+    # We need to re-load HF model for per-layer comparison
+    print("\nRe-loading HF model for per-layer comparison...", flush=True)
+    hf_model2 = AutoModelForCausalLM.from_pretrained(
+        args.model_path, torch_dtype=torch.bfloat16,
+        device_map=device, trust_remote_code=True
+    )
+    hf_model2.eval()
     
-    post_ln_w = layer0.post_attention_layernorm.weight.data
-    print(f"Engine layer0.post_attention_layernorm.weight: mean={post_ln_w.mean().item():.6f}")
+    with torch.no_grad():
+        # === Embedding ===
+        hf_embed = hf_model2.model.embed_tokens(input_tensor)
+        engine_embed = model.model.embed_tokens(input_tensor)
+        embed_diff = (hf_embed.float() - engine_embed.float()).abs().max().item()
+        print(f"Embedding:          max_diff={embed_diff:.6f}")
+        
+        # === RoPE ===
+        seq_len = input_tensor.shape[1]
+        position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
+        
+        hf_cos, hf_sin = hf_model2.model.rotary_emb(hf_embed, position_ids)
+        engine_cos, engine_sin = model.model.rotary_emb(engine_embed, position_ids)
+        rope_diff = max(
+            (hf_cos.float() - engine_cos.float()).abs().max().item(),
+            (hf_sin.float() - engine_sin.float()).abs().max().item()
+        )
+        print(f"RoPE cos/sin:       max_diff={rope_diff:.6f}")
+        
+        # === Layer by layer ===
+        hf_hidden = hf_embed
+        engine_hidden = engine_embed
+        
+        num_layers = len(hf_model2.model.layers)
+        for layer_idx in range(num_layers):
+            hf_layer = hf_model2.model.layers[layer_idx]
+            engine_layer = model.model.layers[layer_idx]
+            
+            # Get layer type
+            layer_type = engine_layer.layer_type
+            
+            # --- Input layernorm ---
+            hf_ln = hf_layer.input_layernorm(hf_hidden)
+            engine_ln = engine_layer.input_layernorm(engine_hidden)
+            ln_diff = (hf_ln.float() - engine_ln.float()).abs().max().item()
+            
+            # --- Attention ---
+            if layer_type == "linear_attention":
+                hf_attn_out = hf_layer.linear_attn(hf_ln)
+                if isinstance(hf_attn_out, tuple):
+                    hf_attn_out = hf_attn_out[0]
+                engine_attn_out = engine_layer.linear_attn(engine_ln)
+            else:
+                hf_attn_out = hf_layer.self_attn(hf_ln, position_ids=position_ids)
+                if isinstance(hf_attn_out, tuple):
+                    hf_attn_out = hf_attn_out[0]
+                engine_attn_out, _, _ = engine_layer.self_attn(
+                    engine_ln, position_ids=position_ids,
+                    cos=engine_cos, sin=engine_sin,
+                    attention_mask=causal_mask,
+                )
+            attn_diff = (hf_attn_out.float() - engine_attn_out.float()).abs().max().item()
+            
+            # --- Residual ---
+            hf_hidden = hf_hidden + hf_attn_out
+            engine_hidden = engine_hidden + engine_attn_out
+            
+            # --- Post-attn layernorm ---
+            hf_post_ln = hf_layer.post_attention_layernorm(hf_hidden)
+            engine_post_ln = engine_layer.post_attention_layernorm(engine_hidden)
+            
+            # --- MLP/MoE ---
+            hf_mlp_out = hf_layer.mlp(hf_post_ln)
+            engine_mlp_out = engine_layer.mlp(engine_post_ln)
+            mlp_diff = (hf_mlp_out.float() - engine_mlp_out.float()).abs().max().item()
+            
+            # --- Residual ---
+            hf_hidden = hf_hidden + hf_mlp_out
+            engine_hidden = engine_hidden + engine_mlp_out
+            
+            hidden_diff = (hf_hidden.float() - engine_hidden.float()).abs().max().item()
+            
+            flag = " ⚠" if hidden_diff > 0.5 else ""
+            print(f"Layer {layer_idx:>2} ({layer_type:>17}): "
+                  f"ln={ln_diff:.4f}, attn={attn_diff:.4f}, mlp={mlp_diff:.4f}, "
+                  f"hidden={hidden_diff:.4f}{flag}")
+            
+            # Stop early if divergence is huge
+            if hidden_diff > 10.0:
+                print(f"  *** DIVERGENCE TOO LARGE, stopping ***")
+                break
+        
+        # --- Final norm ---
+        hf_final = hf_model2.model.norm(hf_hidden)
+        engine_final = model.model.norm(engine_hidden)
+        final_diff = (hf_final.float() - engine_final.float()).abs().max().item()
+        print(f"\nFinal norm:         max_diff={final_diff:.6f}")
+        
+        # --- LM head ---
+        hf_final_logits = hf_model2.lm_head(hf_final)[0, -1, :]
+        engine_final_logits = model.lm_head(engine_final)[0, -1, :]
+        lmhead_diff = (hf_final_logits.float() - engine_final_logits.float()).abs().max().item()
+        print(f"LM head logits:     max_diff={lmhead_diff:.6f}")
     
-    final_norm_w = model.model.norm.weight.data
-    print(f"Engine final_norm.weight: mean={final_norm_w.mean().item():.6f}")
-    
-    # Check: are the weights near 0 (expect for (1+w) formula) or near 1 (standard formula)?
-    if ln_w.abs().mean().item() > 0.1:
-        print("\n⚠ WARNING: Norm weights are NOT near zero!")
-        print("  If HF uses standard w*x formula and our engine uses (1+w)*x,")
-        print("  then we're computing (1 + w_actual)*x instead of w_actual*x")
-        print("  FIX: Change RMSNorm to use weight*x (standard formula)")
-    else:
-        print("\n  Norm weights ≈ 0, (1+w) formula should give ≈ 1.0 — correct")
+    del hf_model2
+    torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
