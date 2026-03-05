@@ -82,64 +82,60 @@ def test_engine(args):
     # ===== Test 1: Direct forward pass (no KV cache) =====
     if is_main:
         print(f"\n{'='*60}")
-        print("TEST 1: Direct forward pass (no KV cache) - first token logits")
+        print("TEST 1: Direct forward - first 2 tokens (ground truth)")
         print(f"{'='*60}")
     
     model_device = next(model.parameters()).device
+    
+    # Token 1: full prompt forward
     input_tensor = torch.tensor([input_ids], device=model_device)
     with torch.no_grad():
-        logits, _ = model(input_tensor)
+        logits1, _ = model(input_tensor)
+    
+    last_logits1 = logits1[0, -1, :]
+    token1 = last_logits1.argmax().item()
+    top5_vals1, top5_ids1 = torch.topk(last_logits1, 5)
     
     if is_main:
-        last_logits = logits[0, -1, :]
-        top5_vals, top5_ids = torch.topk(last_logits, 5)
-        print(f"Logits shape: {logits.shape}")
-        print(f"Top-5 next tokens (greedy, no cache):")
-        for val, tid in zip(top5_vals, top5_ids):
-            token_str = tokenizer.decode([tid.item()], skip_special_tokens=False)
-            print(f"  {tid.item():>8} ({val.item():>8.3f}): '{token_str}'")
-        
-        greedy_token_nocache = top5_ids[0].item()
-        print(f"\nGreedy next token: {greedy_token_nocache} = '{tokenizer.decode([greedy_token_nocache])}'")
+        print(f"Token 1 (from prompt): greedy={token1} '{tokenizer.decode([token1])}'")
+        print(f"  Top-5: {[(tid.item(), f'{v.item():.3f}', tokenizer.decode([tid.item()])) for v, tid in zip(top5_vals1, top5_ids1)]}")
     
-    # ===== Test 2: HF generate for first 10 tokens (ground truth) =====
-    if is_main:
-        print(f"\n{'='*60}")
-        print("TEST 2: HF model.generate() - first 20 tokens (ground truth)")
-        print(f"{'='*60}")
-    
-    # Use autoregressive decode manually WITHOUT KV cache (slow but correct)
-    
-    manual_ids = list(input_ids)
-    manual_greedy_tokens = []
-    if is_main:
-        print("Manual autoregressive decode (no KV cache, ground truth):")
+    # Token 2: append token1, forward again (no cache)
+    input_tensor2 = torch.tensor([input_ids + [token1]], device=model_device)
     with torch.no_grad():
-        for step in range(20):
-            inp = torch.tensor([manual_ids], device=model_device)
-            logits_step, _ = model(inp)
-            next_logits = logits_step[0, -1, :]
-            next_token = next_logits.argmax().item()
-            manual_greedy_tokens.append(next_token)
-            manual_ids.append(next_token)
-            if is_main:
-                token_str = tokenizer.decode([next_token], skip_special_tokens=False)
-                top3_vals, top3_ids = torch.topk(next_logits, 3)
-                print(f"  Step {step:>2}: token={next_token:>8} '{token_str:>15}' | "
-                      f"top3: {[f'{tid.item()}({v.item():.2f})' for v, tid in zip(top3_vals, top3_ids)]}")
+        logits2, _ = model(input_tensor2)
+    
+    last_logits2 = logits2[0, -1, :]
+    token2 = last_logits2.argmax().item()
+    top5_vals2, top5_ids2 = torch.topk(last_logits2, 5)
     
     if is_main:
-        manual_text = tokenizer.decode(manual_greedy_tokens, skip_special_tokens=False)
-        print(f"\nManual decode (20 tokens): '{manual_text}'")
+        print(f"\nToken 2 (after token1={token1}): greedy={token2} '{tokenizer.decode([token2])}'")
+        print(f"  Top-5: {[(tid.item(), f'{v.item():.3f}', tokenizer.decode([tid.item()])) for v, tid in zip(top5_vals2, top5_ids2)]}")
     
-    # ===== Test 3: Engine prefill + first decode steps =====
+    # Token 3: append token1+token2, forward again (no cache)
+    input_tensor3 = torch.tensor([input_ids + [token1, token2]], device=model_device)
+    with torch.no_grad():
+        logits3, _ = model(input_tensor3)
+    
+    last_logits3 = logits3[0, -1, :]
+    token3 = last_logits3.argmax().item()
+    top5_vals3, top5_ids3 = torch.topk(last_logits3, 5)
+    
+    if is_main:
+        print(f"\nToken 3 (after token1,2={token1},{token2}): greedy={token3} '{tokenizer.decode([token3])}'")
+        print(f"  Top-5: {[(tid.item(), f'{v.item():.3f}', tokenizer.decode([tid.item()])) for v, tid in zip(top5_vals3, top5_ids3)]}")
+        print(f"\nGround truth first 3 tokens: '{tokenizer.decode([token1, token2, token3])}'")
+    
+    ground_truth_tokens = [token1, token2, token3]
+    ground_truth_logits = [last_logits1, last_logits2, last_logits3]
+    
+    # ===== Test 2: Engine prefill + first 3 decode steps =====
     if is_main:
         print(f"\n{'='*60}")
-        print("TEST 3: Engine prefill + decode (with KV cache) - first 20 tokens")
+        print("TEST 2: Engine (with KV cache) - first 3 tokens")  
         print(f"{'='*60}")
     
-    # We need to trace the engine's token-by-token output.
-    # Create engine and generate, capturing first 20 tokens from the step() loop.
     config.eos_token_id = tokenizer.eos_token_id
     engine = HybridLLMEngine(
         model, config, str(model_device),
@@ -148,59 +144,88 @@ def test_engine(args):
     
     from llm_engine import Sequence
     seq = Sequence(input_ids)
-    seq.max_tokens = 20  # Only generate 20 tokens for comparison
+    seq.max_tokens = 3
     engine.scheduler.add(seq)
     
     engine_tokens = []
+    engine_logits_list = []
     step_count = 0
     while not engine.is_finished():
         seqs, is_prefill = engine.scheduler.schedule()
         
         if is_prefill:
-            token_ids_out = engine.model_runner.call("run", seqs, True)
-            engine.scheduler.postprocess(seqs, token_ids_out)
+            # Run prefill and capture the logits
+            from context import get_context, reset_context
+            input_ids_p, positions_p = engine.model_runner.prepare_prefill(seqs)
+            logits_prefill = engine.model_runner.run_model(input_ids_p, positions_p, True)
+            
+            if logits_prefill.dim() == 1:
+                logits_prefill = logits_prefill.unsqueeze(0)
+            
+            # Greedy token from prefill
+            prefill_token = logits_prefill[0].argmax().item() if logits_prefill.shape[0] == 1 else logits_prefill[-1].argmax().item()
+            prefill_logits = logits_prefill[0] if logits_prefill.shape[0] == 1 else logits_prefill[-1]
+            
+            if is_main:
+                top5_e, top5_ei = torch.topk(prefill_logits, 5)
+                print(f"\nPrefill token 1: engine={prefill_token} '{tokenizer.decode([prefill_token])}'")
+                print(f"  Top-5: {[(tid.item(), f'{v.item():.3f}', tokenizer.decode([tid.item()])) for v, tid in zip(top5_e, top5_ei)]}")
+                
+                # Compare logits with ground truth
+                gt_logits = ground_truth_logits[0]
+                diff = (prefill_logits.float() - gt_logits.float()).abs()
+                print(f"  Max logit diff vs ground truth: {diff.max().item():.6f}")
+                print(f"  Mean logit diff: {diff.mean().item():.6f}")
+                match = "✓" if prefill_token == ground_truth_tokens[0] else "✗"
+                print(f"  Match: {match} (engine={prefill_token}, gt={ground_truth_tokens[0]})")
+            
+            engine_tokens.append(prefill_token)
+            engine_logits_list.append(prefill_logits)
+            
+            reset_context()
+            engine.scheduler.postprocess(seqs, [prefill_token])
             # Check stop tokens
             if engine._stop_token_ids:
                 from llm_engine import SequenceStatus
-                for s, tid in zip(seqs, token_ids_out):
-                    if not s.is_finished and tid in engine._stop_token_ids:
+                for s in seqs:
+                    if not s.is_finished and prefill_token in engine._stop_token_ids:
                         s.status = SequenceStatus.FINISHED
                         engine.scheduler.block_manager.deallocate(s)
                         if s in engine.scheduler.running:
                             engine.scheduler.running.remove(s)
-            if is_main:
-                print(f"  Prefill done, first token: {token_ids_out}")
-                engine_tokens.extend(token_ids_out if isinstance(token_ids_out, list) else [token_ids_out])
         else:
-            # Decode step - capture the logits before sampling
+            # Decode step
             input_ids_t, positions_t = engine.model_runner.prepare_decode(seqs)
             logits_engine = engine.model_runner.run_model(input_ids_t, positions_t, False)
             
             if logits_engine.dim() == 1:
                 logits_engine = logits_engine.unsqueeze(0)
             
-            # Greedy
-            token_id = logits_engine.argmax(dim=-1).item()
+            token_id = logits_engine[0].argmax().item()
+            decode_logits = logits_engine[0]
             
-            if is_main and step_count < 20:
-                top3_vals, top3_ids = torch.topk(logits_engine[0], 3)
-                token_str = tokenizer.decode([token_id], skip_special_tokens=False)
+            gt_idx = step_count + 1  # +1 because prefill was step 0
+            if is_main and gt_idx < len(ground_truth_tokens):
+                top5_e, top5_ei = torch.topk(decode_logits, 5)
+                print(f"\nDecode token {gt_idx+1}: engine={token_id} '{tokenizer.decode([token_id])}'")
+                print(f"  Top-5: {[(tid.item(), f'{v.item():.3f}', tokenizer.decode([tid.item()])) for v, tid in zip(top5_e, top5_ei)]}")
                 
-                # Compare with manual decode
-                match = "✓" if step_count < len(manual_greedy_tokens) and token_id == manual_greedy_tokens[step_count] else "✗"
-                manual_tok = manual_greedy_tokens[step_count] if step_count < len(manual_greedy_tokens) else -1
-                manual_str = tokenizer.decode([manual_tok], skip_special_tokens=False) if manual_tok >= 0 else "N/A"
-                
-                print(f"  Step {step_count:>2}: engine={token_id:>8} '{token_str:>15}' | "
-                      f"manual={manual_tok:>8} '{manual_str:>15}' | {match} | "
-                      f"top3: {[f'{tid.item()}({v.item():.2f})' for v, tid in zip(top3_vals, top3_ids)]}")
+                gt_logits = ground_truth_logits[gt_idx]
+                diff = (decode_logits.float() - gt_logits.float()).abs()
+                print(f"  Max logit diff vs ground truth: {diff.max().item():.6f}")
+                print(f"  Mean logit diff: {diff.mean().item():.6f}")
+                # Show where the biggest differences are
+                top_diff_vals, top_diff_ids = torch.topk(diff, 5)
+                print(f"  Biggest diffs at tokens: {[(tid.item(), f'{v.item():.4f}', tokenizer.decode([tid.item()])) for v, tid in zip(top_diff_vals, top_diff_ids)]}")
+                match = "✓" if token_id == ground_truth_tokens[gt_idx] else "✗"
+                print(f"  Match: {match} (engine={token_id}, gt={ground_truth_tokens[gt_idx]})")
             
             engine_tokens.append(token_id)
+            engine_logits_list.append(decode_logits)
             
             from context import reset_context
             reset_context()
             engine.scheduler.postprocess(seqs, [token_id])
-            # Check stop tokens
             if engine._stop_token_ids:
                 from llm_engine import SequenceStatus
                 for s in seqs:
@@ -212,15 +237,13 @@ def test_engine(args):
             step_count += 1
     
     if is_main:
-        engine_text = tokenizer.decode(engine_tokens, skip_special_tokens=False)
-        print(f"\nEngine tokens ({len(engine_tokens)}): '{engine_text}'")
-        manual_text = tokenizer.decode(manual_greedy_tokens, skip_special_tokens=False)
-        print(f"Manual tokens ({len(manual_greedy_tokens)}): '{manual_text}'")
-        
-        # Count matches
-        matches = sum(1 for a, b in zip(engine_tokens, manual_greedy_tokens) if a == b)
-        total = min(len(engine_tokens), len(manual_greedy_tokens))
-        print(f"\nMatch: {matches}/{total} tokens agree")
+        print(f"\n{'='*60}")
+        print("SUMMARY")
+        print(f"{'='*60}")
+        print(f"Ground truth: {ground_truth_tokens} = '{tokenizer.decode(ground_truth_tokens)}'")
+        print(f"Engine:       {engine_tokens} = '{tokenizer.decode(engine_tokens)}'")
+        matches = sum(1 for a, b in zip(engine_tokens, ground_truth_tokens) if a == b)
+        print(f"Match: {matches}/{min(len(engine_tokens), len(ground_truth_tokens))}")
 
 
 if __name__ == "__main__":
