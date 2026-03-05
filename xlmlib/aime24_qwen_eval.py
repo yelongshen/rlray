@@ -241,16 +241,18 @@ class AIME24Evaluator:
         import time
         start_time = time.time()
         with torch.no_grad():
-            outputs = self.model.generate(
+            gen_kwargs = dict(
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
-                temperature=self.temperature,
-                do_sample=True,
-                top_p=0.95,
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
-                use_cache=True,  # Explicit KV cache for faster generation
+                use_cache=True,
             )
+            if self.temperature > 0:
+                gen_kwargs.update(temperature=self.temperature, do_sample=True, top_p=0.95)
+            else:
+                gen_kwargs.update(do_sample=False)
+            outputs = self.model.generate(**gen_kwargs)
         gen_time = time.time() - start_time
         new_tokens = outputs.shape[1] - inputs['input_ids'].shape[1]
         print(f"  [DEBUG] Generation done in {gen_time:.1f}s. New tokens: {new_tokens} ({new_tokens/gen_time:.1f} tok/s)", flush=True)
