@@ -61,8 +61,8 @@ def test_engine(args):
     print(f"Gold answer: {gold_answer}")
     print(f"{'='*60}")
     
-    # ===== Load HF model =====
-    print("\n[1/2] Loading HF model...", flush=True)
+    # ===== Single load: HF model → collect states → convert to engine =====
+    print("\nLoading HF model (single load)...", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     hf_model = AutoModelForCausalLM.from_pretrained(
         args.model_path, torch_dtype=torch.bfloat16,
@@ -73,16 +73,16 @@ def test_engine(args):
     # Build prompt
     prompt_text = build_prompt(problem, tokenizer, prompt_type="chat")
     input_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
-    print(f"Prompt tokens: {len(input_ids)}")
-    print(f"Last 5 tokens: '{tokenizer.decode(input_ids[-5:], skip_special_tokens=False)}'")
-    
-    # HF forward
-    print("\n[HF] Forward pass...", flush=True)
     input_tensor = torch.tensor([input_ids], device=device)
+    seq_len = input_tensor.shape[1]
+    print(f"Prompt tokens: {seq_len}")
+    
+    # === HF full forward (for top-level logit comparison) ===
+    print("\n[HF] Full forward pass...", flush=True)
     t0 = time.time()
     with torch.no_grad():
         hf_out = hf_model(input_tensor)
-        hf_logits = hf_out.logits[0, -1, :]  # last position
+        hf_logits = hf_out.logits[0, -1, :]
     print(f"[HF] Done in {time.time()-t0:.1f}s", flush=True)
     
     hf_token = hf_logits.argmax().item()
@@ -90,31 +90,77 @@ def test_engine(args):
     print(f"[HF] Greedy token: {hf_token} '{tokenizer.decode([hf_token])}'")
     print(f"[HF] Top-5: {[(tid.item(), f'{v.item():.3f}', tokenizer.decode([tid.item()])) for v, tid in zip(hf_top5_vals, hf_top5_ids)]}")
     
-    # Free HF model
-    print("\nFreeing HF model...", flush=True)
-    del hf_model
+    # Save HF logits to CPU
+    hf_logits_cpu = hf_logits.float().cpu().clone()
+    
+    # === HF per-layer states ===
+    print("\n[HF] Collecting per-layer states...", flush=True)
+    hf_layer_states = {}
+    position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
+    
+    with torch.no_grad():
+        hf_hidden = hf_model.model.embed_tokens(input_tensor)
+        num_layers = len(hf_model.model.layers)
+        
+        for layer_idx in range(num_layers):
+            hf_layer = hf_model.model.layers[layer_idx]
+            hf_ln = hf_layer.input_layernorm(hf_hidden)
+            
+            if hasattr(hf_layer, 'linear_attn') and hf_layer.linear_attn is not None:
+                lt = "linear_attention"
+                hf_attn_out = hf_layer.linear_attn(hf_ln)
+                if isinstance(hf_attn_out, tuple): hf_attn_out = hf_attn_out[0]
+            else:
+                lt = "full_attention"
+                hf_cos, hf_sin = hf_model.model.rotary_emb(hf_ln, position_ids)
+                hf_causal = torch.triu(torch.full((seq_len, seq_len), float('-inf'), device=device, dtype=torch.bfloat16), diagonal=1).unsqueeze(0).unsqueeze(0)
+                hf_attn_out = hf_layer.self_attn(hf_ln, position_embeddings=(hf_cos, hf_sin), attention_mask=hf_causal)
+                if isinstance(hf_attn_out, tuple): hf_attn_out = hf_attn_out[0]
+            
+            hf_hidden = hf_hidden + hf_attn_out
+            hf_post_ln = hf_layer.post_attention_layernorm(hf_hidden)
+            hf_mlp_out = hf_layer.mlp(hf_post_ln)
+            hf_hidden = hf_hidden + hf_mlp_out
+            
+            hf_layer_states[layer_idx] = {
+                'type': lt,
+                'ln': hf_ln[0, -1, :].float().cpu().clone(),
+                'attn': hf_attn_out[0, -1, :].float().cpu().clone(),
+                'mlp': hf_mlp_out[0, -1, :].float().cpu().clone(),
+                'hidden': hf_hidden[0, -1, :].float().cpu().clone(),
+            }
+            if layer_idx % 8 == 0:
+                print(f"  HF layer {layer_idx}/{num_layers}", flush=True)
+        
+        hf_final = hf_model.model.norm(hf_hidden)
+        hf_layer_states['final_norm'] = hf_final[0, -1, :].float().cpu().clone()
+    
+    print(f"  HF states collected for {num_layers} layers", flush=True)
+    
+    # === Convert HF → Engine model (no second disk load) ===
+    print("\n[Convert] HF → Engine model (move HF to CPU, create engine on GPU)...", flush=True)
+    hf_model_cpu = hf_model.to("cpu")
     torch.cuda.empty_cache()
     
-    # ===== Load our engine model =====
-    print("\n[2/2] Loading engine model...", flush=True)
-    model, tokenizer2, config = load_qwen3_next_for_engine(
-        args.model_path, device=device, tensor_parallel_size=1
-    )
+    hf_config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
+    from qwen3_next_engine import Qwen3NextForLLMEngine, _copy_weights
+    engine_model = Qwen3NextForLLMEngine(hf_config, use_tp=False)
+    engine_model = engine_model.to(device=device, dtype=torch.bfloat16)
+    _copy_weights(hf_model_cpu, engine_model, hf_config, use_tp=False, target_device=device, target_dtype=torch.bfloat16)
+    engine_model.eval()
     
-    # Engine forward (no cache)
-    # NOTE: Must pass causal attention_mask since without cache_params,
-    # the full attention layers use fallback path without causal masking.
-    print("\n[Engine] Forward pass (no cache, with causal mask)...", flush=True)
-    input_tensor = torch.tensor([input_ids], device=device)
-    seq_len = input_tensor.shape[1]
-    # Create causal mask: [1, 1, seq_len, seq_len], upper triangle = -inf
+    del hf_model, hf_model_cpu
+    torch.cuda.empty_cache()
+    
+    # === Engine full forward (for top-level logit comparison) ===
+    print("\n[Engine] Full forward pass (no cache, with causal mask)...", flush=True)
     causal_mask = torch.triu(
         torch.full((seq_len, seq_len), float('-inf'), device=device, dtype=torch.bfloat16),
         diagonal=1
     ).unsqueeze(0).unsqueeze(0)
     t0 = time.time()
     with torch.no_grad():
-        engine_logits_full, _ = model(input_tensor, attention_mask=causal_mask)
+        engine_logits_full, _ = engine_model(input_tensor, attention_mask=causal_mask)
         engine_logits = engine_logits_full[0, -1, :]
     print(f"[Engine] Done in {time.time()-t0:.1f}s", flush=True)
     
@@ -123,176 +169,56 @@ def test_engine(args):
     print(f"[Engine] Greedy token: {engine_token} '{tokenizer.decode([engine_token])}'")
     print(f"[Engine] Top-5: {[(tid.item(), f'{v.item():.3f}', tokenizer.decode([tid.item()])) for v, tid in zip(engine_top5_vals, engine_top5_ids)]}")
     
-    # ===== Compare logits =====
+    # === Logit comparison ===
     print(f"\n{'='*60}")
-    print("LOGIT COMPARISON (HF vs Engine, no cache)")
+    print("LOGIT COMPARISON (HF vs Engine)")
     print(f"{'='*60}")
     
-    diff = (engine_logits.float() - hf_logits.float()).abs()
+    diff = (engine_logits.float().cpu() - hf_logits_cpu).abs()
     print(f"Max absolute diff:  {diff.max().item():.6f}")
     print(f"Mean absolute diff: {diff.mean().item():.6f}")
     print(f"Token match: {'✓' if hf_token == engine_token else '✗'} (HF={hf_token}, Engine={engine_token})")
+    corr = torch.corrcoef(torch.stack([hf_logits_cpu, engine_logits.float().cpu()]))[0, 1].item()
+    print(f"Logit correlation: {corr:.6f}")
     
-    # Top differences
-    top_diff_vals, top_diff_ids = torch.topk(diff, 10)
-    print(f"\nLargest logit diffs:")
-    for v, tid in zip(top_diff_vals, top_diff_ids):
-        hf_val = hf_logits[tid].item()
-        eng_val = engine_logits[tid].item()
-        print(f"  token={tid.item():>8} '{tokenizer.decode([tid.item()]):>15}': HF={hf_val:>8.3f}, Engine={eng_val:>8.3f}, diff={v.item():.4f}")
-    
-    # Correlation
-    corr = torch.corrcoef(torch.stack([hf_logits.float(), engine_logits.float()]))[0, 1].item()
-    print(f"\nLogit correlation: {corr:.6f}")
-    
-    if diff.max().item() < 0.1:
-        print("\n✓ Logits match well — weight loading is correct")
-    elif diff.max().item() < 1.0:
-        print("\n⚠ Small logit differences — likely bf16 rounding, but tokens match")
-    else:
-        print("\n✗ LARGE logit differences — investigating per-layer...")
-    
-    # ===== Per-layer hidden state comparison =====
-    # Strategy: run HF model layer-by-layer, save per-layer outputs to CPU,
-    # then free HF model, then run engine model and compare.
+    # === Per-layer comparison (engine vs saved HF states) ===
     print(f"\n{'='*60}")
-    print("PER-LAYER HIDDEN STATE COMPARISON")
+    print("PER-LAYER COMPARISON (last token hidden state):")
     print(f"{'='*60}")
     
-    # Step 1: Re-load HF model, collect per-layer hidden states, save to CPU
-    print("\n[Phase 1] Re-loading HF model to collect per-layer states...", flush=True)
-    
-    # Free engine model first to make room
-    del model
-    torch.cuda.empty_cache()
-    
-    hf_model2 = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=torch.bfloat16,
-        device_map=device, trust_remote_code=True
-    )
-    hf_model2.eval()
-    
-    hf_layer_states = {}  # layer_idx -> {ln, attn, mlp, hidden} on CPU
+    causal_mask = torch.triu(
+        torch.full((seq_len, seq_len), float('-inf'), device=device, dtype=torch.bfloat16),
+        diagonal=1
+    ).unsqueeze(0).unsqueeze(0)
     
     with torch.no_grad():
-        hf_hidden = hf_model2.model.embed_tokens(input_tensor)
-        hf_layer_states['embedding'] = hf_hidden[0, -1, :10].float().cpu().clone()
-        
-        position_ids = torch.arange(input_tensor.shape[1], device=device).unsqueeze(0)
-        
-        num_layers = len(hf_model2.model.layers)
-        for layer_idx in range(num_layers):
-            hf_layer = hf_model2.model.layers[layer_idx]
-            
-            # Input layernorm
-            hf_ln = hf_layer.input_layernorm(hf_hidden)
-            
-            # Detect layer type
-            if hasattr(hf_layer, 'linear_attn') and hf_layer.linear_attn is not None:
-                lt = "linear_attention"
-                hf_attn_out = hf_layer.linear_attn(hf_ln)
-                if isinstance(hf_attn_out, tuple):
-                    hf_attn_out = hf_attn_out[0]
-            else:
-                lt = "full_attention"
-                # HF Qwen3NextAttention requires position_embeddings=(cos,sin) and attention_mask
-                hf_cos, hf_sin = hf_model2.model.rotary_emb(hf_ln, position_ids)
-                # Create causal mask for HF model
-                hf_causal = torch.triu(
-                    torch.full((seq_len, seq_len), float('-inf'), device=device, dtype=torch.bfloat16),
-                    diagonal=1
-                ).unsqueeze(0).unsqueeze(0)
-                hf_attn_out = hf_layer.self_attn(
-                    hf_ln, 
-                    position_embeddings=(hf_cos, hf_sin),
-                    attention_mask=hf_causal,
-                )
-                if isinstance(hf_attn_out, tuple):
-                    hf_attn_out = hf_attn_out[0]
-            
-            hf_hidden = hf_hidden + hf_attn_out
-            hf_post_ln = hf_layer.post_attention_layernorm(hf_hidden)
-            hf_mlp_out = hf_layer.mlp(hf_post_ln)
-            hf_hidden = hf_hidden + hf_mlp_out
-            
-            # Save last-token hidden state to CPU (small: just [hidden_size])
-            hf_layer_states[layer_idx] = {
-                'type': lt,
-                'ln': hf_ln[0, -1, :].float().cpu().clone(),
-                'attn': hf_attn_out[0, -1, :].float().cpu().clone(),
-                'mlp': hf_mlp_out[0, -1, :].float().cpu().clone(),
-                'hidden': hf_hidden[0, -1, :].float().cpu().clone(),
-            }
-            
-            if layer_idx % 8 == 0:
-                print(f"  HF layer {layer_idx}/{num_layers} done", flush=True)
-        
-        # Final norm + lm_head
-        hf_final = hf_model2.model.norm(hf_hidden)
-        hf_final_logits = hf_model2.lm_head(hf_final)[0, -1, :]
-        hf_layer_states['final_norm'] = hf_final[0, -1, :].float().cpu().clone()
-        hf_layer_states['final_logits'] = hf_final_logits.float().cpu().clone()
-    
-    print(f"  HF states collected for {num_layers} layers", flush=True)
-    
-    # Free HF model
-    del hf_model2
-    torch.cuda.empty_cache()
-    
-    # Step 2: Re-load engine model, run per-layer, compare
-    print("\n[Phase 2] Re-loading engine model to compare...", flush=True)
-    model, tokenizer2, config = load_qwen3_next_for_engine(
-        args.model_path, device=device, tensor_parallel_size=1
-    )
-    
-    print(f"\n{'='*60}")
-    print("Layer-by-layer comparison (last token hidden state):")
-    print(f"{'='*60}")
-    
-    with torch.no_grad():
-        engine_hidden = model.model.embed_tokens(input_tensor)
-        
-        embed_diff = (engine_hidden[0, -1, :10].float().cpu() - hf_layer_states['embedding']).abs().max().item()
-        print(f"Embedding:          max_diff={embed_diff:.6f}")
-        
-        seq_len = input_tensor.shape[1]
+        engine_hidden = engine_model.model.embed_tokens(input_tensor)
         position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
-        engine_cos, engine_sin = model.model.rotary_emb(engine_hidden, position_ids)
-        
-        causal_mask = torch.triu(
-            torch.full((seq_len, seq_len), float('-inf'), device=device, dtype=torch.bfloat16),
-            diagonal=1
-        ).unsqueeze(0).unsqueeze(0)
+        engine_cos, engine_sin = engine_model.model.rotary_emb(engine_hidden, position_ids)
         
         for layer_idx in range(num_layers):
-            engine_layer = model.model.layers[layer_idx]
+            engine_layer = engine_model.model.layers[layer_idx]
             hf_state = hf_layer_states[layer_idx]
             lt = hf_state['type']
             
-            # Input layernorm
             engine_ln = engine_layer.input_layernorm(engine_hidden)
             ln_diff = (engine_ln[0, -1, :].float().cpu() - hf_state['ln']).abs().max().item()
             
-            # Attention
             if lt == "linear_attention":
                 engine_attn_out = engine_layer.linear_attn(engine_ln)
             else:
                 engine_attn_out, _, _ = engine_layer.self_attn(
                     engine_ln, position_ids=position_ids,
-                    cos=engine_cos, sin=engine_sin,
-                    attention_mask=causal_mask,
+                    cos=engine_cos, sin=engine_sin, attention_mask=causal_mask,
                 )
             attn_diff = (engine_attn_out[0, -1, :].float().cpu() - hf_state['attn']).abs().max().item()
             
             engine_hidden = engine_hidden + engine_attn_out
-            
-            # MLP
             engine_post_ln = engine_layer.post_attention_layernorm(engine_hidden)
             engine_mlp_out = engine_layer.mlp(engine_post_ln)
             mlp_diff = (engine_mlp_out[0, -1, :].float().cpu() - hf_state['mlp']).abs().max().item()
             
             engine_hidden = engine_hidden + engine_mlp_out
-            
             hidden_diff = (engine_hidden[0, -1, :].float().cpu() - hf_state['hidden']).abs().max().item()
             
             flag = " ⚠" if hidden_diff > 0.5 else ""
@@ -304,14 +230,9 @@ def test_engine(args):
                 print(f"  *** DIVERGENCE TOO LARGE, stopping ***")
                 break
         
-        # Final norm + lm_head
-        engine_final = model.model.norm(engine_hidden)
-        engine_final_logits = model.lm_head(engine_final)[0, -1, :]
-        
+        engine_final = engine_model.model.norm(engine_hidden)
         final_diff = (engine_final[0, -1, :].float().cpu() - hf_layer_states['final_norm']).abs().max().item()
-        logit_diff = (engine_final_logits.float().cpu() - hf_layer_states['final_logits']).abs().max().item()
         print(f"\nFinal norm:         max_diff={final_diff:.6f}")
-        print(f"LM head logits:     max_diff={logit_diff:.6f}")
 
 
 if __name__ == "__main__":
