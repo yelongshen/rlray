@@ -143,6 +143,34 @@ def test_engine(args):
         print("\n⚠ Small logit differences — likely bf16 rounding, but tokens match")
     else:
         print("\n✗ LARGE logit differences — weight loading or model structure bug!")
+    
+    # ===== Debug: inspect norm weights =====
+    print(f"\n{'='*60}")
+    print("DEBUG: Norm weight inspection")
+    print(f"{'='*60}")
+    
+    # Engine norm weights
+    layer0 = model.model.layers[0]
+    ln_w = layer0.input_layernorm.weight.data
+    print(f"Engine layer0.input_layernorm.weight: mean={ln_w.mean().item():.6f}, std={ln_w.std().item():.6f}, "
+          f"min={ln_w.min().item():.6f}, max={ln_w.max().item():.6f}")
+    print(f"  First 10: {ln_w[:10].tolist()}")
+    print(f"  NOTE: Engine uses (1 + weight) formula, so effective weight = {(1 + ln_w.mean()).item():.6f}")
+    
+    post_ln_w = layer0.post_attention_layernorm.weight.data
+    print(f"Engine layer0.post_attention_layernorm.weight: mean={post_ln_w.mean().item():.6f}")
+    
+    final_norm_w = model.model.norm.weight.data
+    print(f"Engine final_norm.weight: mean={final_norm_w.mean().item():.6f}")
+    
+    # Check: are the weights near 0 (expect for (1+w) formula) or near 1 (standard formula)?
+    if ln_w.abs().mean().item() > 0.1:
+        print("\n⚠ WARNING: Norm weights are NOT near zero!")
+        print("  If HF uses standard w*x formula and our engine uses (1+w)*x,")
+        print("  then we're computing (1 + w_actual)*x instead of w_actual*x")
+        print("  FIX: Change RMSNorm to use weight*x (standard formula)")
+    else:
+        print("\n  Norm weights ≈ 0, (1+w) formula should give ≈ 1.0 — correct")
 
 
 if __name__ == "__main__":
