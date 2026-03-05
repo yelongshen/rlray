@@ -2974,7 +2974,7 @@ class HybridLLMEngine:
             # Print full generation every 300 steps for seq 0
             if seq.num_completion_tokens % 300 == 0 and self.tokenizer is not None and get_tp_rank() == 0:
                 try:
-                    full_text = self.tokenizer.decode(seq.completion_token_ids, skip_special_tokens=True)
+                    full_text = self.tokenizer.decode(seq.completion_token_ids, skip_special_tokens=False)
                     print(f'\n  ===== GENERATION PREVIEW seq={seq.seq_id} step={seq.num_completion_tokens} =====', flush=True)
                     print(full_text, flush=True)
                     print(f'  ===== END PREVIEW ({len(seq.completion_token_ids)} tokens) =====\n', flush=True)
