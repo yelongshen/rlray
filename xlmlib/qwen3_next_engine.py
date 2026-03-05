@@ -2050,6 +2050,27 @@ def load_qwen3_next_for_engine(
     llm_config.eos_token_id = tokenizer.eos_token_id
     llm_config.tensor_parallel_size = tensor_parallel_size
     
+    # Collect all stop token IDs for Qwen3-Next (may have multiple: eos, im_end, endoftext)
+    stop_token_ids = set()
+    if isinstance(tokenizer.eos_token_id, list):
+        stop_token_ids.update(tokenizer.eos_token_id)
+    elif tokenizer.eos_token_id is not None:
+        stop_token_ids.add(tokenizer.eos_token_id)
+    # Try to find additional stop tokens by name
+    for special_name in ['<|im_end|>', '<|endoftext|>', '<|end|>']:
+        try:
+            tid = tokenizer.convert_tokens_to_ids(special_name)
+            if tid is not None and tid != tokenizer.unk_token_id:
+                stop_token_ids.add(tid)
+        except:
+            pass
+    llm_config.stop_token_ids = stop_token_ids
+    if is_main:
+        print(f"EOS token: id={tokenizer.eos_token_id}, token='{tokenizer.eos_token}'")
+        print(f"Stop token IDs: {stop_token_ids}")
+        for tid in stop_token_ids:
+            print(f"  {tid} -> '{tokenizer.decode([tid])}'")
+    
     # Clean up HF model
     del hf_model
     torch.cuda.empty_cache()
@@ -2939,6 +2960,11 @@ class HybridLLMEngine:
         self.model_runner = HybridModelRunner(model, llm_config, device, temperature=temperature, top_k=top_k, max_batch_size=max_batch_size)
         self.scheduler = Scheduler(llm_config, self.model_runner.block_size, self.model_runner.num_kvcache_blocks)
         self.scheduler.max_num_seqs = max_batch_size  # Limit concurrent sequences
+        
+        # Patch scheduler to support multiple stop tokens (Qwen3 uses <|im_end|>, <|endoftext|>, etc.)
+        self._stop_token_ids = getattr(llm_config, 'stop_token_ids', set())
+        if self._stop_token_ids:
+            print(f'  [HybridLLMEngine] Stop tokens: {self._stop_token_ids}', flush=True)
 
     def is_finished(self):
         return self.scheduler.is_finished()
@@ -2960,6 +2986,17 @@ class HybridLLMEngine:
         token_ids = self.model_runner.call("run", seqs, is_prefill)
         t_run = _time.time()
         self.scheduler.postprocess(seqs, token_ids)
+        
+        # Check additional stop tokens not covered by llm_engine's hardcoded EOS check
+        if self._stop_token_ids and not is_prefill:
+            from llm_engine import SequenceStatus
+            for seq, tid in zip(seqs, token_ids):
+                if not seq.is_finished and tid in self._stop_token_ids:
+                    seq.status = SequenceStatus.FINISHED
+                    self.scheduler.block_manager.deallocate(seq)
+                    if seq in self.scheduler.running:
+                        self.scheduler.running.remove(seq)
+        
         t_post = _time.time()
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
         # Print decode progress every 50 tokens
