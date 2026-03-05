@@ -361,7 +361,7 @@ def main():
     parser.add_argument("--top_k", type=int, default=0, help="Top-k sampling (0=disabled)")
     parser.add_argument("--max_batch_size", type=int, default=64, help="Max sequences per engine batch (e.g. 64)")
     parser.add_argument("--n_rollout", type=int, default=1, help="Number of rollouts per problem")
-    parser.add_argument("--prompt_type", type=str, default="v17", help="Prompt template version")
+    parser.add_argument("--prompt_type", type=str, default="chat", help="Prompt template version (use 'chat' with chat_template)")
     parser.add_argument("--max_problems", type=int, default=None, help="Max problems to evaluate (for testing)")
     parser.add_argument("--debug", action="store_true", help="Print detailed output")
     parser.add_argument("--gpu_ids", type=str, default=None, help="GPU IDs to use (e.g. '0,1' or '2,3')")
