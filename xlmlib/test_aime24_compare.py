@@ -30,16 +30,17 @@ def get_aime24_problem_0():
         data = json.loads(f.readline())
     return data["problem"], str(data["answer"])
 
-
-def build_prompt(problem_text, tokenizer, prompt_type="chat"):
-    """Build prompt exactly as eval_qwen3_next does."""
+def build_prompt(problem_text, tokenizer, prompt_type="v11"):
+    """Build prompt exactly as eval_qwen3_next does."""        
     prompt_text = process_math_prompt(problem_text, prompt_type=prompt_type)
-    if prompt_type in ('chat', 'v_chat'):
-        messages = [{"role": "user", "content": prompt_text}]
-        prompt_text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-    return prompt_text
+
+    messages = [{"role": "user", "content": prompt_text}]
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    return text
 
 
 def test_engine(args):
@@ -75,8 +76,8 @@ def test_engine(args):
     )
     
     # Build prompt
-    prompt_text = build_prompt(problem, tokenizer, prompt_type="chat")
-    input_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+    prompt_text = build_prompt(problem, tokenizer, prompt_type="v11")
+    input_ids = tokenizer.encode(prompt_text)
     n = len(input_ids)
     print(f"Prompt tokens: {n}")
     
