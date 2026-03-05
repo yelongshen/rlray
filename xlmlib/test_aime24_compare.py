@@ -89,8 +89,13 @@ def test_engine(args):
     
     # Token 1: full prompt forward
     input_tensor = torch.tensor([input_ids], device=model_device)
+    if is_main:
+        print(f"  Computing token 1 ({len(input_ids)} tokens forward)...", flush=True)
+    t0 = time.time()
     with torch.no_grad():
         logits1, _ = model(input_tensor)
+    if is_main:
+        print(f"  Done in {time.time()-t0:.1f}s", flush=True)
     
     last_logits1 = logits1[0, -1, :]
     token1 = last_logits1.argmax().item()
@@ -102,8 +107,13 @@ def test_engine(args):
     
     # Token 2: append token1, forward again (no cache)
     input_tensor2 = torch.tensor([input_ids + [token1]], device=model_device)
+    if is_main:
+        print(f"  Computing token 2 ({len(input_ids)+1} tokens forward)...", flush=True)
+    t0 = time.time()
     with torch.no_grad():
         logits2, _ = model(input_tensor2)
+    if is_main:
+        print(f"  Done in {time.time()-t0:.1f}s", flush=True)
     
     last_logits2 = logits2[0, -1, :]
     token2 = last_logits2.argmax().item()
@@ -115,8 +125,13 @@ def test_engine(args):
     
     # Token 3: append token1+token2, forward again (no cache)
     input_tensor3 = torch.tensor([input_ids + [token1, token2]], device=model_device)
+    if is_main:
+        print(f"  Computing token 3 ({len(input_ids)+2} tokens forward)...", flush=True)
+    t0 = time.time()
     with torch.no_grad():
         logits3, _ = model(input_tensor3)
+    if is_main:
+        print(f"  Done in {time.time()-t0:.1f}s", flush=True)
     
     last_logits3 = logits3[0, -1, :]
     token3 = last_logits3.argmax().item()
