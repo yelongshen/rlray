@@ -427,7 +427,8 @@ def main():
                        help="Max new tokens to generate (1024 is usually plenty for math)")
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--prompt_type", type=str, default="v11",
-                       choices=["v8", "v9", "v10", "v11", "v12"])
+                       choices=["v8", "v9", "v10", "v11", "v12", 'v17', "v_chat", "chat"],
+                       help="Prompt template version to use")
     
     args = parser.parse_args()
     
