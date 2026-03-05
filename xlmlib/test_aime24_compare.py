@@ -102,11 +102,19 @@ def test_engine(args):
     )
     
     # Engine forward (no cache)
-    print("\n[Engine] Forward pass (no cache)...", flush=True)
+    # NOTE: Must pass causal attention_mask since without cache_params,
+    # the full attention layers use fallback path without causal masking.
+    print("\n[Engine] Forward pass (no cache, with causal mask)...", flush=True)
     input_tensor = torch.tensor([input_ids], device=device)
+    seq_len = input_tensor.shape[1]
+    # Create causal mask: [1, 1, seq_len, seq_len], upper triangle = -inf
+    causal_mask = torch.triu(
+        torch.full((seq_len, seq_len), float('-inf'), device=device, dtype=torch.bfloat16),
+        diagonal=1
+    ).unsqueeze(0).unsqueeze(0)
     t0 = time.time()
     with torch.no_grad():
-        engine_logits_full, _ = model(input_tensor)
+        engine_logits_full, _ = model(input_tensor, attention_mask=causal_mask)
         engine_logits = engine_logits_full[0, -1, :]
     print(f"[Engine] Done in {time.time()-t0:.1f}s", flush=True)
     
