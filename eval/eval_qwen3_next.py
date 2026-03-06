@@ -193,6 +193,7 @@ def evaluate(
     n_rollout=1,
     prompt_type="v11",
     debug=False,
+    output_generations_path=None,
 ):
     """Run evaluation on a set of math problems.
     
@@ -220,6 +221,11 @@ def evaluate(
               f"actual_batch_size={problems_per_batch * n_rollout}")
     
     start_time = time.time()
+
+    detail_f = None
+    if is_main and output_generations_path:
+        detail_f = open(output_generations_path, "w", encoding="utf-8")
+        print(f"Saving detailed generations to: {output_generations_path}")
     
     # Process problems in chunks
     for batch_start in range(0, len(problems), problems_per_batch):
@@ -228,6 +234,7 @@ def evaluate(
         # Tokenize all problems in this chunk
         batch_prompts = []
         batch_meta = []  # (problem_index_in_chunk, rollout_index) for each prompt
+        batch_prompt_texts = []  # chat-formatted prompt text per problem in chunk
         for local_idx, problem in enumerate(batch_problems):
             prompt_text = process_math_prompt(problem["problem"], prompt_type=prompt_type)
             
@@ -235,6 +242,7 @@ def evaluate(
             #if hasattr(tokenizer, 'apply_chat_template') and prompt_type in ('v_chat', 'chat'):
             messages = [{"role": "user", "content": prompt_text}]
             prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            batch_prompt_texts.append(prompt_text)
             # Use add_special_tokens=False since chat template already includes all special tokens
             input_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
             #else:
@@ -289,6 +297,21 @@ def evaluate(
             if pid not in results:
                 results[pid] = []
             results[pid].append(reward)
+
+            if detail_f is not None:
+                detail_record = {
+                    "problem_index": prob_idx,
+                    "id": pid,
+                    "rollout": rollout,
+                    "prompt": batch_prompt_texts[local_idx],
+                    "generation": response,
+                    "gold_answer": problem["answer"],
+                    "predicted_answer": extracted_answer,
+                    "reward": float(reward),
+                    "correct": bool(reward > 0.5),
+                    "response_token_len": int(len(output_ids)),
+                }
+                detail_f.write(json.dumps(detail_record, ensure_ascii=False) + "\n")
             
             # Print sample outputs for first 5 problems (all rollouts) + every 10th problem (rollout 0)
             show_sample = is_main and (prob_idx < 5 or (prob_idx % 10 == 0 and rollout == 0))
@@ -313,6 +336,10 @@ def evaluate(
                   f"elapsed={elapsed:.1f}s, avg_len={total_response_len/max(1,total_generated):.0f}")
     
     elapsed = time.time() - start_time
+
+    if detail_f is not None:
+        detail_f.flush()
+        detail_f.close()
     
     # Compute metrics
     if is_main:
@@ -367,6 +394,8 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Print detailed output")
     parser.add_argument("--gpu_ids", type=str, default=None, help="GPU IDs to use (e.g. '0,1' or '2,3')")
     parser.add_argument("--output", type=str, default=None, help="Save results to JSON file")
+    parser.add_argument("--output_generations", type=str, default=None,
+                        help="Save per-rollout generations to JSONL (prompt/generation/gold/reward)")
     args = parser.parse_args()
     
     # Set visible GPUs before any CUDA operations
@@ -412,6 +441,7 @@ def main():
         n_rollout=args.n_rollout,
         prompt_type=args.prompt_type,
         debug=args.debug,
+        output_generations_path=args.output_generations,
     )
     
     # Save results
