@@ -66,6 +66,14 @@ except ImportError:
         TRITON_MOE_AVAILABLE = False
         print("Warning: Triton fused MoE kernel not available, using fallback")
 
+# Optional override for MoE backend during debugging/comparison.
+# Values: "triton" | "bmm" | "loop" | "auto" (default behavior).
+_MOE_BACKEND = _os.getenv("QWEN3NEXT_MOE_BACKEND", "auto").strip().lower()
+if _MOE_BACKEND not in ("auto", "triton", "bmm", "loop"):
+    print(f"Warning: invalid QWEN3NEXT_MOE_BACKEND='{_MOE_BACKEND}', falling back to auto")
+    _MOE_BACKEND = "auto"
+print(f"Qwen3Next MoE backend mode: {_MOE_BACKEND}")
+
 try:
     from context import set_context, get_context, reset_context
 except ImportError:
@@ -1061,20 +1069,31 @@ class Qwen3NextExpertsForEngine(nn.Module):
         top_k = top_k_indices.shape[1]
         
         # Strategy selection:
-        # - Triton (pre-transposed): fastest at ALL batch sizes (1.2ms@bs=1 to 2.1ms@bs=256)
-        #   With pre-transposed weights + pre-allocated buffers, Triton beats BMM even at bs=1.
-        # - Loop: memory-safe fallback when Triton is not available
-        if TRITON_MOE_AVAILABLE:
-            return self._forward_triton(hidden_states, top_k_indices, top_k_weights,
-                                         tp_rank, tp_world_size, num_tokens, top_k)
-        elif num_tokens * top_k <= 1024:
-            # BMM fallback for small batches when Triton unavailable
-            return self._forward_fused(hidden_states, top_k_indices, top_k_weights,
-                                       tp_rank, tp_world_size, num_tokens, top_k)
-        else:
-            # Loop fallback for large batches when Triton unavailable
+        # - "auto": Triton when available, otherwise bmm/loop fallback.
+        # - Forced mode via QWEN3NEXT_MOE_BACKEND for parity debugging.
+        if _MOE_BACKEND == "loop":
             return self._forward_loop(hidden_states, top_k_indices, top_k_weights,
                                       tp_rank, tp_world_size)
+
+        if _MOE_BACKEND == "bmm":
+            return self._forward_fused(hidden_states, top_k_indices, top_k_weights,
+                                       tp_rank, tp_world_size, num_tokens, top_k)
+
+        if _MOE_BACKEND == "triton":
+            if not TRITON_MOE_AVAILABLE:
+                raise RuntimeError("QWEN3NEXT_MOE_BACKEND=triton but Triton MoE kernel is unavailable")
+            return self._forward_triton(hidden_states, top_k_indices, top_k_weights,
+                                        tp_rank, tp_world_size, num_tokens, top_k)
+
+        # auto mode
+        if TRITON_MOE_AVAILABLE:
+            return self._forward_triton(hidden_states, top_k_indices, top_k_weights,
+                                        tp_rank, tp_world_size, num_tokens, top_k)
+        if num_tokens * top_k <= 1024:
+            return self._forward_fused(hidden_states, top_k_indices, top_k_weights,
+                                       tp_rank, tp_world_size, num_tokens, top_k)
+        return self._forward_loop(hidden_states, top_k_indices, top_k_weights,
+                                  tp_rank, tp_world_size)
     
     def _forward_loop(self, hidden_states, top_k_indices, top_k_weights, tp_rank, tp_world_size):
         """Expert-by-expert loop (memory-efficient for large batches like prefill)."""
