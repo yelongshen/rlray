@@ -383,21 +383,6 @@ def test_hf_vs_engine(args):
     engine_token = engine_logits.argmax().item()
     print(f"[Engine] Greedy token: {engine_token} '{tokenizer2.decode([engine_token])}'")
 
-    # Compare post-final-norm last-token hidden states (HF vs Engine)
-    eng_paged_post_norm_last = engine_hidden_states[-1][0, -1, :].float().cpu()
-    eng_direct_post_norm_last = engine_direct_states[-1][0, -1, :].float().cpu()
-    hf_postnorm_vs_paged = (hf_post_norm_last - eng_paged_post_norm_last).abs().max().item()
-    hf_postnorm_vs_direct = (hf_post_norm_last - eng_direct_post_norm_last).abs().max().item()
-
-    print(f"\n{'='*60}")
-    print("POST-FINAL-NORM COMPARISON (last token hidden)")
-    print(f"{'='*60}")
-    print(f"HF(norm(last_layer)) vs Engine-Paged final_norm:  max_diff={hf_postnorm_vs_paged:.6f}")
-    print(f"HF(norm(last_layer)) vs Engine-Direct final_norm: max_diff={hf_postnorm_vs_direct:.6f}")
-    
-    # === Step 3: Per-layer comparison ===
-    layer_types = getattr(config, 'layer_types', ['full_attention'] * num_layers)
-
     def _layer_metrics(ref_vec, test_vec, eps=1e-6):
         delta = (test_vec - ref_vec).float()
         max_diff = delta.abs().max().item()
@@ -406,6 +391,31 @@ def test_hf_vs_engine(args):
         diff_l2 = torch.linalg.vector_norm(delta).item()
         diff_percent = 100.0 * diff_l2 / (ref_l2 + eps)
         return max_diff, avg_diff_l2, diff_percent
+
+    # Compare post-final-norm last-token hidden states (HF vs Engine)
+    eng_paged_post_norm_last = engine_hidden_states[-1][0, -1, :].float().cpu()
+    eng_direct_post_norm_last = engine_direct_states[-1][0, -1, :].float().cpu()
+    hf_postnorm_vs_paged = _layer_metrics(hf_post_norm_last, eng_paged_post_norm_last)
+    hf_postnorm_vs_direct = _layer_metrics(hf_post_norm_last, eng_direct_post_norm_last)
+
+    print(f"\n{'='*60}")
+    print("POST-FINAL-NORM COMPARISON (last token hidden)")
+    print(f"{'='*60}")
+    print(
+        "HF(last_layer) vs Engine-Paged final_norm:  "
+        f"max_diff={hf_postnorm_vs_paged[0]:.6f} "
+        f"avg_diff_l2={hf_postnorm_vs_paged[1]:.6f} "
+        f"diff_percent={hf_postnorm_vs_paged[2]:.4f}%"
+    )
+    print(
+        "HF(last_layer) vs Engine-Direct final_norm: "
+        f"max_diff={hf_postnorm_vs_direct[0]:.6f} "
+        f"avg_diff_l2={hf_postnorm_vs_direct[1]:.6f} "
+        f"diff_percent={hf_postnorm_vs_direct[2]:.4f}%"
+    )
+    
+    # === Step 3: Per-layer comparison ===
+    layer_types = getattr(config, 'layer_types', ['full_attention'] * num_layers)
     
     print(f"\n{'='*60}")
     print("PER-LAYER COMPARISON (last token hidden state)")
