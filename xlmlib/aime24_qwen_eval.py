@@ -187,7 +187,8 @@ class AIME24Evaluator:
         max_new_tokens: int = 4096,
         temperature: float = 0.7,
         prompt_type: str = "v11",
-        gpu_ids: Optional[str] = None
+        gpu_ids: Optional[str] = None,
+        hf_device_map: str = "auto",
     ):
         from transformers import AutoModelForCausalLM, AutoTokenizer
         
@@ -204,15 +205,18 @@ class AIME24Evaluator:
                 device_map = {"": self.device}
             else:
                 self.device = "cuda:0"  # First GPU for inputs
-                device_map = "auto"  # Let transformers handle multi-GPU
+                device_map = hf_device_map  # Let transformers handle multi-GPU
         else:
             self.device = device
-            device_map = "auto"
+            device_map = hf_device_map
         
         print(f"Loading model from {model_path}...")
         print(f"Device: {self.device}, Device map: {device_map}")
         
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.tokenizer.padding_side = "left"
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path,
             torch_dtype=torch.bfloat16,
@@ -221,6 +225,79 @@ class AIME24Evaluator:
         )
         self.model.eval()
         print("Model loaded!")
+
+    def solve_batch(self, problems: List[AIME24Problem]) -> List[AIME24Result]:
+        """Solve a batch of problems using a single HF generate() call."""
+        if len(problems) == 1:
+            return [self.solve(problems[0])]
+
+        print(f"  [DEBUG] Building batch prompts for {len(problems)} problems...", flush=True)
+        chat_texts = []
+        for problem in problems:
+            prompt = process_math_prompt(problem.problem, prompt_type=self.prompt_type)
+            messages = [{"role": "user", "content": prompt}]
+            text = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            chat_texts.append(text)
+
+        inputs = self.tokenizer(
+            chat_texts,
+            return_tensors="pt",
+            add_special_tokens=False,
+            padding=True,
+        ).to(self.device)
+        input_len = inputs["input_ids"].shape[1]
+        print(f"  [DEBUG] Batch tokenized. batch={len(problems)}, padded_prompt_tokens={input_len}", flush=True)
+
+        start_time = time.time()
+        with torch.no_grad():
+            gen_kwargs = dict(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+                use_cache=True,
+            )
+            if self.temperature > 0:
+                gen_kwargs.update(temperature=self.temperature, do_sample=True, top_p=0.95)
+            else:
+                gen_kwargs.update(do_sample=False)
+            outputs = self.model.generate(**gen_kwargs)
+        gen_time = time.time() - start_time
+        total_new_tokens = outputs.shape[1] - input_len
+        print(
+            f"  [DEBUG] Batch generation done in {gen_time:.1f}s. "
+            f"New tokens/sample(avg): {total_new_tokens:.1f}",
+            flush=True,
+        )
+
+        batch_results = []
+        for idx, problem in enumerate(problems):
+            response = self.tokenizer.decode(outputs[idx][input_len:], skip_special_tokens=True)
+            _, predicted_answer, reward = safe_math_answer_timeout(
+                response,
+                [problem.answer],
+                self.tokenizer,
+                prompt_type=self.prompt_type,
+                alg=['is_equiv', 'text'],
+                timeout=30
+            )
+            batch_results.append(AIME24Result(
+                id=problem.id,
+                problem=problem.problem,
+                prompt=chat_texts[idx],
+                gold_answer=problem.answer,
+                predicted_answer=predicted_answer,
+                generation=response,
+                response=response,
+                reward=reward,
+                correct=(reward > 0.5)
+            ))
+
+        return batch_results
     
     def solve(self, problem: AIME24Problem) -> AIME24Result:
         """Solve single problem using HF generate."""
@@ -437,6 +514,11 @@ def main():
     parser.add_argument("--prompt_type", type=str, default="v11",
                        choices=["v8", "v9", "v10", "v11", "v12", 'v17', "v_chat", "chat"],
                        help="Prompt template version to use")
+    parser.add_argument("--hf_batch_size", type=int, default=1,
+                       help="Batch size for HuggingFace generation (only when not using vLLM/engine)")
+    parser.add_argument("--hf_device_map", type=str, default="auto",
+                       choices=["auto", "balanced", "balanced_low_0", "sequential"],
+                       help="Transformers device_map strategy for HF multi-GPU")
     
     args = parser.parse_args()
     
@@ -478,7 +560,8 @@ def main():
             max_new_tokens=args.max_gen_len,
             temperature=args.temperature,
             prompt_type=args.prompt_type,
-            gpu_ids=args.gpu_ids
+            gpu_ids=args.gpu_ids,
+            hf_device_map=args.hf_device_map,
         )
     
     # Evaluate
@@ -489,54 +572,99 @@ def main():
     print("="*70)
     
     with open(args.output_path, 'w') as f:
-        for i, problem in enumerate(tqdm(problems, desc="Evaluating")):
-            start_time = time.time()
-            
-            try:
-                result = evaluator.solve(problem)
-                results.append(result)
+        if (not args.use_vllm) and (not args.use_engine) and args.hf_batch_size > 1:
+            print(f"Using batched HF inference: hf_batch_size={args.hf_batch_size}")
+            pbar = tqdm(total=len(problems), desc="Evaluating")
+            for batch_start in range(0, len(problems), args.hf_batch_size):
+                batch = problems[batch_start: batch_start + args.hf_batch_size]
+                start_time = time.time()
+                try:
+                    batch_results = evaluator.solve_batch(batch)
+                    elapsed = time.time() - start_time
+                    for j, result in enumerate(batch_results):
+                        problem = batch[j]
+                        idx = batch_start + j
+                        results.append(result)
+                        if result.correct:
+                            correct_count += 1
+                        accuracy = correct_count / len(results) * 100
+
+                        print(f"\n[{idx+1}/{len(problems)}] Problem ID: {problem.id}")
+                        print(f"  Gold Answer: {problem.answer}")
+                        print(f"  Predicted: {result.predicted_answer}")
+                        print(f"  Reward: {result.reward:.4f}")
+                        print(f"  Correct: {result.correct}")
+                        print(f"  Batch Time: {elapsed:.2f}s")
+                        print(f"  Running Accuracy: {accuracy:.2f}%")
+
+                        f.write(json.dumps({
+                            'id': result.id,
+                            'problem': result.problem,
+                            'prompt': result.prompt,
+                            'gold_answer': result.gold_answer,
+                            'predicted_answer': result.predicted_answer,
+                            'generation': result.generation,
+                            'response': result.response,
+                            'reward': result.reward,
+                            'correct': result.correct
+                        }, ensure_ascii=False) + '\n')
+                    f.flush()
+                    pbar.update(len(batch_results))
+                except Exception as e:
+                    print(f"\nError on batch starting at index {batch_start}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    pbar.update(len(batch))
+            pbar.close()
+        else:
+            for i, problem in enumerate(tqdm(problems, desc="Evaluating")):
+                start_time = time.time()
                 
-                if result.correct:
-                    correct_count += 1
-                
-                elapsed = time.time() - start_time
-                accuracy = correct_count / len(results) * 100
-                
-                # Log progress
-                print(f"\n[{i+1}/{len(problems)}] Problem ID: {problem.id}")
-                print(f"  Problem:")
-                print("-" * 50)
-                print(problem.problem)
-                print("-" * 50)
-                print(f"  Gold Answer: {problem.answer}")
-                print(f"  Predicted: {result.predicted_answer}")
-                print(f"  Reward: {result.reward:.4f}")
-                print(f"  Correct: {result.correct}")
-                print(f"  Time: {elapsed:.2f}s")
-                print(f"  Running Accuracy: {accuracy:.2f}%")
-                print(f"  Response:")
-                print("-" * 50)
-                print(result.response)
-                print("-" * 50)
-                
-                # Save result
-                f.write(json.dumps({
-                    'id': result.id,
-                    'problem': result.problem,
-                    'prompt': result.prompt,
-                    'gold_answer': result.gold_answer,
-                    'predicted_answer': result.predicted_answer,
-                    'generation': result.generation,
-                    'response': result.response,
-                    'reward': result.reward,
-                    'correct': result.correct
-                }, ensure_ascii=False) + '\n')
-                f.flush()
-                
-            except Exception as e:
-                print(f"\nError on problem {problem.id}: {e}")
-                import traceback
-                traceback.print_exc()
+                try:
+                    result = evaluator.solve(problem)
+                    results.append(result)
+                    
+                    if result.correct:
+                        correct_count += 1
+                    
+                    elapsed = time.time() - start_time
+                    accuracy = correct_count / len(results) * 100
+                    
+                    # Log progress
+                    print(f"\n[{i+1}/{len(problems)}] Problem ID: {problem.id}")
+                    print(f"  Problem:")
+                    print("-" * 50)
+                    print(problem.problem)
+                    print("-" * 50)
+                    print(f"  Gold Answer: {problem.answer}")
+                    print(f"  Predicted: {result.predicted_answer}")
+                    print(f"  Reward: {result.reward:.4f}")
+                    print(f"  Correct: {result.correct}")
+                    print(f"  Time: {elapsed:.2f}s")
+                    print(f"  Running Accuracy: {accuracy:.2f}%")
+                    print(f"  Response:")
+                    print("-" * 50)
+                    print(result.response)
+                    print("-" * 50)
+                    
+                    # Save result
+                    f.write(json.dumps({
+                        'id': result.id,
+                        'problem': result.problem,
+                        'prompt': result.prompt,
+                        'gold_answer': result.gold_answer,
+                        'predicted_answer': result.predicted_answer,
+                        'generation': result.generation,
+                        'response': result.response,
+                        'reward': result.reward,
+                        'correct': result.correct
+                    }, ensure_ascii=False) + '\n')
+                    f.flush()
+                    
+                except Exception as e:
+                    print(f"\nError on problem {problem.id}: {e}")
+                    import traceback
+                    traceback.print_exc()
     
     # Final summary
     print("\n" + "="*70)
