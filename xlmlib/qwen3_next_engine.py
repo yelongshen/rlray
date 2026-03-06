@@ -2994,6 +2994,7 @@ class HybridLLMEngine:
 
     def is_finished(self):
         return self.scheduler.is_finished()
+    
 
     def step(self):
         import time as _time
@@ -3059,6 +3060,183 @@ class HybridLLMEngine:
             for seq_id, token_ids in output:
                 outputs[seq_id] = token_ids
         return [outputs[seq_id] for seq_id in sorted(outputs)]
+
+    # ================================================================
+    # Controllable generation API
+    #
+    # Usage:
+    #   engine.prepare(prompt_list, max_tokens=4096)
+    #   while not engine.is_finished():
+    #       input_ids, position_ids = engine.schedule()
+    #       hidden_states = engine.run(input_ids, position_ids, debug=True)
+    #   print(engine.output_list)
+    # ================================================================
+
+    def prepare(self, prompt_list: List[List[int]], max_tokens: int = 32768):
+        """Add prompts to the scheduler for generation.
+        
+        Resets internal output collection. Call this before the schedule/run loop.
+        
+        Args:
+            prompt_list: List of token id lists, one per prompt.
+            max_tokens: Maximum number of new tokens to generate per prompt.
+        """
+        from llm_engine import Sequence
+        self._finished_outputs = {}
+        for prompt in prompt_list:
+            seq = Sequence(prompt)
+            seq.max_tokens = max_tokens
+            self.scheduler.add(seq)
+
+    def schedule(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Schedule the next batch and prepare input tensors.
+        
+        Must be called before run(). Sets up internal state (context, seqs)
+        needed by run().
+        
+        Returns:
+            (input_ids, position_ids) tensors ready for run().
+        """
+        seqs, is_prefill = self.scheduler.schedule()
+        
+        # Handle prefill_one_by_one: only process 1 prefill per step
+        if is_prefill and self.prefill_one_by_one and len(seqs) > 1:
+            extra_seqs = seqs[1:]
+            seqs = seqs[:1]
+            for seq in extra_seqs:
+                self.scheduler.preempt(seq)
+        
+        # Prepare tensors and set context
+        if is_prefill:
+            # For varlen prefill with multiple seqs (FLA required),
+            # or single-seq prefill: use prepare_prefill which packs sequences.
+            if not FLA_AVAILABLE and len(seqs) > 1:
+                # Without FLA, can't do varlen prefill — only take first seq,
+                # preempt the rest (they'll be scheduled in subsequent steps).
+                for seq in seqs[1:]:
+                    self.scheduler.preempt(seq)
+                seqs = seqs[:1]
+            input_ids, positions = self.model_runner.prepare_prefill(seqs)
+        else:
+            input_ids, positions = self.model_runner.prepare_decode(seqs)
+        
+        # Save for run()
+        self._scheduled_seqs = seqs
+        self._scheduled_is_prefill = is_prefill
+        return input_ids, positions
+
+    @torch.inference_mode()
+    def run(self, input_ids: torch.Tensor, position_ids: torch.Tensor,
+            debug: bool = False) -> Optional[List[torch.Tensor]]:
+        """Run model forward, sample tokens, and postprocess.
+        
+        Must be called after schedule(). Uses the seqs and context set up by schedule().
+        
+        Args:
+            input_ids: From schedule().
+            position_ids: From schedule().
+            debug: If True, returns per-layer hidden states list.
+                   Index 0 = embedding output, 1..N = after each decoder layer,
+                   N+1 = after final RMSNorm.
+        
+        Returns:
+            If debug=False: None
+            If debug=True: List of hidden state tensors [num_layers + 2].
+        """
+        seqs = self._scheduled_seqs
+        is_prefill = self._scheduled_is_prefill
+        model = self.model_runner.model
+        cache_params = self.model_runner.cache_params
+        context = get_context()
+        all_hidden_states = None
+
+        # === Forward pass ===
+        if is_prefill:
+            kwargs = dict(
+                input_ids=input_ids.unsqueeze(0),
+                position_ids=position_ids.unsqueeze(0),
+                cache_params=cache_params,
+                logits_to_keep=context.cu_seqlens_q[1:] - 1,
+                _return_hidden_states=debug,
+            )
+            if debug:
+                logits, _, all_hidden_states = model(**kwargs)
+            else:
+                logits, _ = model(**kwargs)
+            cache_params.has_previous_state = True
+        else:
+            kwargs = dict(
+                input_ids=input_ids.unsqueeze(1),
+                position_ids=position_ids.unsqueeze(1),
+                cache_params=cache_params,
+                _return_hidden_states=debug,
+            )
+            if debug:
+                logits, _, all_hidden_states = model(**kwargs)
+            else:
+                logits, _ = model(**kwargs)
+            logits = logits.squeeze(1)
+
+        logits = logits.squeeze(0)
+        if logits.dim() == 1:
+            logits = logits.unsqueeze(0)
+
+        # === Sample ===
+        temperature = self.model_runner.temperature
+        top_k = self.model_runner.top_k
+        if temperature <= 0:
+            token_ids = logits.argmax(dim=-1)
+        else:
+            scaled_logits = (logits / temperature).to(torch.float32)
+            if top_k > 0:
+                topk_vals, _ = torch.topk(scaled_logits, min(top_k, scaled_logits.size(-1)), dim=-1)
+                scaled_logits[scaled_logits < topk_vals[..., -1:]] = float('-inf')
+            probs = torch.softmax(scaled_logits, dim=-1)
+            token_ids = torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+        # TP broadcast
+        if get_tp_world_size() > 1:
+            dist.broadcast(token_ids, src=0, group=get_tp_group())
+
+        reset_context()
+        token_list = token_ids.tolist()
+        if isinstance(token_list, int):
+            token_list = [token_list]
+
+        # === Postprocess ===
+        self.scheduler.postprocess(seqs, token_list)
+
+        # Check stop tokens
+        if self._stop_token_ids and not is_prefill:
+            from llm_engine import SequenceStatus
+            for seq, tid in zip(seqs, token_list):
+                if not seq.is_finished and tid in self._stop_token_ids:
+                    seq.status = SequenceStatus.FINISHED
+                    self.scheduler.block_manager.deallocate(seq)
+                    if seq in self.scheduler.running:
+                        self.scheduler.running.remove(seq)
+
+        # Collect finished outputs
+        if not hasattr(self, '_finished_outputs'):
+            self._finished_outputs = {}
+        for seq in seqs:
+            if seq.is_finished:
+                self._finished_outputs[seq.seq_id] = seq.completion_token_ids
+
+        if debug:
+            return all_hidden_states
+        return None
+
+    @property
+    def output_list(self) -> List[List[int]]:
+        """Get completed generation outputs, ordered by seq_id.
+        
+        Returns:
+            List of token id lists, one per completed prompt (in order of submission).
+        """
+        if not hasattr(self, '_finished_outputs'):
+            return []
+        return [self._finished_outputs[sid] for sid in sorted(self._finished_outputs)]
 
 
 # Simple test
