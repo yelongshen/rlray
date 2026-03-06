@@ -65,8 +65,10 @@ class AIME24Result:
     """Result for a single AIME problem."""
     id: int
     problem: str
+    prompt: str
     gold_answer: str
     predicted_answer: str
+    generation: str
     response: str
     reward: float
     correct: bool
@@ -162,8 +164,10 @@ class AIME24VLLMEvaluator:
         return AIME24Result(
             id=problem.id,
             problem=problem.problem,
+            prompt=prompt,
             gold_answer=problem.answer,
             predicted_answer=predicted_answer,
+            generation=response_text,
             response=response_text,
             reward=reward,
             correct=(reward > 0.5)
@@ -279,8 +283,10 @@ class AIME24Evaluator:
         return AIME24Result(
             id=problem.id,
             problem=problem.problem,
+            prompt=text,
             gold_answer=problem.answer,
             predicted_answer=predicted_answer,
+            generation=response,
             response=response,
             reward=reward,
             correct=(reward > 0.5)
@@ -389,8 +395,10 @@ class AIME24LLMEngineEvaluator:
         return AIME24Result(
             id=problem.id,
             problem=problem.problem,
+            prompt=text,
             gold_answer=problem.answer,
             predicted_answer=predicted_answer,
+            generation=response,
             response=response,
             reward=reward,
             correct=(reward > 0.5)
@@ -515,8 +523,10 @@ def main():
                 f.write(json.dumps({
                     'id': result.id,
                     'problem': result.problem,
+                    'prompt': result.prompt,
                     'gold_answer': result.gold_answer,
                     'predicted_answer': result.predicted_answer,
+                    'generation': result.generation,
                     'response': result.response,
                     'reward': result.reward,
                     'correct': result.correct
