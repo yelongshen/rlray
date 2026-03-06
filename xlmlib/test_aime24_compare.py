@@ -315,6 +315,9 @@ def test_hf_vs_engine(args):
     hf_last_token_states = []
     for hs in hf_out.hidden_states:
         hf_last_token_states.append(hs[0, -1, :].float().cpu().clone())
+    # HF hidden_states are layer outputs; compute explicit post-final-norm state
+    with torch.no_grad():
+        hf_post_norm_last = hf_model.model.norm(hf_out.hidden_states[-1])[0, -1, :].float().cpu().clone()
     hf_logits_cpu = hf_logits.float().cpu().clone()
     
     # Free HF model completely
@@ -380,6 +383,18 @@ def test_hf_vs_engine(args):
     
     engine_token = engine_logits.argmax().item()
     print(f"[Engine] Greedy token: {engine_token} '{tokenizer2.decode([engine_token])}'")
+
+    # Compare post-final-norm last-token hidden states (HF vs Engine)
+    eng_paged_post_norm_last = engine_hidden_states[-1][0, -1, :].float().cpu()
+    eng_direct_post_norm_last = engine_direct_states[-1][0, -1, :].float().cpu()
+    hf_postnorm_vs_paged = (hf_post_norm_last - eng_paged_post_norm_last).abs().max().item()
+    hf_postnorm_vs_direct = (hf_post_norm_last - eng_direct_post_norm_last).abs().max().item()
+
+    print(f"\n{'='*60}")
+    print("POST-FINAL-NORM COMPARISON (last token hidden)")
+    print(f"{'='*60}")
+    print(f"HF(norm(last_layer)) vs Engine-Paged final_norm:  max_diff={hf_postnorm_vs_paged:.6f}")
+    print(f"HF(norm(last_layer)) vs Engine-Direct final_norm: max_diff={hf_postnorm_vs_direct:.6f}")
     
     # === Step 3: Per-layer comparison ===
     layer_types = getattr(config, 'layer_types', ['full_attention'] * num_layers)
@@ -404,7 +419,7 @@ def test_hf_vs_engine(args):
         diff = (eng_last - hf_last).abs().max().item()
         flag = " ⚠" if diff > 0.5 else ""
         print(f"Layer {layer_idx:>2} ({lt:>17}): max_diff={diff:.6f}{flag}")
-
+    
     # Compare each layer for Engine-Direct (no cache) vs HF
     print(f"\n{'='*60}")
     print("PER-LAYER COMPARISON (Engine-Direct vs HF, last token)")
