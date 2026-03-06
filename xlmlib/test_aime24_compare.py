@@ -350,6 +350,9 @@ def test_hf_vs_engine(args):
             cache_params=None,
             _return_hidden_states=True,
         )
+        direct_final_hidden = engine_direct_states[-1]  # after final norm
+        direct_last_hidden = direct_final_hidden[:, -1:, :] if direct_final_hidden.dim() == 3 else direct_final_hidden[-1:, :].unsqueeze(0)
+        engine_direct_logits = model.lm_head(direct_last_hidden).squeeze()
     print(f"[Engine-Direct] Hidden states: {len(engine_direct_states)} entries "
           f"(embedding + {num_layers} layers + final_norm)")
     
@@ -454,9 +457,27 @@ def test_hf_vs_engine(args):
         print("Most likely contributors: bf16 accumulation + sparse MoE routing/top-k sensitivity.")
     else:
         print("\nCore engine matches HF reasonably; drift is mainly in paged path.")
+
+    # === Top-5 logits comparison ===
+    hf_logits_cpu = hf_logits.float().cpu()
+    engine_direct_logits_cpu = engine_direct_logits.float().cpu()
+    engine_logits_cpu = engine_logits.float().cpu()
+
+    def _print_top5(title, logits_cpu, tok):
+        top_vals, top_idx = torch.topk(logits_cpu, k=5)
+        print(f"\n{title}")
+        for rank, (tid, score) in enumerate(zip(top_idx.tolist(), top_vals.tolist()), start=1):
+            token_text = tok.decode([tid]).replace("\n", "\\n")
+            print(f"  {rank}. id={tid:>6} token='{token_text}' score={score:.6f}")
+
+    print(f"\n{'='*60}")
+    print("TOP-5 LOGITS SCORES")
+    print(f"{'='*60}")
+    _print_top5("HF", hf_logits_cpu, tokenizer)
+    _print_top5("Engine-Direct (no cache)", engine_direct_logits_cpu, tokenizer2)
+    _print_top5("Engine-Paged (HybridLLMEngine)", engine_logits_cpu, tokenizer2)
     
     # === Logit comparison ===
-    engine_logits_cpu = engine_logits.float().cpu()
     logit_diff = (engine_logits_cpu - hf_logits_cpu).abs()
     
     print(f"\n{'='*60}")
