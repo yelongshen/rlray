@@ -2591,7 +2591,7 @@ class HybridModelRunner:
     cache_params instead of wiring k_cache/v_cache to model layers.
     """
 
-    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64):
+    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, top_p=1.0, max_batch_size=64):
         self.block_size = 256
         self.default_dtype = torch.bfloat16
         self.model = model
@@ -2599,6 +2599,7 @@ class HybridModelRunner:
         self.device = torch.device(device) if isinstance(device, str) else device
         self.temperature = temperature
         self.top_k = top_k  # 0 means no top-k filtering
+        self.top_p = top_p  # 1.0 means no nucleus filtering
         self.max_batch_size = max_batch_size
         
         # Allocate hybrid cache (paged KV + linear attention states)
@@ -2953,12 +2954,25 @@ class HybridModelRunner:
             # Greedy decoding
             token_ids = logits.argmax(dim=-1)  # [num_seqs]
         else:
-            # Sampling with temperature + optional top-k
+            # Sampling with temperature + optional top-k/top-p (nucleus)
             scaled_logits = (logits / self.temperature).to(torch.float32)
             if self.top_k > 0:
                 # Zero out everything outside top-k
                 topk_vals, _ = torch.topk(scaled_logits, min(self.top_k, scaled_logits.size(-1)), dim=-1)
                 scaled_logits[scaled_logits < topk_vals[..., -1:]] = float('-inf')
+
+            if 0.0 < self.top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(scaled_logits, descending=True, dim=-1)
+                sorted_probs = torch.softmax(sorted_logits, dim=-1)
+                cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                sorted_remove_mask = cumulative_probs > self.top_p
+                sorted_remove_mask[..., 1:] = sorted_remove_mask[..., :-1].clone()
+                sorted_remove_mask[..., 0] = False
+
+                remove_mask = torch.zeros_like(sorted_remove_mask, dtype=torch.bool)
+                remove_mask.scatter_(dim=-1, index=sorted_indices, src=sorted_remove_mask)
+                scaled_logits = scaled_logits.masked_fill(remove_mask, float('-inf'))
+
             probs = torch.softmax(scaled_logits, dim=-1)
             token_ids = torch.multinomial(probs, num_samples=1).squeeze(-1)  # [num_seqs]
         
@@ -2991,7 +3005,7 @@ class HybridLLMEngine:
     Works with any model that implements the allocate_cache() + forward(cache_params=) protocol.
     Uses HybridModelRunner instead of the stateful ModelRunner from llm_engine.py.
     """
-    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, max_batch_size=64, prefill_one_by_one=False, tokenizer=None):
+    def __init__(self, model, llm_config, device, temperature=0.6, top_k=0, top_p=1.0, max_batch_size=64, prefill_one_by_one=False, tokenizer=None):
         # Increase NCCL timeout for batch prefill (many sequential forward passes)
         if 'NCCL_TIMEOUT' not in _os.environ:
             _os.environ['NCCL_TIMEOUT'] = '3600'  # 1 hour
@@ -3014,7 +3028,11 @@ class HybridLLMEngine:
         
         from llm_engine import Scheduler, Sequence
         
-        self.model_runner = HybridModelRunner(model, llm_config, device, temperature=temperature, top_k=top_k, max_batch_size=max_batch_size)
+        self.model_runner = HybridModelRunner(
+            model, llm_config, device,
+            temperature=temperature, top_k=top_k, top_p=top_p,
+            max_batch_size=max_batch_size
+        )
         self.scheduler = Scheduler(llm_config, self.model_runner.block_size, self.model_runner.num_kvcache_blocks)
         self.scheduler.max_num_seqs = max_batch_size  # Limit concurrent sequences
         
@@ -3215,6 +3233,7 @@ class HybridLLMEngine:
         # === Sample ===
         temperature = self.model_runner.temperature
         top_k = self.model_runner.top_k
+        top_p = self.model_runner.top_p
         if temperature <= 0:
             token_ids = logits.argmax(dim=-1)
         else:
@@ -3222,6 +3241,19 @@ class HybridLLMEngine:
             if top_k > 0:
                 topk_vals, _ = torch.topk(scaled_logits, min(top_k, scaled_logits.size(-1)), dim=-1)
                 scaled_logits[scaled_logits < topk_vals[..., -1:]] = float('-inf')
+
+            if 0.0 < top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(scaled_logits, descending=True, dim=-1)
+                sorted_probs = torch.softmax(sorted_logits, dim=-1)
+                cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                sorted_remove_mask = cumulative_probs > top_p
+                sorted_remove_mask[..., 1:] = sorted_remove_mask[..., :-1].clone()
+                sorted_remove_mask[..., 0] = False
+
+                remove_mask = torch.zeros_like(sorted_remove_mask, dtype=torch.bool)
+                remove_mask.scatter_(dim=-1, index=sorted_indices, src=sorted_remove_mask)
+                scaled_logits = scaled_logits.masked_fill(remove_mask, float('-inf'))
+
             probs = torch.softmax(scaled_logits, dim=-1)
             token_ids = torch.multinomial(probs, num_samples=1).squeeze(-1)
 

@@ -15,7 +15,7 @@ Usage:
     python eval/eval_qwen3_next.py --model_path ./models/Qwen_Qwen3-Coder-Next/ --dataset aime25
 
     # TP=2 - AIME24 with sampling (pass@k)
-    torchrun --nproc_per_node=2 eval/eval_qwen3_next.py --model_path ./models/Qwen_Qwen3-Coder-Next/ --dataset aime24 --tensor_parallel 2 --n_rollout 8 --temperature 0.7 --top_k 50 --max_batch_size 64 --max_tokens 32768
+    torchrun --nproc_per_node=2 eval/eval_qwen3_next.py --model_path ./models/Qwen_Qwen3-Coder-Next/ --dataset aime24 --tensor_parallel 2 --n_rollout 8 --temperature 0.7 --top_p 0.95 --max_batch_size 64 --max_tokens 32768
 """
 
 import os
@@ -188,6 +188,7 @@ def evaluate(
     device,
     temperature=0.0,
     top_k=0,
+    top_p=1.0,
     max_tokens=4096,
     max_batch_size=64,
     n_rollout=1,
@@ -205,8 +206,12 @@ def evaluate(
     """
     is_main = get_tp_rank() == 0
     
-    # Create engine with top-k support and batch size limit
-    engine = HybridLLMEngine(model, config, str(device), temperature=temperature, top_k=top_k, max_batch_size=max_batch_size, tokenizer=tokenizer)
+    # Create engine with sampling controls and batch size limit
+    engine = HybridLLMEngine(
+        model, config, str(device),
+        temperature=temperature, top_k=top_k, top_p=top_p,
+        max_batch_size=max_batch_size, tokenizer=tokenizer
+    )
     
     results = {}  # id -> list of rewards
     total_response_len = 0
@@ -365,6 +370,8 @@ def evaluate(
         print(f"  Problems: {total_count}")
         print(f"  Rollouts per problem: {n_rollout}")
         print(f"  Temperature: {temperature}")
+        print(f"  Top-p: {top_p}")
+        print(f"  Top-k: {top_k}")
         print(f"  pass@1: {pass_1:.4f} ({pass_1*100:.1f}%)")
         if n_rollout > 1:
             print(f"  pass@{n_rollout}: {pass_n:.4f} ({pass_n*100:.1f}%)")
@@ -386,7 +393,8 @@ def main():
     parser.add_argument("--tensor_parallel", type=int, default=1, help="TP size")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature (0=greedy)")
     parser.add_argument("--max_tokens", type=int, default=4096, help="Max generation tokens")
-    parser.add_argument("--top_k", type=int, default=0, help="Top-k sampling (0=disabled)")
+    parser.add_argument("--top_k", type=int, default=0, help="Top-k sampling (0=disabled, optional with top_p)")
+    parser.add_argument("--top_p", type=float, default=0.95, help="Nucleus sampling threshold (HF-like default: 0.95)")
     parser.add_argument("--max_batch_size", type=int, default=64, help="Max sequences per engine batch (e.g. 64)")
     parser.add_argument("--n_rollout", type=int, default=1, help="Number of rollouts per problem")
     parser.add_argument("--prompt_type", type=str, default="chat", help="Prompt template version (use 'chat' with chat_template)")
@@ -436,6 +444,7 @@ def main():
         device=device,
         temperature=args.temperature,
         top_k=args.top_k,
+        top_p=args.top_p,
         max_tokens=args.max_tokens,
         max_batch_size=args.max_batch_size,
         n_rollout=args.n_rollout,
@@ -452,6 +461,7 @@ def main():
                 "model_path": args.model_path,
                 "temperature": args.temperature,
                 "top_k": args.top_k,
+                "top_p": args.top_p,
                 "max_batch_size": args.max_batch_size,
                 "n_rollout": args.n_rollout,
                 "results": {k: v for k, v in results.items()},
