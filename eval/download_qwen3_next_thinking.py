@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 try:
-    from huggingface_hub import HfApi, snapshot_download
+    from huggingface_hub import snapshot_download
 except ImportError:
     print("Error: missing dependency 'huggingface_hub'.")
     print("Install with: pip install huggingface_hub")
@@ -41,17 +41,6 @@ def check_disk_space(output_dir: str, required_gb: float) -> None:
             f"Warning: only {free_gb:.1f} GB free (< {required_gb:.1f} GB requested). "
             "Download may fail due to insufficient space."
         )
-
-
-def validate_repo_access(repo_id: str, token: Optional[str]) -> None:
-    api = HfApi(token=token)
-    try:
-        info = api.model_info(repo_id)
-        print(f"Found repo: {info.id}")
-    except Exception as exc:
-        print(f"Could not access repo '{repo_id}'.")
-        print("Check: repo name, internet access, and HF token permissions.")
-        raise RuntimeError(str(exc)) from exc
 
 
 def verify_download(model_dir: str) -> bool:
@@ -114,19 +103,22 @@ def main() -> None:
     print(f"Revision: {args.revision}")
     print("=" * 70)
 
-    validate_repo_access(args.repo_id, token)
-
     folder_name = args.local_dir_name or args.repo_id.replace("/", "_")
     local_dir = os.path.join(args.output_dir, folder_name)
     Path(local_dir).mkdir(parents=True, exist_ok=True)
 
-    downloaded_path = snapshot_download(
-        repo_id=args.repo_id,
-        revision=args.revision,
-        local_dir=local_dir,
-        token=token,
-        resume_download=not args.no_resume,
-    )
+    try:
+        downloaded_path = snapshot_download(
+            repo_id=args.repo_id,
+            revision=args.revision,
+            local_dir=local_dir,
+            token=token,
+            resume_download=not args.no_resume,
+        )
+    except Exception as exc:
+        print(f"Download failed for repo '{args.repo_id}'.")
+        print("Check: repo id, internet access, and HF token permissions.")
+        raise RuntimeError(str(exc)) from exc
 
     print(f"\nDownload complete: {downloaded_path}")
 
