@@ -315,9 +315,8 @@ def test_hf_vs_engine(args):
     hf_last_token_states = []
     for hs in hf_out.hidden_states:
         hf_last_token_states.append(hs[0, -1, :].float().cpu().clone())
-    # HF hidden_states are layer outputs; compute explicit post-final-norm state
-    with torch.no_grad():
-        hf_post_norm_last = hf_model.model.norm(hf_out.hidden_states[-1])[0, -1, :].float().cpu().clone()
+    # Use HF's last hidden state directly as requested
+    hf_post_norm_last = hf_out.hidden_states[-1][0, -1, :].float().cpu().clone()
     hf_logits_cpu = hf_logits.float().cpu().clone()
     
     # Free HF model completely
