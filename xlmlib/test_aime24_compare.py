@@ -402,6 +402,18 @@ def test_hf_vs_engine(args):
         flag = " ⚠" if diff > 0.5 else ""
         print(f"Layer {layer_idx:>2} ({lt:>17}): max_diff={diff:.6f}{flag}")
 
+    # Compare each layer for Engine-Direct (no cache) vs HF
+    print(f"\n{'='*60}")
+    print("PER-LAYER COMPARISON (Engine-Direct vs HF, last token)")
+    print(f"{'='*60}")
+    for layer_idx in range(num_layers):
+        lt = layer_types[layer_idx] if layer_idx < len(layer_types) else "full_attention"
+        direct_last = engine_direct_states[layer_idx + 1][0, -1, :].float().cpu()
+        hf_last = hf_last_token_states[layer_idx + 1]
+        diff = (direct_last - hf_last).abs().max().item()
+        flag = " ⚠" if diff > 0.5 else ""
+        print(f"Layer {layer_idx:>2} ({lt:>17}): max_diff={diff:.6f}{flag}")
+
     # === Step 3.5: Diagnostic attribution ===
     # Compare (HF vs direct) and (direct vs paged-engine) to pinpoint where drift is introduced.
     print(f"\n{'='*60}")
