@@ -397,6 +397,15 @@ def test_hf_vs_engine(args):
     
     # === Step 3: Per-layer comparison ===
     layer_types = getattr(config, 'layer_types', ['full_attention'] * num_layers)
+
+    def _layer_metrics(ref_vec, test_vec, eps=1e-6):
+        delta = (test_vec - ref_vec).float()
+        max_diff = delta.abs().max().item()
+        avg_diff_l2 = torch.sqrt(torch.mean(delta * delta)).item()
+        ref_l2 = torch.linalg.vector_norm(ref_vec.float()).item()
+        diff_l2 = torch.linalg.vector_norm(delta).item()
+        diff_percent = 100.0 * diff_l2 / (ref_l2 + eps)
+        return max_diff, avg_diff_l2, diff_percent
     
     print(f"\n{'='*60}")
     print("PER-LAYER COMPARISON (last token hidden state)")
@@ -404,8 +413,11 @@ def test_hf_vs_engine(args):
     
     # Compare embedding (index 0)
     eng_embed_last = engine_hidden_states[0][0, -1, :].float().cpu()
-    embed_diff = (eng_embed_last - hf_last_token_states[0]).abs().max().item()
-    print(f"{'Embedding':>20}: max_diff={embed_diff:.6f}")
+    embed_max_diff, embed_avg_l2, embed_diff_pct = _layer_metrics(hf_last_token_states[0], eng_embed_last)
+    print(
+        f"{'Embedding':>20}: max_diff={embed_max_diff:.6f} "
+        f"avg_diff_l2={embed_avg_l2:.6f} diff_percent={embed_diff_pct:.4f}%"
+    )
     
     # Compare each layer (index 1..N)
     for layer_idx in range(num_layers):
@@ -415,9 +427,12 @@ def test_hf_vs_engine(args):
         eng_last = eng_hs[0, -1, :].float().cpu()
         hf_last = hf_last_token_states[layer_idx + 1]
         
-        diff = (eng_last - hf_last).abs().max().item()
+        diff, avg_diff_l2, diff_percent = _layer_metrics(hf_last, eng_last)
         flag = " ⚠" if diff > 0.5 else ""
-        print(f"Layer {layer_idx:>2} ({lt:>17}): max_diff={diff:.6f}{flag}")
+        print(
+            f"Layer {layer_idx:>2} ({lt:>17}): max_diff={diff:.6f} "
+            f"avg_diff_l2={avg_diff_l2:.6f} diff_percent={diff_percent:.4f}%{flag}"
+        )
     
     # Compare each layer for Engine-Direct (no cache) vs HF
     print(f"\n{'='*60}")
@@ -427,9 +442,12 @@ def test_hf_vs_engine(args):
         lt = layer_types[layer_idx] if layer_idx < len(layer_types) else "full_attention"
         direct_last = engine_direct_states[layer_idx + 1][0, -1, :].float().cpu()
         hf_last = hf_last_token_states[layer_idx + 1]
-        diff = (direct_last - hf_last).abs().max().item()
+        diff, avg_diff_l2, diff_percent = _layer_metrics(hf_last, direct_last)
         flag = " ⚠" if diff > 0.5 else ""
-        print(f"Layer {layer_idx:>2} ({lt:>17}): max_diff={diff:.6f}{flag}")
+        print(
+            f"Layer {layer_idx:>2} ({lt:>17}): max_diff={diff:.6f} "
+            f"avg_diff_l2={avg_diff_l2:.6f} diff_percent={diff_percent:.4f}%{flag}"
+        )
 
     # === Step 3.5: Diagnostic attribution ===
     # Compare (HF vs direct) and (direct vs paged-engine) to pinpoint where drift is introduced.
