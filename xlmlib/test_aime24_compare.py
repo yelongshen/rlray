@@ -334,6 +334,24 @@ def test_hf_vs_engine(args):
         model, config, device,
         temperature=0, max_batch_size=1, tokenizer=tokenizer2
     )
+
+    # Optional baseline: engine direct forward with explicit causal mask (no cache).
+    # This helps isolate whether drift is from core implementation vs paged/cache path.
+    print("\n[Engine-Direct] Forward (causal mask, no cache)...", flush=True)
+    causal_mask = torch.triu(
+        torch.full((seq_len, seq_len), float('-inf'), device=device, dtype=torch.bfloat16),
+        diagonal=1
+    ).unsqueeze(0).unsqueeze(0)
+    with torch.no_grad():
+        _, _, engine_direct_states = model(
+            input_ids=input_tensor,
+            position_ids=torch.arange(seq_len, device=device).unsqueeze(0),
+            attention_mask=causal_mask,
+            cache_params=None,
+            _return_hidden_states=True,
+        )
+    print(f"[Engine-Direct] Hidden states: {len(engine_direct_states)} entries "
+          f"(embedding + {num_layers} layers + final_norm)")
     
     # Use the controllable generation API with debug=True
     print("\n[Engine] Prefill via HybridLLMEngine (paged attention)...", flush=True)
@@ -383,6 +401,47 @@ def test_hf_vs_engine(args):
         diff = (eng_last - hf_last).abs().max().item()
         flag = " ⚠" if diff > 0.5 else ""
         print(f"Layer {layer_idx:>2} ({lt:>17}): max_diff={diff:.6f}{flag}")
+
+    # === Step 3.5: Diagnostic attribution ===
+    # Compare (HF vs direct) and (direct vs paged-engine) to pinpoint where drift is introduced.
+    print(f"\n{'='*60}")
+    print("DIAGNOSTIC ATTRIBUTION")
+    print(f"{'='*60}")
+
+    hf_vs_direct_max = 0.0
+    direct_vs_paged_max = 0.0
+    hf_vs_direct_first_bad = None
+    direct_vs_paged_first_bad = None
+
+    for layer_idx in range(num_layers):
+        hf_last = hf_last_token_states[layer_idx + 1]
+        direct_last = engine_direct_states[layer_idx + 1][0, -1, :].float().cpu()
+        paged_last = engine_hidden_states[layer_idx + 1][0, -1, :].float().cpu()
+
+        d_hf_direct = (hf_last - direct_last).abs().max().item()
+        d_direct_paged = (direct_last - paged_last).abs().max().item()
+
+        hf_vs_direct_max = max(hf_vs_direct_max, d_hf_direct)
+        direct_vs_paged_max = max(direct_vs_paged_max, d_direct_paged)
+
+        if hf_vs_direct_first_bad is None and d_hf_direct > 0.5:
+            hf_vs_direct_first_bad = layer_idx
+        if direct_vs_paged_first_bad is None and d_direct_paged > 0.5:
+            direct_vs_paged_first_bad = layer_idx
+
+    print(f"HF vs Engine-Direct max layer diff:      {hf_vs_direct_max:.6f}")
+    print(f"Engine-Direct vs Engine-Paged max diff:  {direct_vs_paged_max:.6f}")
+    print(f"First layer >0.5 (HF vs Direct):         {hf_vs_direct_first_bad}")
+    print(f"First layer >0.5 (Direct vs Paged):      {direct_vs_paged_first_bad}")
+
+    if direct_vs_paged_max > hf_vs_direct_max * 1.5 and direct_vs_paged_max > 0.5:
+        print("\nLikely root cause: paged-cache / flash-attn path divergence.")
+        print("Check slot_mapping, block_tables, and paged full-attn kernels first.")
+    elif hf_vs_direct_max > 0.5:
+        print("\nLikely root cause: core engine numerical/implementation drift vs HF.")
+        print("Most likely contributors: bf16 accumulation + sparse MoE routing/top-k sensitivity.")
+    else:
+        print("\nCore engine matches HF reasonably; drift is mainly in paged path.")
     
     # === Logit comparison ===
     engine_logits_cpu = engine_logits.float().cpu()
