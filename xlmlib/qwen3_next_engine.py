@@ -35,7 +35,6 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from typing import Optional, Tuple, List, Union
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
-from xlmlib.llm_engine import BlockManager, Sequence, SequenceStatus
 
 try:
     from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
