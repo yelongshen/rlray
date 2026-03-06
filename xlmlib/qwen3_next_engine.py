@@ -1294,11 +1294,12 @@ class Qwen3NextSparseMoeBlockForEngine(nn.Module):
 
 class Qwen3NextRotaryEmbedding(nn.Module):
     """Rotary position embedding for Qwen3-Next."""
-    def __init__(self, dim, max_position_embeddings=131072, base=1000000.0, device=None):
+    def __init__(self, dim, max_position_embeddings=131072, base=1000000.0, attention_scaling=1.0, device=None):
         super().__init__()
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
+        self.attention_scaling = attention_scaling
         self.register_buffer("inv_freq", None, persistent=False)
 
     @torch.no_grad()
@@ -1313,8 +1314,8 @@ class Qwen3NextRotaryEmbedding(nn.Module):
         with torch.autocast(device_type=device_type, enabled=False):
             freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
             emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos()
-            sin = emb.sin()
+            cos = emb.cos() * self.attention_scaling
+            sin = emb.sin() * self.attention_scaling
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
@@ -1717,16 +1718,28 @@ class Qwen3NextModelForEngine(nn.Module):
         rope_theta = getattr(config, 'rope_theta', None)
         if rope_theta is None:
             rope_theta = getattr(config, 'rope_base', None)
+
+        rope_params = getattr(config, 'rope_parameters', None)
+        partial_rotary_factor = 1.0
+        attention_scaling = 1.0
+        if isinstance(rope_params, dict):
+            rope_theta = rope_theta if rope_theta is not None else rope_params.get('rope_theta', None)
+            partial_rotary_factor = float(rope_params.get('partial_rotary_factor', 1.0))
+
         if rope_theta is None:
-            rope_theta = getattr(config, 'rotary_pct_base', 1000000.0)  # Default
-        
-        # Use explicit head_dim if set, otherwise compute from hidden_size
+            rope_theta = getattr(config, 'rotary_pct_base', 1000000.0)  # Default fallback
+
+        # Use explicit head_dim if set, otherwise compute from hidden_size.
         head_dim = getattr(config, 'head_dim', config.hidden_size // config.num_attention_heads)
-        
+        rotary_dim = int(head_dim * partial_rotary_factor)
+        if rotary_dim <= 0:
+            rotary_dim = head_dim
+
         self.rotary_emb = Qwen3NextRotaryEmbedding(
-            head_dim,
+            rotary_dim,
             max_position_embeddings=getattr(config, 'max_position_embeddings', 131072),
             base=rope_theta,
+            attention_scaling=attention_scaling,
         )
         
     def forward(

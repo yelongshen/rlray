@@ -459,6 +459,52 @@ def test_hf_vs_engine(args):
             f"avg_diff_l2={avg_diff_l2:.6f} diff_percent={diff_percent:.4f}%{flag}"
         )
 
+    first_full_attn_idx = next((i for i, t in enumerate(layer_types) if t == "full_attention"), None)
+
+    if first_full_attn_idx is not None:
+        hf_in = hf_last_token_states[first_full_attn_idx]
+        hf_out = hf_last_token_states[first_full_attn_idx + 1]
+
+        paged_in = engine_hidden_states[first_full_attn_idx][0, -1, :].float().cpu()
+        paged_out = engine_hidden_states[first_full_attn_idx + 1][0, -1, :].float().cpu()
+
+        direct_in = engine_direct_states[first_full_attn_idx][0, -1, :].float().cpu()
+        direct_out = engine_direct_states[first_full_attn_idx + 1][0, -1, :].float().cpu()
+
+        in_paged = _layer_metrics(hf_in, paged_in)
+        in_direct = _layer_metrics(hf_in, direct_in)
+        out_paged = _layer_metrics(hf_out, paged_out)
+        out_direct = _layer_metrics(hf_out, direct_out)
+
+        print(f"\n{'='*60}")
+        print(f"FIRST FULL-ATTN LAYER SIDE-BY-SIDE (layer {first_full_attn_idx})")
+        print(f"{'='*60}")
+        print(
+            "INPUT  HF vs Paged : "
+            f"max_diff={in_paged[0]:.6f} avg_diff_l2={in_paged[1]:.6f} diff_percent={in_paged[2]:.4f}%"
+        )
+        print(
+            "INPUT  HF vs Direct: "
+            f"max_diff={in_direct[0]:.6f} avg_diff_l2={in_direct[1]:.6f} diff_percent={in_direct[2]:.4f}%"
+        )
+        print(
+            "OUTPUT HF vs Paged : "
+            f"max_diff={out_paged[0]:.6f} avg_diff_l2={out_paged[1]:.6f} diff_percent={out_paged[2]:.4f}%"
+        )
+        print(
+            "OUTPUT HF vs Direct: "
+            f"max_diff={out_direct[0]:.6f} avg_diff_l2={out_direct[1]:.6f} diff_percent={out_direct[2]:.4f}%"
+        )
+
+        print("\nLast-token first 8 dims after full-attn layer (HF | Direct | Paged):")
+        for dim_idx in range(min(8, hf_out.numel())):
+            print(
+                f"  dim {dim_idx:>2}: "
+                f"{hf_out[dim_idx].item():+10.6f} | "
+                f"{direct_out[dim_idx].item():+10.6f} | "
+                f"{paged_out[dim_idx].item():+10.6f}"
+            )
+
     # === Step 3.5: Diagnostic attribution ===
     # Compare (HF vs direct) and (direct vs paged-engine) to pinpoint where drift is introduced.
     print(f"\n{'='*60}")
