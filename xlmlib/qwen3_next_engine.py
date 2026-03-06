@@ -35,6 +35,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from typing import Optional, Tuple, List, Union
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
+from xlmlib.llm_engine import BlockManager, Sequence, SequenceStatus
 
 try:
     from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
@@ -1717,6 +1718,7 @@ class Qwen3NextModelForEngine(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         cache_params = None,
         _profile_layers: bool = False,
+        _return_hidden_states: bool = False,
     ) -> Tuple[torch.Tensor, List]:
         batch_size, seq_length = input_ids.shape[:2]
         
@@ -1732,6 +1734,11 @@ class Qwen3NextModelForEngine(nn.Module):
         next_cache = []
         num_layers = len(self.layers)
         tp_rank = get_tp_rank()
+        
+        # Debug: collect hidden states after each layer
+        all_hidden_states = [] if _return_hidden_states else None
+        if _return_hidden_states:
+            all_hidden_states.append(hidden_states.clone())  # layer 0 input (embedding output)
         
         # Per-layer profiling: uses CUDA events for accurate GPU timing
         if _profile_layers:
@@ -1769,6 +1776,8 @@ class Qwen3NextModelForEngine(nn.Module):
                 hidden_states = residual + hidden_states
                 events_end[layer_idx].record()
                 next_cache.append((k_cache, v_cache))
+                if _return_hidden_states:
+                    all_hidden_states.append(hidden_states.clone())
             else:
                 hidden_states, k_cache, v_cache = layer(
                     hidden_states,
@@ -1779,6 +1788,8 @@ class Qwen3NextModelForEngine(nn.Module):
                     cache_params=cache_params,
                 )
                 next_cache.append((k_cache, v_cache))
+                if _return_hidden_states:
+                    all_hidden_states.append(hidden_states.clone())
         
         if _tp_debug_enabled:
             torch.cuda.synchronize()
@@ -1825,6 +1836,9 @@ class Qwen3NextModelForEngine(nn.Module):
             print(f'  ===================================================\n', flush=True)
         
         hidden_states = self.norm(hidden_states)
+        if _return_hidden_states:
+            all_hidden_states.append(hidden_states.clone())  # after final norm
+            return hidden_states, next_cache, all_hidden_states
         return hidden_states, next_cache
 
 
@@ -1891,6 +1905,7 @@ class Qwen3NextForLLMEngine(nn.Module):
         logits_to_keep: Optional[torch.Tensor] = None,
         cache_params = None,
         _profile_layers: bool = False,
+        _return_hidden_states: bool = False,
     ) -> Tuple[torch.Tensor, List]:
         """
         Forward pass compatible with LLMEngine.
@@ -1898,16 +1913,28 @@ class Qwen3NextForLLMEngine(nn.Module):
         Args:
             cache_params: None for training. Qwen3NextCacheParams for inference.
                           Contains paged KV cache (full attn) + conv/recurrent states (linear attn).
+            _return_hidden_states: If True, returns a list of hidden states from each layer.
+                          Index 0 = embedding output, 1..N = after each decoder layer,
+                          N+1 = after final RMSNorm. Useful for debugging / comparison.
         
-        Returns: (logits, past_key_values)
+        Returns:
+            If _return_hidden_states=False: (logits, past_key_values)
+            If _return_hidden_states=True:  (logits, past_key_values, all_hidden_states)
+              where all_hidden_states is a list of [num_layers+2] tensors.
         """
-        hidden_states, next_cache = self.model(
+        model_out = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
             cache_params=cache_params,
             _profile_layers=_profile_layers,
+            _return_hidden_states=_return_hidden_states,
         )
+        if _return_hidden_states:
+            hidden_states, next_cache, all_hidden_states = model_out
+        else:
+            hidden_states, next_cache = model_out
+            all_hidden_states = None
         
         # Handle logits_to_keep for efficient prefill
         if logits_to_keep is not None:
@@ -1920,6 +1947,8 @@ class Qwen3NextForLLMEngine(nn.Module):
         if _tp_debug_enabled:
             print(f'    [rank={get_tp_rank()}] lm_head done, logits={logits.shape}', flush=True)
         
+        if _return_hidden_states:
+            return logits, next_cache, all_hidden_states
         return logits, next_cache
 
 
