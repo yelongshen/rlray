@@ -318,12 +318,19 @@ class Scheduler:
         self.waiting.appendleft(seq)
 
     def postprocess(self, seqs: List[Sequence], token_ids: List[int]) :
-        eos_id1 = self.llm_config.eos_token_id
-        eos_id2 = 200020 # eos_token_id
+        eos_cfg = getattr(self.llm_config, 'eos_token_id', None)
+        eos_ids = set()
+        if isinstance(eos_cfg, (list, tuple, set)):
+            eos_ids.update(int(eid) for eid in eos_cfg if eid is not None)
+        elif eos_cfg is not None:
+            eos_ids.add(int(eos_cfg))
+
+        # Legacy Qwen stop id fallback
+        eos_ids.add(200020)
 
         for seq, token_id in zip(seqs, token_ids):
             seq.append_token(token_id)
-            if (token_id == eos_id1 or token_id == eos_id2) or seq.num_completion_tokens == seq.max_tokens:
+            if (token_id in eos_ids) or (seq.num_completion_tokens >= seq.max_tokens):
                 seq.status = SequenceStatus.FINISHED
                 self.block_manager.deallocate(seq) ## deallocate.
                 self.running.remove(seq)

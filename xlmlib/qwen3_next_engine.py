@@ -3063,8 +3063,8 @@ class HybridLLMEngine:
         t_run = _time.time()
         self.scheduler.postprocess(seqs, token_ids)
         
-        # Check additional stop tokens not covered by llm_engine's hardcoded EOS check
-        if self._stop_token_ids and not is_prefill:
+        # Check additional stop tokens not covered by scheduler EOS check
+        if self._stop_token_ids:
             from llm_engine import SequenceStatus
             for seq, tid in zip(seqs, token_ids):
                 if not seq.is_finished and tid in self._stop_token_ids:
@@ -3270,7 +3270,7 @@ class HybridLLMEngine:
         self.scheduler.postprocess(seqs, token_list)
 
         # Check stop tokens
-        if self._stop_token_ids and not is_prefill:
+        if self._stop_token_ids:
             from llm_engine import SequenceStatus
             for seq, tid in zip(seqs, token_list):
                 if not seq.is_finished and tid in self._stop_token_ids:
