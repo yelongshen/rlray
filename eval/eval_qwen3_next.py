@@ -195,6 +195,7 @@ def evaluate(
     prompt_type="v11",
     debug=False,
     output_generations_path=None,
+    print_terminal_token=True,
 ):
     """Run evaluation on a set of math problems.
     
@@ -290,7 +291,12 @@ def evaluate(
             prob_idx = batch_start + local_idx
             output_ids = output_ids_list[out_idx]
             
-            response = tokenizer.decode(output_ids, skip_special_tokens=True)
+            response = tokenizer.decode(output_ids, skip_special_tokens=False)
+            terminal_token_id = int(output_ids[-1]) if len(output_ids) > 0 else None
+            terminal_token_text = (
+                tokenizer.decode([terminal_token_id], skip_special_tokens=False)
+                if terminal_token_id is not None else ""
+            )
             total_response_len += len(output_ids)
             total_generated += 1
             
@@ -312,6 +318,8 @@ def evaluate(
                     "generation": response,
                     "gold_answer": problem["answer"],
                     "predicted_answer": extracted_answer,
+                    "terminal_token_id": terminal_token_id,
+                    "terminal_token_text": terminal_token_text,
                     "reward": float(reward),
                     "correct": bool(reward > 0.5),
                     "response_token_len": int(len(output_ids)),
@@ -323,6 +331,8 @@ def evaluate(
             if show_sample:
                 print(f"\n  [Problem {prob_idx} id={pid}] rollout={rollout}, reward={reward}, "
                       f"gold='{problem['answer']}', extracted='{extracted_answer}', len={len(output_ids)}")
+                if print_terminal_token:
+                    print(f"  Terminal token: id={terminal_token_id}, text={repr(terminal_token_text)}")
                 # Show first 500 chars and last 300 chars of response
                 if len(response) > 800:
                     print(f"  Response (first 500): {response[:500]}")
@@ -330,7 +340,13 @@ def evaluate(
                 else:
                     print(f"  Response: {response}")
             elif is_main and prob_idx < 10:
-                print(f"  [Problem {prob_idx}] r={rollout} reward={reward} extracted='{extracted_answer}' len={len(output_ids)}")
+                if print_terminal_token:
+                    print(
+                        f"  [Problem {prob_idx}] r={rollout} reward={reward} extracted='{extracted_answer}' "
+                        f"len={len(output_ids)} terminal_id={terminal_token_id}"
+                    )
+                else:
+                    print(f"  [Problem {prob_idx}] r={rollout} reward={reward} extracted='{extracted_answer}' len={len(output_ids)}")
         
         # Progress
         batch_end = batch_start + len(batch_problems)
@@ -404,6 +420,10 @@ def main():
     parser.add_argument("--output", type=str, default=None, help="Save results to JSON file")
     parser.add_argument("--output_generations", type=str, default=None,
                         help="Save per-rollout generations to JSONL (prompt/generation/gold/reward)")
+    parser.add_argument("--print_terminal_token", action="store_true", default=True,
+                        help="Print terminal token id/text in logs (default: enabled)")
+    parser.add_argument("--no_print_terminal_token", dest="print_terminal_token", action="store_false",
+                        help="Disable terminal token logging in console output")
     args = parser.parse_args()
     
     # Set visible GPUs before any CUDA operations
@@ -451,6 +471,7 @@ def main():
         prompt_type=args.prompt_type,
         debug=args.debug,
         output_generations_path=args.output_generations,
+        print_terminal_token=args.print_terminal_token,
     )
     
     # Save results

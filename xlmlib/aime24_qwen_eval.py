@@ -70,6 +70,8 @@ class AIME24Result:
     predicted_answer: str
     generation: str
     response: str
+    terminal_token_id: Optional[int]
+    terminal_token_text: str
     reward: float
     correct: bool
 
@@ -169,6 +171,8 @@ class AIME24VLLMEvaluator:
             predicted_answer=predicted_answer,
             generation=response_text,
             response=response_text,
+            terminal_token_id=None,
+            terminal_token_text="",
             reward=reward,
             correct=(reward > 0.5)
         )
@@ -276,7 +280,18 @@ class AIME24Evaluator:
 
         batch_results = []
         for idx, problem in enumerate(problems):
-            response = self.tokenizer.decode(outputs[idx][input_len:], skip_special_tokens=True)
+            output_ids = outputs[idx]
+            gen_ids = output_ids[input_len:]
+            response = self.tokenizer.decode(gen_ids, skip_special_tokens=False)
+            terminal_token_id = int(output_ids[-1]) if output_ids.shape[0] > 0 else None
+            terminal_token_text = (
+                self.tokenizer.decode([terminal_token_id], skip_special_tokens=False)
+                if terminal_token_id is not None else ""
+            )
+            print(
+                f"  [DEBUG] Batch sample {idx} terminal token: id={terminal_token_id}, text={repr(terminal_token_text)}",
+                flush=True,
+            )
             _, predicted_answer, reward = safe_math_answer_timeout(
                 response,
                 [problem.answer],
@@ -293,6 +308,8 @@ class AIME24Evaluator:
                 predicted_answer=predicted_answer,
                 generation=response,
                 response=response,
+                terminal_token_id=terminal_token_id,
+                terminal_token_text=terminal_token_text,
                 reward=reward,
                 correct=(reward > 0.5)
             ))
@@ -340,7 +357,16 @@ class AIME24Evaluator:
         
         response = self.tokenizer.decode(
             outputs[0][inputs['input_ids'].shape[1]:],
-            skip_special_tokens=True
+            skip_special_tokens=False
+        )
+        terminal_token_id = int(outputs[0][-1]) if outputs[0].shape[0] > 0 else None
+        terminal_token_text = (
+            self.tokenizer.decode([terminal_token_id], skip_special_tokens=False)
+            if terminal_token_id is not None else ""
+        )
+        print(
+            f"  [DEBUG] Terminal token: id={terminal_token_id}, text={repr(terminal_token_text)}",
+            flush=True,
         )
         print(f"  [DEBUG] Response length: {len(response)} chars", flush=True)
         
@@ -365,6 +391,8 @@ class AIME24Evaluator:
             predicted_answer=predicted_answer,
             generation=response,
             response=response,
+            terminal_token_id=terminal_token_id,
+            terminal_token_text=terminal_token_text,
             reward=reward,
             correct=(reward > 0.5)
         )
@@ -454,7 +482,16 @@ class AIME24LLMEngineEvaluator:
         
         response = self.tokenizer.decode(
             output_ids[len(input_ids):],
-            skip_special_tokens=True
+            skip_special_tokens=False
+        )
+        terminal_token_id = int(output_ids[-1]) if len(output_ids) > 0 else None
+        terminal_token_text = (
+            self.tokenizer.decode([terminal_token_id], skip_special_tokens=False)
+            if terminal_token_id is not None else ""
+        )
+        print(
+            f"  [DEBUG] Terminal token: id={terminal_token_id}, text={repr(terminal_token_text)}",
+            flush=True,
         )
         print(f"  [DEBUG] Response length: {len(response)} chars", flush=True)
         
@@ -477,6 +514,8 @@ class AIME24LLMEngineEvaluator:
             predicted_answer=predicted_answer,
             generation=response,
             response=response,
+            terminal_token_id=terminal_token_id,
+            terminal_token_text=terminal_token_text,
             reward=reward,
             correct=(reward > 0.5)
         )
@@ -592,6 +631,8 @@ def main():
                         print(f"\n[{idx+1}/{len(problems)}] Problem ID: {problem.id}")
                         print(f"  Gold Answer: {problem.answer}")
                         print(f"  Predicted: {result.predicted_answer}")
+                        print(f"  Terminal Token ID: {result.terminal_token_id}")
+                        print(f"  Terminal Token Text: {repr(result.terminal_token_text)}")
                         print(f"  Reward: {result.reward:.4f}")
                         print(f"  Correct: {result.correct}")
                         print(f"  Batch Time: {elapsed:.2f}s")
@@ -605,6 +646,8 @@ def main():
                             'predicted_answer': result.predicted_answer,
                             'generation': result.generation,
                             'response': result.response,
+                            'terminal_token_id': result.terminal_token_id,
+                            'terminal_token_text': result.terminal_token_text,
                             'reward': result.reward,
                             'correct': result.correct
                         }, ensure_ascii=False) + '\n')
@@ -638,6 +681,8 @@ def main():
                     print("-" * 50)
                     print(f"  Gold Answer: {problem.answer}")
                     print(f"  Predicted: {result.predicted_answer}")
+                    print(f"  Terminal Token ID: {result.terminal_token_id}")
+                    print(f"  Terminal Token Text: {repr(result.terminal_token_text)}")
                     print(f"  Reward: {result.reward:.4f}")
                     print(f"  Correct: {result.correct}")
                     print(f"  Time: {elapsed:.2f}s")
@@ -656,6 +701,8 @@ def main():
                         'predicted_answer': result.predicted_answer,
                         'generation': result.generation,
                         'response': result.response,
+                        'terminal_token_id': result.terminal_token_id,
+                        'terminal_token_text': result.terminal_token_text,
                         'reward': result.reward,
                         'correct': result.correct
                     }, ensure_ascii=False) + '\n')
