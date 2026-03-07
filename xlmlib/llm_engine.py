@@ -325,9 +325,6 @@ class Scheduler:
         elif eos_cfg is not None:
             eos_ids.add(int(eos_cfg))
 
-        # Legacy Qwen stop id fallback
-        eos_ids.add(200020)
-
         for seq, token_id in zip(seqs, token_ids):
             seq.append_token(token_id)
             if (token_id in eos_ids) or (seq.num_completion_tokens >= seq.max_tokens):
