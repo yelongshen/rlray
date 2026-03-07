@@ -805,6 +805,7 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             if linear_slots is not None:
                 linear_slots = linear_slots.long()
                 num_seqs = int(linear_slots.numel())
+        use_linear_slots = linear_slots is not None and use_precomputed_states
         
         if (not use_precomputed_states and cache_params is not None 
                 and batch_size == 1 and FLA_AVAILABLE):
@@ -824,12 +825,12 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             conv_state_buf = cache_params.conv_states[self.layer_idx]
             recurrent_state_buf = cache_params.recurrent_states[self.layer_idx]
             if conv_state_buf is not None:
-                if linear_slots is not None:
+                if use_linear_slots:
                     conv_state = conv_state_buf.index_select(0, linear_slots)
                 else:
                     conv_state = conv_state_buf[:num_seqs]
             if recurrent_state_buf is not None:
-                if linear_slots is not None:
+                if use_linear_slots:
                     recurrent_state = recurrent_state_buf.index_select(0, linear_slots)
                 else:
                     recurrent_state = recurrent_state_buf[:num_seqs]
@@ -856,7 +857,7 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             hidden_states_new = torch.cat([conv_state, mixed_qkv], dim=-1).to(self.conv1d.weight.dtype)
             if cache_params is not None:
                 updated_conv_state = hidden_states_new[:, :, -state_len:]
-                if linear_slots is not None:
+                if use_linear_slots:
                     cache_params.conv_states[self.layer_idx].index_copy_(0, linear_slots, updated_conv_state)
                 else:
                     cache_params.conv_states[self.layer_idx][:num_seqs].copy_(updated_conv_state)
@@ -868,20 +869,18 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             # to prevent cross-contamination across sequence boundaries.
             conv_state_layer = cache_params.conv_states[self.layer_idx] if cache_params is not None else None
             cu_list = cu_seqlens.tolist()
-            slot_list = linear_slots.tolist() if linear_slots is not None else list(range(num_seqs))
             output_segments = []
             for i in range(num_seqs):
                 start, end = cu_list[i], cu_list[i + 1]
                 seg = mixed_qkv[:, :, start:end]  # [1, D, seg_len]
                 seg_len = end - start
-                slot_i = slot_list[i]
                 # Save conv state: last (K-1) tokens of pre-conv input for this seq
                 if conv_state_layer is not None:
                     if seg_len >= self.conv_kernel_size - 1:
-                        conv_state_layer[slot_i].copy_(seg[0, :, -(self.conv_kernel_size - 1):])
+                        conv_state_layer[i].copy_(seg[0, :, -(self.conv_kernel_size - 1):])
                     else:
-                        conv_state_layer[slot_i].zero_()
-                        conv_state_layer[slot_i, :, -seg_len:].copy_(seg[0])
+                        conv_state_layer[i].zero_()
+                        conv_state_layer[i, :, -seg_len:].copy_(seg[0])
                 # Apply causal conv per-segment (conv1d has left-padding built in)
                 seg_out = F.silu(self.conv1d(seg)[:, :, :seg_len])
                 output_segments.append(seg_out)
@@ -889,16 +888,11 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         else:
             # Standard single-seq prefill conv path
             if cache_params is not None and hasattr(cache_params, 'conv_states'):
-                if linear_slots is not None:
-                    target = cache_params.conv_states[self.layer_idx].index_select(0, linear_slots)
-                else:
-                    target = cache_params.conv_states[self.layer_idx][:num_seqs]
+                target = cache_params.conv_states[self.layer_idx][:num_seqs]
                 if mixed_qkv.shape[-1] >= self.conv_kernel_size - 1:
                     target.copy_(mixed_qkv[:, :, -(self.conv_kernel_size - 1):])
                 else:
                     target.copy_(F.pad(mixed_qkv, (self.conv_kernel_size - 1 - mixed_qkv.shape[-1], 0)))
-                if linear_slots is not None:
-                    cache_params.conv_states[self.layer_idx].index_copy_(0, linear_slots, target)
             mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
         
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [B, L, D]
@@ -959,7 +953,7 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         
         # Update cache: write per-seq states back
         if cache_params is not None and hasattr(cache_params, 'recurrent_states'):
-            if linear_slots is not None:
+            if use_linear_slots:
                 cache_params.recurrent_states[self.layer_idx].index_copy_(0, linear_slots, last_recurrent_state)
             else:
                 cache_params.recurrent_states[self.layer_idx][:num_seqs].copy_(last_recurrent_state)
