@@ -798,6 +798,13 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         cu_seqlens = None
         num_seqs = batch_size  # default: one state per batch element
         is_varlen = False
+        context = get_context() if cache_params is not None else None
+        linear_slots = None
+        if context is not None:
+            linear_slots = getattr(context, 'linear_slots', None)
+            if linear_slots is not None:
+                linear_slots = linear_slots.long()
+                num_seqs = int(linear_slots.numel())
         
         if (not use_precomputed_states and cache_params is not None 
                 and batch_size == 1 and FLA_AVAILABLE):
@@ -817,9 +824,15 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             conv_state_buf = cache_params.conv_states[self.layer_idx]
             recurrent_state_buf = cache_params.recurrent_states[self.layer_idx]
             if conv_state_buf is not None:
-                conv_state = conv_state_buf[:num_seqs]
+                if linear_slots is not None:
+                    conv_state = conv_state_buf.index_select(0, linear_slots)
+                else:
+                    conv_state = conv_state_buf[:num_seqs]
             if recurrent_state_buf is not None:
-                recurrent_state = recurrent_state_buf[:num_seqs]
+                if linear_slots is not None:
+                    recurrent_state = recurrent_state_buf.index_select(0, linear_slots)
+                else:
+                    recurrent_state = recurrent_state_buf[:num_seqs]
         
         # Project hidden states
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)
@@ -842,9 +855,11 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             state_len = conv_state.shape[-1]
             hidden_states_new = torch.cat([conv_state, mixed_qkv], dim=-1).to(self.conv1d.weight.dtype)
             if cache_params is not None:
-                cache_params.conv_states[self.layer_idx][:num_seqs].copy_(
-                    hidden_states_new[:, :, -state_len:]
-                )
+                updated_conv_state = hidden_states_new[:, :, -state_len:]
+                if linear_slots is not None:
+                    cache_params.conv_states[self.layer_idx].index_copy_(0, linear_slots, updated_conv_state)
+                else:
+                    cache_params.conv_states[self.layer_idx][:num_seqs].copy_(updated_conv_state)
             out = F.conv1d(hidden_states_new, self.conv1d.weight, 
                           self.conv1d.bias, padding=0, groups=self.conv_dim)
             mixed_qkv = F.silu(out[:, :, -seq_len:]).to(hidden_states.dtype)
@@ -853,18 +868,20 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
             # to prevent cross-contamination across sequence boundaries.
             conv_state_layer = cache_params.conv_states[self.layer_idx] if cache_params is not None else None
             cu_list = cu_seqlens.tolist()
+            slot_list = linear_slots.tolist() if linear_slots is not None else list(range(num_seqs))
             output_segments = []
             for i in range(num_seqs):
                 start, end = cu_list[i], cu_list[i + 1]
                 seg = mixed_qkv[:, :, start:end]  # [1, D, seg_len]
                 seg_len = end - start
+                slot_i = slot_list[i]
                 # Save conv state: last (K-1) tokens of pre-conv input for this seq
                 if conv_state_layer is not None:
                     if seg_len >= self.conv_kernel_size - 1:
-                        conv_state_layer[i].copy_(seg[0, :, -(self.conv_kernel_size - 1):])
+                        conv_state_layer[slot_i].copy_(seg[0, :, -(self.conv_kernel_size - 1):])
                     else:
-                        conv_state_layer[i].zero_()
-                        conv_state_layer[i, :, -seg_len:].copy_(seg[0])
+                        conv_state_layer[slot_i].zero_()
+                        conv_state_layer[slot_i, :, -seg_len:].copy_(seg[0])
                 # Apply causal conv per-segment (conv1d has left-padding built in)
                 seg_out = F.silu(self.conv1d(seg)[:, :, :seg_len])
                 output_segments.append(seg_out)
@@ -872,14 +889,16 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         else:
             # Standard single-seq prefill conv path
             if cache_params is not None and hasattr(cache_params, 'conv_states'):
-                if mixed_qkv.shape[-1] >= self.conv_kernel_size - 1:
-                    cache_params.conv_states[self.layer_idx][:num_seqs].copy_(
-                        mixed_qkv[:, :, -(self.conv_kernel_size - 1):]
-                    )
+                if linear_slots is not None:
+                    target = cache_params.conv_states[self.layer_idx].index_select(0, linear_slots)
                 else:
-                    cache_params.conv_states[self.layer_idx][:num_seqs].copy_(
-                        F.pad(mixed_qkv, (self.conv_kernel_size - 1 - mixed_qkv.shape[-1], 0))
-                    )
+                    target = cache_params.conv_states[self.layer_idx][:num_seqs]
+                if mixed_qkv.shape[-1] >= self.conv_kernel_size - 1:
+                    target.copy_(mixed_qkv[:, :, -(self.conv_kernel_size - 1):])
+                else:
+                    target.copy_(F.pad(mixed_qkv, (self.conv_kernel_size - 1 - mixed_qkv.shape[-1], 0)))
+                if linear_slots is not None:
+                    cache_params.conv_states[self.layer_idx].index_copy_(0, linear_slots, target)
             mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
         
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [B, L, D]
@@ -940,7 +959,10 @@ class Qwen3NextGatedDeltaNetForEngine(nn.Module):
         
         # Update cache: write per-seq states back
         if cache_params is not None and hasattr(cache_params, 'recurrent_states'):
-            cache_params.recurrent_states[self.layer_idx][:num_seqs].copy_(last_recurrent_state)
+            if linear_slots is not None:
+                cache_params.recurrent_states[self.layer_idx].index_copy_(0, linear_slots, last_recurrent_state)
+            else:
+                cache_params.recurrent_states[self.layer_idx][:num_seqs].copy_(last_recurrent_state)
         
         # Apply gated norm
         z_shape_og = z.shape
@@ -2601,6 +2623,8 @@ class HybridModelRunner:
         self.top_k = top_k  # 0 means no top-k filtering
         self.top_p = top_p  # 1.0 means no nucleus filtering
         self.max_batch_size = max_batch_size
+        self._free_linear_slots = deque(range(max_batch_size))
+        self._seq_linear_slots = {}
         
         # Allocate hybrid cache (paged KV + linear attention states)
         self.cache_params = self.allocate_cache(self.model, self.llm_config, 0.70, max_batch_size)
@@ -2623,6 +2647,30 @@ class HybridModelRunner:
         self._decode_warmup_done = False
         self._decode_step_counter = 0
         self._profile_done = False
+
+    def _get_or_alloc_linear_slot(self, seq):
+        slot = self._seq_linear_slots.get(seq.seq_id)
+        if slot is not None:
+            return slot
+        if not self._free_linear_slots:
+            raise RuntimeError(
+                f"No free linear state slots (max_batch_size={self.max_batch_size}). "
+                f"Active slots={len(self._seq_linear_slots)}"
+            )
+        slot = self._free_linear_slots.popleft()
+        self._seq_linear_slots[seq.seq_id] = slot
+        return slot
+
+    def _linear_slots_tensor(self, seqs):
+        slots = [self._get_or_alloc_linear_slot(seq) for seq in seqs]
+        return torch.tensor(slots, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
+
+    @torch.inference_mode()
+    def release_linear_slots(self, seqs):
+        for seq in seqs:
+            slot = self._seq_linear_slots.pop(seq.seq_id, None)
+            if slot is not None:
+                self._free_linear_slots.append(slot)
 
     def call(self, method_name, *args):
         method = getattr(self, method_name, None)
@@ -2676,6 +2724,7 @@ class HybridModelRunner:
         max_seqlen_q = 0
         max_seqlen_k = 0
         slot_mapping = []
+        linear_slots = self._linear_slots_tensor(seqs)
 
         for seq in seqs:
             seqlen = len(seq)
@@ -2709,7 +2758,7 @@ class HybridModelRunner:
         cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
-        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables)
+        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables, linear_slots)
         return input_ids, positions
 
     def prepare_decode(self, seqs):
@@ -2719,6 +2768,7 @@ class HybridModelRunner:
         positions = []
         slot_mapping = []
         context_lens = []
+        linear_slots = self._linear_slots_tensor(seqs)
 
         for seq in seqs:
             input_ids.append(seq.last_token)
@@ -2755,7 +2805,8 @@ class HybridModelRunner:
             
             set_context(False, slot_mapping=ctx['slot_mapping'], 
                        context_lens=ctx['context_lens'], 
-                       block_tables=ctx['block_tables'][:, :bt.shape[1]])
+                       block_tables=ctx['block_tables'][:, :bt.shape[1]],
+                       linear_slots=linear_slots)
             
             input_ids_t = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
             positions_t = torch.tensor(positions, dtype=torch.int64, device=self.device)
@@ -2767,7 +2818,7 @@ class HybridModelRunner:
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         block_tables = self.prepare_block_tables(seqs)
-        set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
+        set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables, linear_slots=linear_slots)
         return input_ids, positions
 
     @torch.inference_mode()
@@ -3075,6 +3126,9 @@ class HybridLLMEngine:
         
         t_post = _time.time()
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
+        finished_seqs = [seq for seq in seqs if seq.is_finished]
+        if finished_seqs:
+            self.model_runner.release_linear_slots(finished_seqs)
         # Print decode progress every 50 tokens
         if not is_prefill and len(seqs) > 0:
             seq = seqs[0]
@@ -3282,9 +3336,13 @@ class HybridLLMEngine:
         # Collect finished outputs
         if not hasattr(self, '_finished_outputs'):
             self._finished_outputs = {}
+        finished_seqs = []
         for seq in seqs:
             if seq.is_finished:
+                finished_seqs.append(seq)
                 self._finished_outputs[seq.seq_id] = seq.completion_token_ids
+        if finished_seqs:
+            self.model_runner.release_linear_slots(finished_seqs)
 
         if debug:
             return all_hidden_states

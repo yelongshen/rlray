@@ -581,10 +581,14 @@ class LLMEngine:
     def generate(
         self,
         prompts: List[List[int]],
+        max_tokens: Optional[int] = None,
     ) -> List[List[int]]:
         # step 1. fill all the request into schedule.
         for prompt in prompts: #zip(prompts, sampling_params):
-            self.scheduler.add(Sequence(prompt))
+            seq = Sequence(prompt)
+            if max_tokens is not None:
+                seq.max_tokens = int(max_tokens)
+            self.scheduler.add(seq)
             #self.add_request(prompt) #, sp
 
         outputs = {}

@@ -472,16 +472,16 @@ class AIME24LLMEngineEvaluator:
         start_time = time.time()
         
         # Use LLMEngine for generation
-        # LLMEngine.generate() expects List[List[int]] and returns List[List[int]]
-        output_ids_list = self.engine.generate([input_ids])
+        # LLMEngine.generate() returns completion token ids (without prompt ids)
+        output_ids_list = self.engine.generate([input_ids], max_tokens=self.max_new_tokens)
         output_ids = output_ids_list[0]  # Get first (and only) result
         
         gen_time = time.time() - start_time
-        new_tokens = len(output_ids) - len(input_ids)
+        new_tokens = len(output_ids)
         print(f"  [DEBUG] Generation done in {gen_time:.1f}s. New tokens: {new_tokens} ({new_tokens/gen_time:.1f} tok/s)", flush=True)
         
         response = self.tokenizer.decode(
-            output_ids[len(input_ids):],
+            output_ids,
             skip_special_tokens=False
         )
         terminal_token_id = int(output_ids[-1]) if len(output_ids) > 0 else None
