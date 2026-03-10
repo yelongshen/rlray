@@ -47,8 +47,10 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
 
-from xlmlib.math_util import process_math_prompt, safe_math_answer_timeout
+from math_util import process_math_prompt, safe_math_answer_timeout
 
 
 @dataclass
@@ -406,7 +408,7 @@ class StreamingQwenEnginePlayer:
         max_cache_length: Optional[int] = None,
         tensor_parallel: int = 1,
     ):
-        from xlmlib.qwen3_next_engine import (
+        from qwen3_next_engine import (
             load_qwen3_next_for_engine,
             get_tp_rank,
             get_tp_world_size,
