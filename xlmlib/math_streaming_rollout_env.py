@@ -32,12 +32,21 @@ import glob
 import json
 import os
 import random
+import sys
 from dataclasses import dataclass
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.distributed as dist
+
+# Ensure project root is importable when launched as:
+#   python ./xlmlib/math_streaming_rollout_env.py
+#   torchrun ... ./xlmlib/math_streaming_rollout_env.py
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 from xlmlib.math_util import process_math_prompt, safe_math_answer_timeout
 
