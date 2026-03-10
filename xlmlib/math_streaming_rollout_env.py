@@ -127,7 +127,8 @@ class OpenMathInstruct2SeedStream:
             from datasets import load_dataset
         except ImportError as exc:
             raise RuntimeError(
-                "`datasets` is required for parquet/HF streaming. Install via: pip install datasets"
+                "`datasets` is required for HF streaming repo IDs. "
+                "For local parquet, install `pyarrow` or convert to jsonl."
             ) from exc
 
         if data_files:
@@ -145,6 +146,32 @@ class OpenMathInstruct2SeedStream:
                 continue
             yield SeedSample(prompt=prompt, answer=self._extract_answer(record))
 
+    def _iter_parquet_local(self, files: List[str]) -> Iterator[SeedSample]:
+        """Read local parquet shards without requiring `datasets` package."""
+        try:
+            import pyarrow.parquet as pq
+        except ImportError as exc:
+            raise RuntimeError(
+                "Local parquet detected but `pyarrow` is not installed. "
+                "Install via: pip install pyarrow (or install datasets), "
+                "or point --seed_path to json/jsonl files."
+            ) from exc
+
+        for path in files:
+            try:
+                parquet_file = pq.ParquetFile(path)
+            except Exception:
+                continue
+            for batch in parquet_file.iter_batches(batch_size=8192):
+                rows = batch.to_pylist()
+                for record in rows:
+                    if not isinstance(record, dict):
+                        continue
+                    prompt = self._extract_prompt(record)
+                    if prompt is None:
+                        continue
+                    yield SeedSample(prompt=prompt, answer=self._extract_answer(record))
+
     def __iter__(self) -> Iterator[SeedSample]:
         if os.path.exists(self.seed_path):
             json_files = []
@@ -155,9 +182,12 @@ class OpenMathInstruct2SeedStream:
             if json_files:
                 stream = self._iter_json_like(sorted(json_files))
             elif parquet_files:
-                stream = self._iter_datasets_stream(data_files=sorted(parquet_files))
+                stream = self._iter_parquet_local(sorted(parquet_files))
             else:
-                stream = self._iter_datasets_stream(data_files=None)
+                raise RuntimeError(
+                    f"No json/jsonl/parquet files found under --seed_path={self.seed_path}. "
+                    "Please provide a local snapshot directory or an HF dataset repo id."
+                )
         else:
             stream = self._iter_datasets_stream(data_files=None)
 
