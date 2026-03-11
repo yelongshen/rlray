@@ -3169,33 +3169,53 @@ class HybridLLMEngine:
     #   print(engine.output_list)
     # ================================================================
 
-    def prepare(self, prompt_list: List[List[int]], max_tokens: int = 32768):
+    def prepare(self, prompt_list: List[List[int]], max_tokens: Union[int, List[int]] = 32768):
         """Add prompts to the scheduler for generation.
         
         Resets internal output collection. Call this before the schedule/run loop.
         
         Args:
             prompt_list: List of token id lists, one per prompt.
-            max_tokens: Maximum number of new tokens to generate per prompt.
+            max_tokens: Either:
+                - int: global maximum number of new tokens for all prompts
+                - List[int]: per-prompt maximums (must match prompt_list length)
         """
         from llm_engine import Sequence
         self._finished_outputs = {}
         self._reported_finished = set()
-        self._max_tokens_default = max_tokens
+        if isinstance(max_tokens, int):
+            if max_tokens <= 0:
+                raise ValueError(f"max_tokens must be > 0, got {max_tokens}")
+            per_prompt_max_tokens = [max_tokens] * len(prompt_list)
+            self._max_tokens_default = max_tokens
+        elif isinstance(max_tokens, list):
+            if len(max_tokens) != len(prompt_list):
+                raise ValueError(
+                    f"max_tokens list length ({len(max_tokens)}) must match prompt_list length ({len(prompt_list)})"
+                )
+            if any((not isinstance(m, int) or m <= 0) for m in max_tokens):
+                raise ValueError("all max_tokens values must be positive integers")
+            per_prompt_max_tokens = list(max_tokens)
+            self._max_tokens_default = max(per_prompt_max_tokens) if per_prompt_max_tokens else 32768
+        else:
+            raise TypeError(f"max_tokens must be int or List[int], got {type(max_tokens)}")
+
         self._next_external_id = 0
         self._seqid_to_external = {}
         self._active_seq_by_external = {}
         self._external_histories = {}
+        self._max_tokens_by_external = {}
         self._closed_external_ids = set()
-        for prompt in prompt_list:
+        for prompt, max_tok in zip(prompt_list, per_prompt_max_tokens):
             external_id = self._next_external_id
             self._next_external_id += 1
             seq = Sequence(prompt)
-            seq.max_tokens = max_tokens
+            seq.max_tokens = max_tok
             self.scheduler.add(seq)
             self._seqid_to_external[seq.seq_id] = external_id
             self._active_seq_by_external[external_id] = seq
             self._external_histories[external_id] = list(prompt)
+            self._max_tokens_by_external[external_id] = max_tok
 
     def _run_schedule_once(self, force_decode: bool = False):
         """Run one schedule+run iteration; optionally force decode despite waiting queue."""
@@ -3288,7 +3308,7 @@ class HybridLLMEngine:
                 continue
             hist.extend(feed_tokens)
             seq = Sequence(hist)
-            seq.max_tokens = self._max_tokens_default
+            seq.max_tokens = self._max_tokens_by_external.get(external_id, self._max_tokens_default)
             self.scheduler.add(seq)
             self._seqid_to_external[seq.seq_id] = external_id
             self._active_seq_by_external[external_id] = seq

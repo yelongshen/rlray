@@ -102,9 +102,57 @@ def test_stream_feed_and_done_schema():
     assert waiting_after == waiting_before, "closed external id must not be re-enqueued"
 
 
+def test_per_prompt_max_tokens_schema():
+    engine = _build_engine_stub()
+    engine.prepare([[10], [20, 21]], max_tokens=[3, 7])
+
+    seq0 = engine._active_seq_by_external[0]
+    seq1 = engine._active_seq_by_external[1]
+    assert seq0.max_tokens == 3, f"expected prompt0 max_tokens=3, got {seq0.max_tokens}"
+    assert seq1.max_tokens == 7, f"expected prompt1 max_tokens=7, got {seq1.max_tokens}"
+
+    finished_ids, _ = engine.generate_partial(yield_finished=True, continuous_batching=True)
+    assert finished_ids == [0], f"expected first finished external id [0], got {finished_ids}"
+
+    engine.stream_feed([0], ["retry answer"])
+    seq0_reactivated = engine._active_seq_by_external[0]
+    assert seq0_reactivated.max_tokens == 3, (
+        f"reactivated external id should keep max_tokens=3, got {seq0_reactivated.max_tokens}"
+    )
+
+    finished_ids_2, _ = engine.generate_partial(yield_finished=True, continuous_batching=True)
+    assert finished_ids_2 == [1], f"expected second finished external id [1], got {finished_ids_2}"
+
+    engine.stream_feed([1], [[101, 102]])
+    seq1_reactivated = engine._active_seq_by_external[1]
+    assert seq1_reactivated.max_tokens == 7, (
+        f"reactivated external id should keep max_tokens=7, got {seq1_reactivated.max_tokens}"
+    )
+
+
+def test_per_prompt_max_tokens_validation():
+    engine = _build_engine_stub()
+
+    try:
+        engine.prepare([[1], [2]], max_tokens=[5])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for mismatched max_tokens length")
+
+    try:
+        engine.prepare([[1]], max_tokens=0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for non-positive global max_tokens")
+
+
 def run_all_tests():
     test_continuous_batching_partial_generation()
     test_stream_feed_and_done_schema()
+    test_per_prompt_max_tokens_schema()
+    test_per_prompt_max_tokens_validation()
     print("continuous batching controllable API unit tests passed")
 
 
@@ -114,7 +162,6 @@ def run_real_engine_test(
     device: str = "cuda",
     dtype: str = "bfloat16",
     tensor_parallel: int = 1,
-    max_new_tokens: int = 128,
     max_steps: int = 200,
     with_feedback: bool = True,
 ):
@@ -146,7 +193,10 @@ def run_real_engine_test(
     )
 
     prompt_ids = [tokenizer.encode(p, add_special_tokens=False) for p in prompts]
-    engine.prepare(prompt_ids, max_tokens=max_new_tokens)
+    split = len(prompt_ids) // 2
+    per_prompt_max_tokens = [128 if i < split else 256 for i in range(len(prompt_ids))]
+    print(f"[real-test] per-prompt max_tokens={per_prompt_max_tokens}")
+    engine.prepare(prompt_ids, max_tokens=per_prompt_max_tokens)
 
     feedback_round_done = set()
     closed_ids = set()
@@ -196,7 +246,6 @@ def _parse_args():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--tensor-parallel", type=int, default=1)
-    parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--no-feedback", action="store_true")
     return parser.parse_args()
@@ -219,7 +268,6 @@ if __name__ == "__main__":
             device=args.device,
             dtype=args.dtype,
             tensor_parallel=args.tensor_parallel,
-            max_new_tokens=args.max_new_tokens,
             max_steps=args.max_steps,
             with_feedback=not args.no_feedback,
         )
