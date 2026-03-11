@@ -439,15 +439,14 @@ class StreamingQwenEnginePlayer:
         tensor_parallel: int = 1,
     ):
         from qwen3_next_engine import (
+            HybridLLMEngine,
             load_qwen3_next_for_engine,
             get_tp_rank,
             get_tp_world_size,
-            get_tp_group,
         )
 
         self._get_tp_rank = get_tp_rank
         self._get_tp_world_size = get_tp_world_size
-        self._get_tp_group = get_tp_group
 
         self.temperature = temperature
         self.top_p = top_p
@@ -456,6 +455,10 @@ class StreamingQwenEnginePlayer:
         self.tensor_parallel = tensor_parallel
         self.total_context_tokens = 0
         self.last_logits = None
+        self.history_tokens: List[int] = []
+        self._prepared = False
+        self._max_episode_tokens = 10_000_000
+        self.can_append_runtime_context = False
 
         torch_dtype = {
             "float16": torch.float16,
@@ -478,113 +481,74 @@ class StreamingQwenEnginePlayer:
             )
 
         self.device = next(self.model.parameters()).device
-        self._allocate_cache()
+
+        self.engine = self._new_engine()
+
+    def _new_engine(self):
+        from qwen3_next_engine import HybridLLMEngine
+        return HybridLLMEngine(
+            self.model,
+            self.llm_config,
+            self.device,
+            temperature=self.temperature,
+            top_k=self.top_k,
+            top_p=self.top_p,
+            max_batch_size=1,
+            prefill_one_by_one=False,
+            tokenizer=self.tokenizer,
+        )
 
     @property
     def is_main(self) -> bool:
         return self._get_tp_rank() == 0
 
-    def _allocate_cache(self):
-        device_idx = self.device.index if self.device.index is not None else 0
-        free, _ = torch.cuda.mem_get_info(device_idx)
-        usable_free = int(free * 0.70)
-        self.cache_params = self.model.allocate_cache(
-            batch_size=1,
-            free_memory_budget=usable_free,
-            device=self.device,
-            block_size=256,
-        )
-
     def reset_episode(self) -> None:
-        self.cache_params.reset()
-        self.cache_params.has_previous_state = False
+        self.engine = self._new_engine()
+        self.engine.model_runner.cache_params.reset()
+        self.engine.model_runner.cache_params.has_previous_state = False
         self.total_context_tokens = 0
         self.last_logits = None
-
-    def _sample_local(self, logits: torch.Tensor) -> int:
-        logits = logits.float()
-        if self.temperature <= 0:
-            return int(torch.argmax(logits, dim=-1).item())
-
-        logits = logits / self.temperature
-        if self.top_k > 0:
-            topk_vals, topk_idx = torch.topk(logits, k=min(self.top_k, logits.numel()), dim=-1)
-            filtered = torch.full_like(logits, float("-inf"))
-            filtered.scatter_(-1, topk_idx, topk_vals)
-            logits = filtered
-
-        if 0.0 < self.top_p < 1.0:
-            sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
-            sorted_probs = torch.softmax(sorted_logits, dim=-1)
-            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-            sorted_mask = cumulative_probs > self.top_p
-            sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
-            sorted_mask[..., 0] = False
-            sorted_logits = sorted_logits.masked_fill(sorted_mask, float("-inf"))
-            logits = torch.full_like(logits, float("-inf"))
-            logits.scatter_(-1, sorted_indices, sorted_logits)
-
-        probs = torch.softmax(logits, dim=-1)
-        token = torch.multinomial(probs, num_samples=1)
-        return int(token.item())
-
-    def _sample_from_logits(self, logits: torch.Tensor) -> int:
-        world_size = self._get_tp_world_size()
-        if world_size <= 1:
-            return self._sample_local(logits)
-
-        if self.is_main:
-            tok = self._sample_local(logits)
-            token_t = torch.tensor([tok], dtype=torch.long, device=self.device)
-        else:
-            token_t = torch.zeros(1, dtype=torch.long, device=self.device)
-
-        dist.broadcast(token_t, src=0, group=self._get_tp_group())
-        return int(token_t.item())
+        self.history_tokens = []
+        self._prepared = False
 
     @torch.inference_mode()
     def append_context_text(self, text: str) -> List[int]:
         token_ids = self.tokenizer.encode(text, add_special_tokens=False)
         if not token_ids:
             return []
-
-        input_ids = torch.tensor([token_ids], dtype=torch.long, device=self.device)
-        start = self.total_context_tokens
-        position_ids = torch.arange(start, start + input_ids.shape[1], dtype=torch.long, device=self.device).unsqueeze(0)
-        logits, _ = self.model(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            cache_params=self.cache_params,
-        )
-        self.last_logits = logits[:, -1, :]
+        if self._prepared:
+            # In strict continuous decode mode, runtime context append is not ingested
+            # into model state once decoding has started.
+            return token_ids
+        self.history_tokens.extend(token_ids)
         self.total_context_tokens += len(token_ids)
-        self.cache_params.has_previous_state = True
         return token_ids
 
     @torch.inference_mode()
     def generate_turn(self, max_new_tokens: int, stop_token_ids: Optional[set] = None) -> List[int]:
+        if not self.history_tokens:
+            raise RuntimeError("No context tokens available. Call append_context_text() before generate_turn().")
+
+        if not self._prepared:
+            self.engine.prepare([self.history_tokens], max_tokens=self._max_episode_tokens)
+            self._prepared = True
+
         generated: List[int] = []
-        if self.last_logits is None:
-            raise RuntimeError("No context logits available. Call append_context_text() before generate_turn().")
+        while len(generated) < max_new_tokens and not self.engine.is_finished():
+            input_ids, position_ids = self.engine.schedule()
+            seq = self.engine._scheduled_seqs[0]
+            before = len(seq.completion_token_ids)
+            self.engine.run(input_ids, position_ids, debug=False)
+            after = len(seq.completion_token_ids)
 
-        for _ in range(max_new_tokens):
-            next_token = self._sample_from_logits(self.last_logits.squeeze(0))
-            generated.append(next_token)
+            if after > before:
+                token = int(seq.completion_token_ids[-1])
+                generated.append(token)
+                if stop_token_ids and token in stop_token_ids:
+                    break
 
-            input_ids = torch.tensor([[next_token]], dtype=torch.long, device=self.device)
-            position_ids = torch.tensor([[self.total_context_tokens]], dtype=torch.long, device=self.device)
-            logits, _ = self.model(
-                input_ids=input_ids,
-                position_ids=position_ids,
-                cache_params=self.cache_params,
-            )
-            self.last_logits = logits[:, -1, :]
-            self.total_context_tokens += 1
-            self.cache_params.has_previous_state = True
-
-            if stop_token_ids and next_token in stop_token_ids:
-                break
-
+        self.history_tokens.extend(generated)
+        self.total_context_tokens += len(generated)
         return generated
 
 
@@ -657,7 +621,12 @@ class InteractiveMathStreamingEnv:
                 feedback = "\nSystem: Correct. Provide a shorter proof and verify key steps.\n"
             else:
                 feedback = "\nSystem: Not correct yet. Re-check assumptions and solve again carefully.\n"
-            feedback_ids = self.player.append_context_text(feedback)
+            if getattr(self.player, "can_append_runtime_context", True):
+                feedback_ids = self.player.append_context_text(feedback)
+            else:
+                # Strict continuous decode mode: feedback is logged but not injected
+                # into model context (no re-prepare, no mid-episode prefill).
+                feedback_ids = self.player.tokenizer.encode(feedback, add_special_tokens=False)
             self._writer_append(writer, feedback_ids, [0.0] * len(feedback_ids), [0] * len(feedback_ids))
             total_tokens += len(feedback_ids)
 

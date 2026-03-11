@@ -3180,10 +3180,132 @@ class HybridLLMEngine:
         """
         from llm_engine import Sequence
         self._finished_outputs = {}
+        self._reported_finished = set()
+        self._max_tokens_default = max_tokens
+        self._next_external_id = 0
+        self._seqid_to_external = {}
+        self._active_seq_by_external = {}
+        self._external_histories = {}
+        self._closed_external_ids = set()
         for prompt in prompt_list:
+            external_id = self._next_external_id
+            self._next_external_id += 1
             seq = Sequence(prompt)
             seq.max_tokens = max_tokens
             self.scheduler.add(seq)
+            self._seqid_to_external[seq.seq_id] = external_id
+            self._active_seq_by_external[external_id] = seq
+            self._external_histories[external_id] = list(prompt)
+
+    def _run_schedule_once(self, force_decode: bool = False):
+        """Run one schedule+run iteration; optionally force decode despite waiting queue."""
+        if force_decode and len(self.scheduler.running) > 0:
+            from collections import deque as _deque
+            saved_waiting = self.scheduler.waiting
+            self.scheduler.waiting = _deque()
+            try:
+                try:
+                    input_ids, position_ids = self.schedule()
+                except AssertionError:
+                    # Scheduler may fail to form a decode batch in rare low-block edge cases.
+                    return
+                self.run(input_ids, position_ids, debug=False)
+            finally:
+                self.scheduler.waiting = saved_waiting
+        else:
+            input_ids, position_ids = self.schedule()
+            self.run(input_ids, position_ids, debug=False)
+
+    def generate_partial(self, yield_finished: bool = True, continuous_batching: bool = True):
+        """Generate partial progress.
+
+        Returns:
+            (external_ids, outputs)
+            - external_ids: IDs from prepare() order
+            - outputs: completion token lists for newly finished requests
+        """
+        if self.is_finished():
+            return [], []
+
+        did_work = False
+        if continuous_batching:
+            if len(self.scheduler.waiting) > 0:
+                self._run_schedule_once(force_decode=False)
+                did_work = True
+            if len(self.scheduler.running) > 0:
+                self._run_schedule_once(force_decode=True)
+                did_work = True
+        if not did_work:
+            self._run_schedule_once(force_decode=False)
+
+        if not yield_finished:
+            return [], []
+
+        new_external_ids = []
+        new_outputs = []
+        for seq_id, token_ids in self._finished_outputs.items():
+            if seq_id in self._reported_finished:
+                continue
+            external_id = self._seqid_to_external.get(seq_id, None)
+            if external_id is None:
+                self._reported_finished.add(seq_id)
+                continue
+            self._reported_finished.add(seq_id)
+            if external_id in self._closed_external_ids:
+                continue
+            hist = self._external_histories.get(external_id)
+            if hist is not None:
+                hist.extend(token_ids)
+            self._active_seq_by_external.pop(external_id, None)
+            new_external_ids.append(external_id)
+            new_outputs.append(token_ids)
+        return new_external_ids, new_outputs
+
+    def _encode_feed_item(self, item: Union[str, List[int]]) -> List[int]:
+        if isinstance(item, list):
+            return item
+        if isinstance(item, str):
+            if self.tokenizer is None:
+                raise ValueError("stream_feed received str but tokenizer is not set on engine")
+            return self.tokenizer.encode(item, add_special_tokens=False)
+        raise TypeError(f"Unsupported feed item type: {type(item)}")
+
+    def stream_feed(self, external_ids: List[int], feeds: List[Union[str, List[int]]]):
+        """Attach feedback/new question tokens and resume generation for finished IDs."""
+        from llm_engine import Sequence
+        assert len(external_ids) == len(feeds), "external_ids and feeds must have same length"
+
+        for external_id, feed in zip(external_ids, feeds):
+            if external_id in self._closed_external_ids:
+                continue
+            if external_id in self._active_seq_by_external:
+                continue
+            hist = self._external_histories.get(external_id, None)
+            if hist is None:
+                continue
+            feed_tokens = self._encode_feed_item(feed)
+            if not feed_tokens:
+                continue
+            hist.extend(feed_tokens)
+            seq = Sequence(hist)
+            seq.max_tokens = self._max_tokens_default
+            self.scheduler.add(seq)
+            self._seqid_to_external[seq.seq_id] = external_id
+            self._active_seq_by_external[external_id] = seq
+
+    def done(self, external_ids: List[int]):
+        """Mark external IDs as closed and remove active sequences from scheduler."""
+        for external_id in external_ids:
+            self._closed_external_ids.add(external_id)
+            seq = self._active_seq_by_external.pop(external_id, None)
+            if seq is None:
+                continue
+            if seq in self.scheduler.waiting:
+                self.scheduler.waiting.remove(seq)
+            if seq in self.scheduler.running:
+                self.scheduler.running.remove(seq)
+            if len(seq.block_table) > 0:
+                self.scheduler.block_manager.deallocate(seq)
 
     def schedule(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Schedule the next batch and prepare input tensors.

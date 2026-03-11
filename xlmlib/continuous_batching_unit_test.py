@@ -1,0 +1,225 @@
+import os
+import sys
+from collections import deque
+import types
+import argparse
+
+import torch
+
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+from qwen3_next_engine import HybridLLMEngine
+
+
+class _DummyBlockManager:
+    def deallocate(self, seq):
+        return
+
+
+class _FakeScheduler:
+    def __init__(self):
+        self.waiting = deque()
+        self.running = deque()
+        self.block_manager = _DummyBlockManager()
+
+    def add(self, seq):
+        self.waiting.append(seq)
+
+    def is_finished(self):
+        return not self.waiting and not self.running
+
+
+class _DummyTokenizer:
+    def encode(self, text, add_special_tokens=False):
+        return [ord(c) % 251 for c in text]
+
+
+def _build_engine_stub():
+    engine = HybridLLMEngine.__new__(HybridLLMEngine)
+    engine.scheduler = _FakeScheduler()
+    engine.tokenizer = _DummyTokenizer()
+    engine._stop_token_ids = set()
+    engine._run_calls = []
+
+    def _fake_run_schedule_once(self, force_decode=False):
+        self._run_calls.append(force_decode)
+        if not force_decode and len(self.scheduler.waiting) > 0:
+            seq = self.scheduler.waiting.popleft()
+            self.scheduler.running.append(seq)
+            return
+        if len(self.scheduler.running) > 0:
+            seq = self.scheduler.running.popleft()
+            self._finished_outputs[seq.seq_id] = [900 + (seq.seq_id % 10)]
+
+    engine._run_schedule_once = types.MethodType(_fake_run_schedule_once, engine)
+    return engine
+
+
+def test_continuous_batching_partial_generation():
+    engine = _build_engine_stub()
+    prompt_list = [[11, 12], [21, 22, 23]]
+    engine.prepare(prompt_list, max_tokens=32)
+
+    ids_1, outs_1 = engine.generate_partial(yield_finished=True, continuous_batching=True)
+    assert engine._run_calls == [False, True], f"unexpected run call order: {engine._run_calls}"
+    assert len(ids_1) == 1 and len(outs_1) == 1, "first partial should finish exactly one request"
+    assert ids_1[0] == 0, f"expected first external id=0, got {ids_1[0]}"
+
+    ids_2, outs_2 = engine.generate_partial(yield_finished=True, continuous_batching=True)
+    assert engine._run_calls[-2:] == [False, True], "second partial should also do prefill+decode"
+    assert len(ids_2) == 1 and len(outs_2) == 1, "second partial should finish exactly one request"
+    assert ids_2[0] == 1, f"expected second external id=1, got {ids_2[0]}"
+
+    ids_3, outs_3 = engine.generate_partial(yield_finished=True, continuous_batching=True)
+    assert ids_3 == [] and outs_3 == [], "no outputs expected after all requests are finished"
+
+
+def test_stream_feed_and_done_schema():
+    engine = _build_engine_stub()
+    engine.prepare([[1, 2, 3]], max_tokens=16)
+
+    finished_ids, finished_outs = engine.generate_partial(yield_finished=True, continuous_batching=True)
+    assert finished_ids == [0], f"expected finished external id [0], got {finished_ids}"
+    assert len(finished_outs) == 1 and len(finished_outs[0]) > 0, "finished output should be non-empty"
+
+    before_len = len(engine._external_histories[0])
+    engine.stream_feed([0], ["feedback + new question"])
+    after_len = len(engine._external_histories[0])
+    assert after_len > before_len, "history should extend after stream_feed"
+    assert 0 in engine._active_seq_by_external, "stream_feed should reactivate external id"
+    assert len(engine.scheduler.waiting) > 0, "stream_feed should enqueue a new waiting sequence"
+
+    engine.done([0])
+    assert 0 not in engine._active_seq_by_external, "done() should remove active sequence"
+    assert 0 in engine._closed_external_ids, "done() should mark external id closed"
+
+    waiting_before = len(engine.scheduler.waiting)
+    engine.stream_feed([0], ["should be ignored because closed"])
+    waiting_after = len(engine.scheduler.waiting)
+    assert waiting_after == waiting_before, "closed external id must not be re-enqueued"
+
+
+def run_all_tests():
+    test_continuous_batching_partial_generation()
+    test_stream_feed_and_done_schema()
+    print("continuous batching controllable API unit tests passed")
+
+
+def run_real_engine_test(
+    model_path: str,
+    prompts,
+    device: str = "cuda",
+    dtype: str = "bfloat16",
+    tensor_parallel: int = 1,
+    max_new_tokens: int = 128,
+    max_steps: int = 200,
+    with_feedback: bool = True,
+):
+    from qwen3_next_engine import load_qwen3_next_for_engine
+
+    torch_dtype = {
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32,
+    }[dtype]
+
+    model, tokenizer, llm_config = load_qwen3_next_for_engine(
+        model_path=model_path,
+        device=device,
+        torch_dtype=torch_dtype,
+        tensor_parallel_size=tensor_parallel,
+    )
+
+    engine = HybridLLMEngine(
+        model,
+        llm_config,
+        next(model.parameters()).device,
+        temperature=0.6,
+        top_k=0,
+        top_p=0.95,
+        max_batch_size=max(2, len(prompts)),
+        prefill_one_by_one=False,
+        tokenizer=tokenizer,
+    )
+
+    prompt_ids = [tokenizer.encode(p, add_special_tokens=False) for p in prompts]
+    engine.prepare(prompt_ids, max_tokens=max_new_tokens)
+
+    feedback_round_done = set()
+    closed_ids = set()
+    steps = 0
+
+    print(f"[real-test] start with {len(prompts)} prompts")
+    while steps < max_steps and (not engine.is_finished()):
+        steps += 1
+        finished_ids, finished_outs = engine.generate_partial(
+            yield_finished=True,
+            continuous_batching=True,
+        )
+
+        if not finished_ids:
+            continue
+
+        for external_id, out_tokens in zip(finished_ids, finished_outs):
+            out_text = tokenizer.decode(out_tokens, skip_special_tokens=False)
+            print(f"[real-test] step={steps} finished id={external_id} out_len={len(out_tokens)}")
+            print(f"[real-test] output preview: {out_text[:240]!r}")
+
+            if with_feedback and external_id not in feedback_round_done:
+                feedback = (
+                    "\nPlease verify your last answer, then provide a concise corrected final answer."
+                )
+                engine.stream_feed([external_id], [feedback])
+                feedback_round_done.add(external_id)
+                print(f"[real-test] stream_feed id={external_id}")
+            else:
+                engine.done([external_id])
+                closed_ids.add(external_id)
+                print(f"[real-test] done id={external_id}")
+
+    expected_min_closed = len(prompts)
+    assert len(closed_ids) >= expected_min_closed, (
+        f"real test incomplete: closed={len(closed_ids)} < expected={expected_min_closed}, "
+        f"steps={steps}, engine_finished={engine.is_finished()}"
+    )
+    print("[real-test] continuous batching controllable schema passed")
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description="Continuous batching controllable API tests")
+    parser.add_argument("--mode", choices=["stub", "real"], default="stub")
+    parser.add_argument("--model-path", type=str, default=None)
+    parser.add_argument("--prompt", action="append", default=[])
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
+    parser.add_argument("--tensor-parallel", type=int, default=1)
+    parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--max-steps", type=int, default=200)
+    parser.add_argument("--no-feedback", action="store_true")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = _parse_args()
+    if args.mode == "stub":
+        run_all_tests()
+    else:
+        if not args.model_path:
+            raise ValueError("--model-path is required when --mode real")
+        prompts = args.prompt or [
+            "Solve: If 2x + 5 = 17, what is x?",
+            "Compute: What is the derivative of x^3 + 2x?",
+        ]
+        run_real_engine_test(
+            model_path=args.model_path,
+            prompts=prompts,
+            device=args.device,
+            dtype=args.dtype,
+            tensor_parallel=args.tensor_parallel,
+            max_new_tokens=args.max_new_tokens,
+            max_steps=args.max_steps,
+            with_feedback=not args.no_feedback,
+        )
