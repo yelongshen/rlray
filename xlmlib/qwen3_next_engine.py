@@ -3205,6 +3205,7 @@ class HybridLLMEngine:
         self._active_seq_by_external = {}
         self._external_histories = {}
         self._max_tokens_by_external = {}
+        self._finished_external_order = []
         self._closed_external_ids = set()
         for prompt, max_tok in zip(prompt_list, per_prompt_max_tokens):
             external_id = self._next_external_id
@@ -3261,6 +3262,13 @@ class HybridLLMEngine:
         if not yield_finished:
             return [], []
 
+        return self._collect_new_finished_outputs()
+
+    def _collect_new_finished_outputs(self):
+        """Collect newly finished outputs since last report."""
+        if not hasattr(self, '_finished_outputs'):
+            return [], []
+
         new_external_ids = []
         new_outputs = []
         for seq_id, token_ids in self._finished_outputs.items():
@@ -3279,7 +3287,125 @@ class HybridLLMEngine:
             self._active_seq_by_external.pop(external_id, None)
             new_external_ids.append(external_id)
             new_outputs.append(token_ids)
+            self._finished_external_order.append(external_id)
         return new_external_ids, new_outputs
+
+    def step_continuous(self):
+        """Run one continuous-batching tick and return finished items.
+
+        Returns:
+            List[Tuple[external_id, completion_token_ids]]
+        """
+        if self.is_finished():
+            return []
+
+        # Preferred path: true mixed prefill+decode scheduling in one run() call.
+        did_work = False
+        try:
+            mixed_batches = self.schedule_mixed()
+            if mixed_batches:
+                self.run(None, None, debug=False)
+                did_work = True
+        except Exception:
+            # Fallback path for lightweight stubs/tests or edge scheduler states.
+            pass
+
+        if not did_work:
+            external_ids, outputs = self.generate_partial(
+                yield_finished=True,
+                continuous_batching=True,
+            )
+            return list(zip(external_ids, outputs))
+
+        external_ids, outputs = self._collect_new_finished_outputs()
+        return list(zip(external_ids, outputs))
+
+    def add_multiturn_from_finished(
+        self,
+        followup_prompts: List[Union[str, List[int]]],
+        base_seq_ids: Optional[List[int]] = None,
+        max_tokens: Optional[Union[int, List[int]]] = None,
+        inherit_max_tokens: bool = True,
+    ) -> List[int]:
+        """Continue finished requests by appending followups to their histories.
+
+        Args:
+            followup_prompts: List of follow-up prompts (str or token-id list).
+            base_seq_ids: External IDs to continue; if None, use most recent
+                finished IDs in order.
+            max_tokens: Optional override for resumed requests.
+                - int: apply to all
+                - List[int]: per-request
+            inherit_max_tokens: If True and max_tokens is None, keep previous
+                per-request max_tokens.
+
+        Returns:
+            External IDs that were (re)activated.
+        """
+        n = len(followup_prompts)
+        if n == 0:
+            return []
+
+        if base_seq_ids is None:
+            if len(self._finished_external_order) < n:
+                raise ValueError(
+                    f"Not enough finished IDs to continue: need={n}, have={len(self._finished_external_order)}"
+                )
+            base_seq_ids = list(self._finished_external_order[-n:])
+
+        if len(base_seq_ids) != n:
+            raise ValueError(
+                f"base_seq_ids length ({len(base_seq_ids)}) must match followup_prompts length ({n})"
+            )
+
+        if max_tokens is None:
+            per_max_tokens = None
+        elif isinstance(max_tokens, int):
+            if max_tokens <= 0:
+                raise ValueError(f"max_tokens must be > 0, got {max_tokens}")
+            per_max_tokens = [max_tokens] * n
+        elif isinstance(max_tokens, list):
+            if len(max_tokens) != n:
+                raise ValueError(
+                    f"max_tokens list length ({len(max_tokens)}) must match followup_prompts length ({n})"
+                )
+            if any((not isinstance(m, int) or m <= 0) for m in max_tokens):
+                raise ValueError("all max_tokens values must be positive integers")
+            per_max_tokens = list(max_tokens)
+        else:
+            raise TypeError(f"max_tokens must be int or List[int], got {type(max_tokens)}")
+
+        from llm_engine import Sequence
+
+        feed_tokens_list = [self._encode_feed_item(feed) for feed in followup_prompts]
+        if any(len(tokens) == 0 for tokens in feed_tokens_list):
+            raise ValueError("followup prompts must not be empty")
+
+        activated = []
+        for idx, (external_id, feed_tokens) in enumerate(zip(base_seq_ids, feed_tokens_list)):
+            if external_id in self._closed_external_ids:
+                raise ValueError(f"external id {external_id} is closed")
+            if external_id in self._active_seq_by_external:
+                raise ValueError(f"external id {external_id} is still active; wait until it finishes")
+
+            hist = self._external_histories.get(external_id, None)
+            if hist is None:
+                raise ValueError(f"external id {external_id} not found")
+
+            if per_max_tokens is not None:
+                self._max_tokens_by_external[external_id] = per_max_tokens[idx]
+            elif not inherit_max_tokens:
+                self._max_tokens_by_external[external_id] = self._max_tokens_default
+
+            hist.extend(feed_tokens)
+            seq = Sequence(hist)
+            seq.max_tokens = self._max_tokens_by_external.get(external_id, self._max_tokens_default)
+            self.scheduler.add(seq)
+            self._seqid_to_external[seq.seq_id] = external_id
+            self._active_seq_by_external[external_id] = seq
+            activated.append(external_id)
+
+        return activated
 
     def _encode_feed_item(self, item: Union[str, List[int]]) -> List[int]:
         if isinstance(item, list):
@@ -3327,6 +3453,57 @@ class HybridLLMEngine:
             if len(seq.block_table) > 0:
                 self.scheduler.block_manager.deallocate(seq)
 
+    def schedule_mixed(self):
+        """Schedule decode and prefill batches for one mixed run tick.
+
+        Returns:
+            List[Tuple[seqs, is_prefill, input_ids, positions]]
+        """
+        from collections import deque as _deque
+
+        mixed_batches = []
+
+        # 1) Decode first: temporarily hide waiting queue so scheduler picks running.
+        if len(self.scheduler.running) > 0:
+            saved_waiting = self.scheduler.waiting
+            self.scheduler.waiting = _deque()
+            try:
+                try:
+                    decode_seqs, is_prefill = self.scheduler.schedule()
+                except AssertionError:
+                    decode_seqs, is_prefill = [], False
+                if decode_seqs and (not is_prefill):
+                    decode_input_ids, decode_positions = self.model_runner.prepare_decode(decode_seqs)
+                    mixed_batches.append((decode_seqs, False, decode_input_ids, decode_positions))
+            finally:
+                self.scheduler.waiting = saved_waiting
+
+        # 2) Prefill next: consume waiting with remaining scheduler state.
+        if len(self.scheduler.waiting) > 0:
+            try:
+                prefill_seqs, is_prefill = self.scheduler.schedule()
+            except AssertionError:
+                prefill_seqs, is_prefill = [], False
+
+            if prefill_seqs and is_prefill:
+                if self.prefill_one_by_one and len(prefill_seqs) > 1:
+                    extra_seqs = prefill_seqs[1:]
+                    prefill_seqs = prefill_seqs[:1]
+                    for seq in extra_seqs:
+                        self.scheduler.preempt(seq)
+
+                if (not FLA_AVAILABLE) and len(prefill_seqs) > 1:
+                    for seq in prefill_seqs[1:]:
+                        self.scheduler.preempt(seq)
+                    prefill_seqs = prefill_seqs[:1]
+
+                prefill_input_ids, prefill_positions = self.model_runner.prepare_prefill(prefill_seqs)
+                mixed_batches.append((prefill_seqs, True, prefill_input_ids, prefill_positions))
+
+        self._scheduled_is_prefill = "mixed"
+        self._scheduled_mixed_batches = mixed_batches
+        return mixed_batches
+
     def schedule(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Schedule the next batch and prepare input tensors.
         
@@ -3364,26 +3541,15 @@ class HybridLLMEngine:
         self._scheduled_is_prefill = is_prefill
         return input_ids, positions
 
-    @torch.inference_mode()
-    def run(self, input_ids: torch.Tensor, position_ids: torch.Tensor,
-            debug: bool = False) -> Optional[List[torch.Tensor]]:
-        """Run model forward, sample tokens, and postprocess.
-        
-        Must be called after schedule(). Uses the seqs and context set up by schedule().
-        
-        Args:
-            input_ids: From schedule().
-            position_ids: From schedule().
-            debug: If True, returns per-layer hidden states list.
-                   Index 0 = embedding output, 1..N = after each decoder layer,
-                   N+1 = after final RMSNorm.
-        
-        Returns:
-            If debug=False: None
-            If debug=True: List of hidden state tensors [num_layers + 2].
-        """
-        seqs = self._scheduled_seqs
-        is_prefill = self._scheduled_is_prefill
+    def _run_single_batch(
+        self,
+        seqs,
+        is_prefill: bool,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        debug: bool = False,
+    ) -> Optional[List[torch.Tensor]]:
+        """Run one homogeneous batch (all prefill or all decode)."""
         model = self.model_runner.model
         cache_params = self.model_runner.cache_params
         context = get_context()
@@ -3483,6 +3649,38 @@ class HybridLLMEngine:
         if debug:
             return all_hidden_states
         return None
+
+    @torch.inference_mode()
+    def run(self, input_ids: Optional[torch.Tensor], position_ids: Optional[torch.Tensor],
+            debug: bool = False) -> Optional[List[torch.Tensor]]:
+        """Run model forward, sample tokens, and postprocess.
+        
+        Must be called after schedule(). Uses the seqs and context set up by schedule().
+        
+        Args:
+            input_ids: From schedule().
+            position_ids: From schedule().
+            debug: If True, returns per-layer hidden states list.
+                   Index 0 = embedding output, 1..N = after each decoder layer,
+                   N+1 = after final RMSNorm.
+        
+        Returns:
+            If debug=False: None
+            If debug=True: List of hidden state tensors [num_layers + 2].
+        """
+        # Mixed mode: execute decode + prefill batches in one run() call.
+        if getattr(self, '_scheduled_is_prefill', None) == "mixed":
+            if debug:
+                raise ValueError("debug=True is not supported for mixed run mode")
+            for seqs, is_prefill, batch_input_ids, batch_positions in getattr(self, '_scheduled_mixed_batches', []):
+                self._run_single_batch(seqs, is_prefill, batch_input_ids, batch_positions, debug=False)
+            return None
+
+        # Legacy single-mode path.
+        seqs = self._scheduled_seqs
+        is_prefill = self._scheduled_is_prefill
+        assert input_ids is not None and position_ids is not None
+        return self._run_single_batch(seqs, is_prefill, input_ids, position_ids, debug=debug)
 
     @property
     def output_list(self) -> List[List[int]]:

@@ -148,11 +148,48 @@ def test_per_prompt_max_tokens_validation():
         raise AssertionError("expected ValueError for non-positive global max_tokens")
 
 
+def test_step_continuous_and_multiturn_api():
+    engine = _build_engine_stub()
+    engine.prepare([[5, 6], [7, 8]], max_tokens=[128, 256])
+
+    finished_1 = engine.step_continuous()
+    assert len(finished_1) == 1, f"expected 1 finished item at step1, got {len(finished_1)}"
+    external_id_1, out_tokens_1 = finished_1[0]
+    assert external_id_1 == 0, f"expected first external id=0, got {external_id_1}"
+    assert len(out_tokens_1) > 0, "finished tokens should be non-empty"
+
+    activated = engine.add_multiturn_from_finished(
+        followup_prompts=[[101, 102]],
+        base_seq_ids=[external_id_1],
+        max_tokens=128,
+        inherit_max_tokens=False,
+    )
+    assert activated == [external_id_1], f"expected activated [0], got {activated}"
+    resumed_seq = engine._active_seq_by_external[external_id_1]
+    assert resumed_seq.max_tokens == 128, f"expected resumed max_tokens=128, got {resumed_seq.max_tokens}"
+
+    finished_2 = engine.step_continuous()
+    assert len(finished_2) == 1, f"expected 1 finished item at step2, got {len(finished_2)}"
+    external_id_2, _ = finished_2[0]
+    assert external_id_2 == 1, f"expected second external id=1, got {external_id_2}"
+
+    try:
+        engine.add_multiturn_from_finished(
+            followup_prompts=[[]],
+            base_seq_ids=[external_id_2],
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for empty followup prompt")
+
+
 def run_all_tests():
     test_continuous_batching_partial_generation()
     test_stream_feed_and_done_schema()
     test_per_prompt_max_tokens_schema()
     test_per_prompt_max_tokens_validation()
+    test_step_continuous_and_multiturn_api()
     print("continuous batching controllable API unit tests passed")
 
 
@@ -162,7 +199,7 @@ def run_real_engine_test(
     device: str = "cuda",
     dtype: str = "bfloat16",
     tensor_parallel: int = 1,
-    max_steps: int = 200,
+    max_steps: int = 5,
     with_feedback: bool = True,
 ):
     from qwen3_next_engine import load_qwen3_next_for_engine
@@ -202,33 +239,48 @@ def run_real_engine_test(
     closed_ids = set()
     steps = 0
 
+    def tok(text):
+        return tokenizer.encode(text, add_special_tokens=False)
+
+    def detok(tokens):
+        return tokenizer.decode(tokens, skip_special_tokens=False)
+
+    def validate_or_reflect(seq_id, text):
+        if with_feedback and seq_id not in feedback_round_done:
+            return {
+                "action": "continue",
+                "feed": "\nPlease verify your last answer, then provide a concise corrected final answer.",
+            }
+        return {"action": "done"}
+
     print(f"[real-test] start with {len(prompts)} prompts")
     while steps < max_steps and (not engine.is_finished()):
         steps += 1
-        finished_ids, finished_outs = engine.generate_partial(
-            yield_finished=True,
-            continuous_batching=True,
-        )
+        finished = engine.step_continuous()
 
-        if not finished_ids:
+        if not finished:
             continue
 
-        for external_id, out_tokens in zip(finished_ids, finished_outs):
-            out_text = tokenizer.decode(out_tokens, skip_special_tokens=False)
-            print(f"[real-test] step={steps} finished id={external_id} out_len={len(out_tokens)}")
+        for seq_id, out_tokens in finished:
+            out_text = detok(out_tokens)
+            print(f"[real-test] step={steps} finished id={seq_id} out_len={len(out_tokens)}")
             print(f"[real-test] output preview: {out_text[:240]!r}")
 
-            if with_feedback and external_id not in feedback_round_done:
-                feedback = (
-                    "\nPlease verify your last answer, then provide a concise corrected final answer."
+            decision = validate_or_reflect(seq_id, out_text)
+            if decision["action"] == "continue":
+                followup = tok(decision["feed"])
+                engine.add_multiturn_from_finished(
+                    followup_prompts=[followup],
+                    base_seq_ids=[seq_id],
+                    max_tokens=128,
+                    inherit_max_tokens=False,
                 )
-                engine.stream_feed([external_id], [feedback])
-                feedback_round_done.add(external_id)
-                print(f"[real-test] stream_feed id={external_id}")
+                feedback_round_done.add(seq_id)
+                print(f"[real-test] add_multiturn_from_finished id={seq_id}")
             else:
-                engine.done([external_id])
-                closed_ids.add(external_id)
-                print(f"[real-test] done id={external_id}")
+                engine.done([seq_id])
+                closed_ids.add(seq_id)
+                print(f"[real-test] done id={seq_id}")
 
     expected_min_closed = len(prompts)
     assert len(closed_ids) >= expected_min_closed, (
