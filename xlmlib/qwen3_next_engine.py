@@ -43,15 +43,23 @@ except ImportError:
     FLASH_ATTN_AVAILABLE = False
     print("Warning: flash_attn not available, paged attention will not work")
 
-try:
-    from fla.ops.gated_delta_rule import (
-        chunk_gated_delta_rule as fla_chunk_gated_delta_rule,
-        fused_recurrent_gated_delta_rule as fla_recurrent_gated_delta_rule,
-    )
-    FLA_AVAILABLE = True
-except ImportError:
+_DISABLE_FLA = _os.getenv("QWEN3NEXT_DISABLE_FLA", "0").strip().lower() in ("1", "true", "yes", "on")
+if _DISABLE_FLA:
     FLA_AVAILABLE = False
-    print("Warning: fla not available, using pure PyTorch GatedDeltaNet (slow)")
+    print("Warning: FLA disabled by QWEN3NEXT_DISABLE_FLA, using pure PyTorch GatedDeltaNet (slow)")
+else:
+    try:
+        from fla.ops.gated_delta_rule import (
+            chunk_gated_delta_rule as fla_chunk_gated_delta_rule,
+            fused_recurrent_gated_delta_rule as fla_recurrent_gated_delta_rule,
+        )
+        FLA_AVAILABLE = True
+    except Exception as e:
+        FLA_AVAILABLE = False
+        print(
+            "Warning: failed to import FLA kernels "
+            f"({type(e).__name__}: {e}), using pure PyTorch GatedDeltaNet (slow)"
+        )
 
 try:
     from fused_moe_triton import fused_moe as triton_fused_moe
