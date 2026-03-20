@@ -2641,12 +2641,7 @@ class HybridModelRunner:
             dist.barrier(group=get_tp_group())
             print(f'  [rank={get_tp_rank()}] TP barrier after cache allocation - all ranks ready', flush=True)
         
-        # CUDA Graph support for decode
-        self.use_cuda_graph = False  # Will be enabled after first decode warmup
-        self.cuda_graphs = {}        # batch_size -> captured graph
-        self.graph_static_inputs = {}  # batch_size -> static input buffers
-        self.graph_static_outputs = {} # batch_size -> static output buffer
-        self._decode_warmup_done = False
+        # Decode state
         self._decode_step_counter = 0
         self._profile_done = False
 
@@ -2760,7 +2755,7 @@ class HybridModelRunner:
         cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
-        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables, linear_slots)
+        set_context(cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables, linear_slots)
         return input_ids, positions
 
     def prepare_decode(self, seqs):
@@ -2778,72 +2773,44 @@ class HybridModelRunner:
             context_lens.append(len(seq))
             slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1)
 
-        num_seqs = len(seqs)
-        
-        # For CUDA graph: use static context buffers if available
-        if self.use_cuda_graph and num_seqs in self.cuda_graphs:
-            key = num_seqs
-            if not hasattr(self, '_static_context'):
-                self._static_context = {}
-            if key not in self._static_context:
-                # Create static buffers for context
-                max_blocks = max(len(seq.block_table) for seq in seqs)
-                self._static_context[key] = {
-                    'slot_mapping': torch.zeros(num_seqs, dtype=torch.int32, device=self.device),
-                    'context_lens': torch.zeros(num_seqs, dtype=torch.int32, device=self.device),
-                    'block_tables': torch.zeros(num_seqs, max_blocks, dtype=torch.int32, device=self.device),
-                }
-            
-            ctx = self._static_context[key]
-            ctx['slot_mapping'].copy_(torch.tensor(slot_mapping, dtype=torch.int32))
-            ctx['context_lens'].copy_(torch.tensor(context_lens, dtype=torch.int32))
-            
-            # Update block tables (may need to resize if max_blocks changed)
-            max_blocks = max(len(seq.block_table) for seq in seqs)
-            if ctx['block_tables'].shape[1] < max_blocks:
-                ctx['block_tables'] = torch.zeros(num_seqs, max_blocks, dtype=torch.int32, device=self.device)
-            bt = self.prepare_block_tables(seqs)
-            ctx['block_tables'][:, :bt.shape[1]].copy_(bt)
-            
-            set_context(False, slot_mapping=ctx['slot_mapping'], 
-                       context_lens=ctx['context_lens'], 
-                       block_tables=ctx['block_tables'][:, :bt.shape[1]],
-                       linear_slots=linear_slots)
-            
-            input_ids_t = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
-            positions_t = torch.tensor(positions, dtype=torch.int64, device=self.device)
-            return input_ids_t, positions_t
-        
-        # Standard path (non-graph)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         block_tables = self.prepare_block_tables(seqs)
-        set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables, linear_slots=linear_slots)
+        set_context(slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables, linear_slots=linear_slots)
         return input_ids, positions
 
-    def prepare_mixed(self, decode_seqs=None, prefill_seqs=None):
-        """Prepare decode and prefill batches for one continuous-batching tick.
+    def prepare_context(self, seqs):
+        """Prepare model contexts for scheduled sequences.
+
+        The scheduler can return sequences from both stages in one tick.
+        This function supports both homogeneous and mixed inputs:
+        - `SequenceStatus.RUNNING` => decode stage
+        - `SequenceStatus.WAITING` => prefill/chunk stage
 
         Args:
-            decode_seqs: Sequences that should run decode (next-token) step.
-            prefill_seqs: Sequences that should run prefill (new chunk) step.
+            seqs: Scheduled sequence list.
 
         Returns:
-            List[Tuple[seqs, is_prefill, input_ids, positions]] in execution order.
-            Decode batch is prepared first, then prefill batch.
+            List[Tuple[seqs, is_prefill, input_ids, positions]] in execution order,
+            with decode batch first and prefill batch second.
         """
-        mixed_batches = []
+        from llm_engine import SequenceStatus
 
+        if not seqs:
+            return []
+
+        decode_seqs = [seq for seq in seqs if seq.status == SequenceStatus.RUNNING]
+        prefill_seqs = [seq for seq in seqs if seq.status == SequenceStatus.WAITING]
+
+        mixed_batches = []
         if decode_seqs:
             decode_input_ids, decode_positions = self.prepare_decode(decode_seqs)
             mixed_batches.append((decode_seqs, False, decode_input_ids, decode_positions))
-
         if prefill_seqs:
             prefill_input_ids, prefill_positions = self.prepare_prefill(prefill_seqs)
             mixed_batches.append((prefill_seqs, True, prefill_input_ids, prefill_positions))
-
         return mixed_batches
 
     @torch.inference_mode()
@@ -2875,107 +2842,19 @@ class HybridModelRunner:
             do_profile = (self._decode_step_counter == 10 and not self._profile_done
                           and get_tp_rank() == 0)
             
-            # Try CUDA graph replay for decode
-            if self.use_cuda_graph and num_seqs in self.cuda_graphs:
-                logits = self._run_decode_graph(input_ids, positions, num_seqs)
-            else:
-                # Eager decode (also used for warmup before graph capture)
-                logits, _ = self.model(
-                    input_ids=input_ids.unsqueeze(1),
-                    position_ids=positions.unsqueeze(1),
-                    cache_params=self.cache_params,
-                    _profile_layers=do_profile,
-                )
-                logits = logits.squeeze(1)
-                
-                if do_profile:
-                    self._profile_done = True
-                
-                # After first eager decode, try to capture graph for this batch size
-                if not self._decode_warmup_done and num_seqs > 1:
-                    self._try_capture_decode_graph(num_seqs)
-                    self._decode_warmup_done = True
+            logits, _ = self.model(
+                input_ids=input_ids.unsqueeze(1),
+                position_ids=positions.unsqueeze(1),
+                cache_params=self.cache_params,
+                _profile_layers=do_profile,
+            )
+            logits = logits.squeeze(1)
+
+            if do_profile:
+                self._profile_done = True
         
         return logits.squeeze(0)
     
-    def _try_capture_decode_graph(self, batch_size):
-        """Attempt to capture a CUDA graph for decode with the given batch size.
-        
-        Known limitations:
-        - TP > 1: DISABLED. If capture fails on one rank but succeeds on another,
-          NCCL collectives (all_reduce/all_gather) inside the graph won't match
-          the eager path on the failed rank → deadlock.
-        - Triton MoE kernel: Incompatible with CUDA graphs because:
-          (a) moe_align_block_size() allocates dynamic tensors (torch.zeros, argsort, scatter)
-          (b) .item() call causes CPU-GPU sync during capture
-          (c) Grid sizes depend on router decisions which change every step
-        - FLA recurrent kernel: May use internal Triton ops with dynamic allocations.
-        The try/except fallback handles (b) and (c) gracefully for TP=1.
-        """
-        # Skip CUDA graph capture for tensor parallel — partial capture failure
-        # across ranks would cause NCCL deadlock (mismatched collectives).
-        if get_tp_world_size() > 1:
-            print(f'  [CUDA Graph] Skipped: not supported with tensor parallelism (TP={get_tp_world_size()})', flush=True)
-            return
-        
-        try:
-            print(f'  [CUDA Graph] Attempting to capture graph for batch_size={batch_size}...', flush=True)
-            
-            # Create static input buffers (fixed addresses for graph)
-            static_input_ids = torch.zeros(batch_size, 1, dtype=torch.int64, device=self.device)
-            static_positions = torch.zeros(batch_size, 1, dtype=torch.int64, device=self.device)
-            
-            # CUDA graphs must be captured on a non-default stream
-            capture_stream = torch.cuda.Stream(device=self.device)
-            
-            # Warmup runs on the capture stream (required before capture)
-            torch.cuda.synchronize(self.device)
-            with torch.cuda.stream(capture_stream):
-                for _ in range(3):
-                    static_logits, _ = self.model(
-                        input_ids=static_input_ids,
-                        position_ids=static_positions,
-                        cache_params=self.cache_params,
-                    )
-            torch.cuda.synchronize(self.device)
-            
-            # Capture the graph on the non-default stream
-            graph = torch.cuda.CUDAGraph()
-            with torch.cuda.stream(capture_stream):
-                with torch.cuda.graph(graph, stream=capture_stream):
-                    static_logits, _ = self.model(
-                        input_ids=static_input_ids,
-                        position_ids=static_positions,
-                        cache_params=self.cache_params,
-                    )
-            torch.cuda.synchronize(self.device)
-            
-            self.cuda_graphs[batch_size] = graph
-            self.graph_static_inputs[batch_size] = (static_input_ids, static_positions)
-            self.graph_static_outputs[batch_size] = static_logits
-            self.use_cuda_graph = True
-            
-            print(f'  [CUDA Graph] Successfully captured for batch_size={batch_size}', flush=True)
-            
-        except Exception as e:
-            print(f'  [CUDA Graph] Failed to capture for batch_size={batch_size}: {e}', flush=True)
-            print(f'  [CUDA Graph] Falling back to eager decode', flush=True)
-            self.use_cuda_graph = False
-    
-    def _run_decode_graph(self, input_ids, positions, batch_size):
-        """Replay captured CUDA graph for decode."""
-        static_input_ids, static_positions = self.graph_static_inputs[batch_size]
-        
-        # Copy new inputs into static buffers (graph captures these addresses)
-        static_input_ids.copy_(input_ids.unsqueeze(1))
-        static_positions.copy_(positions.unsqueeze(1))
-        
-        # Replay the graph
-        self.cuda_graphs[batch_size].replay()
-        
-        # Return output from static buffer
-        return self.graph_static_outputs[batch_size].squeeze(1).clone()
-
     @torch.inference_mode()
     def _swap_linear_state(self, slot_a, slot_b):
         """Swap linear attention (conv + recurrent) states between two batch slots."""
@@ -3123,40 +3002,37 @@ class HybridLLMEngine:
 
     def step(self):
         import time as _time
+        from llm_engine import SequenceStatus
         t0 = _time.time()
-        seqs, is_prefill = self.scheduler.schedule()
+        mixed_batches = self.schedule_mixed()
         t_sched = _time.time()
-        
-        if is_prefill and self.prefill_one_by_one and len(seqs) > 1:
-            # Process only 1 prefill per step to avoid NCCL timeout.
-            # Preempt the rest back to waiting for next step().
-            extra_seqs = seqs[1:]
-            seqs = seqs[:1]
-            for seq in extra_seqs:
-                self.scheduler.preempt(seq)
-        
-        token_ids = self.model_runner.call("run", seqs, is_prefill)
+
+        all_seqs = []
+        for seqs, is_prefill, _, _ in mixed_batches:
+            token_ids = self.model_runner.call("run", seqs, is_prefill)
+            self.scheduler.postprocess(seqs, token_ids)
+
+            if self._stop_token_ids:
+                from llm_engine import SequenceStatus
+                for seq, tid in zip(seqs, token_ids):
+                    if not seq.is_finished and tid in self._stop_token_ids:
+                        seq.status = SequenceStatus.FINISHED
+                        self.scheduler.block_manager.deallocate(seq)
+                        if seq in self.scheduler.running:
+                            self.scheduler.running.remove(seq)
+
+            all_seqs.extend(seqs)
+
         t_run = _time.time()
-        self.scheduler.postprocess(seqs, token_ids)
-        
-        # Check additional stop tokens not covered by scheduler EOS check
-        if self._stop_token_ids:
-            from llm_engine import SequenceStatus
-            for seq, tid in zip(seqs, token_ids):
-                if not seq.is_finished and tid in self._stop_token_ids:
-                    seq.status = SequenceStatus.FINISHED
-                    self.scheduler.block_manager.deallocate(seq)
-                    if seq in self.scheduler.running:
-                        self.scheduler.running.remove(seq)
-        
-        t_post = _time.time()
-        outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
-        finished_seqs = [seq for seq in seqs if seq.is_finished]
+        t_post = t_run
+        outputs = [(seq.seq_id, seq.completion_token_ids) for seq in all_seqs if seq.is_finished]
+        finished_seqs = [seq for seq in all_seqs if seq.is_finished]
         if finished_seqs:
             self.model_runner.release_linear_slots(finished_seqs)
         # Print decode progress every 50 tokens
-        if not is_prefill and len(seqs) > 0:
-            seq = seqs[0]
+        decode_seqs = [seq for seq in all_seqs if seq.status == SequenceStatus.RUNNING]
+        if len(decode_seqs) > 0:
+            seq = decode_seqs[0]
             if seq.num_completion_tokens % 50 == 1:
                 print(f'  [step] decode: seq_id={seq.seq_id}, completion_tokens={seq.num_completion_tokens}, '
                       f'last_token={seq.last_token}, running={len(self.scheduler.running)}, '
@@ -3490,53 +3366,39 @@ class HybridLLMEngine:
         Returns:
             List[Tuple[seqs, is_prefill, input_ids, positions]]
         """
-        from collections import deque as _deque
-        decode_seqs = []
-        prefill_seqs = []
+        from llm_engine import SequenceStatus
 
-        # 1) Decode first: temporarily hide waiting queue so scheduler picks running.
-        if len(self.scheduler.running) > 0:
-            saved_waiting = self.scheduler.waiting
-            self.scheduler.waiting = _deque()
-            try:
-                try:
-                    decode_seqs, is_prefill = self.scheduler.schedule()
-                except AssertionError:
-                    decode_seqs, is_prefill = [], False
-                if not (decode_seqs and (not is_prefill)):
-                    decode_seqs = []
-            finally:
-                self.scheduler.waiting = saved_waiting
+        seqs = self.scheduler.schedule()
+        if not seqs:
+            mixed_batches = []
+        else:
+            dropped_seq_ids = set()
+            prefill_seqs = [seq for seq in seqs if seq.status == SequenceStatus.WAITING]
+            if self.prefill_one_by_one and len(prefill_seqs) > 1:
+                for seq in prefill_seqs[1:]:
+                    if seq.seq_id in dropped_seq_ids:
+                        continue
+                    dropped_seq_ids.add(seq.seq_id)
+                    if seq in self.scheduler.running:
+                        self.scheduler.running.remove(seq)
+                    self.scheduler.preempt(seq)
+            if (not FLA_AVAILABLE) and len(prefill_seqs) > 1:
+                for seq in prefill_seqs[1:]:
+                    if seq.seq_id in dropped_seq_ids:
+                        continue
+                    dropped_seq_ids.add(seq.seq_id)
+                    if seq in self.scheduler.running:
+                        self.scheduler.running.remove(seq)
+                    self.scheduler.preempt(seq)
 
-        # 2) Prefill next: consume waiting with remaining scheduler state.
-        if len(self.scheduler.waiting) > 0:
-            try:
-                prefill_seqs, is_prefill = self.scheduler.schedule()
-            except AssertionError:
-                prefill_seqs, is_prefill = [], False
-
-            if prefill_seqs and is_prefill:
-                if self.prefill_one_by_one and len(prefill_seqs) > 1:
-                    extra_seqs = prefill_seqs[1:]
-                    prefill_seqs = prefill_seqs[:1]
-                    for seq in extra_seqs:
-                        self.scheduler.preempt(seq)
-
-                if (not FLA_AVAILABLE) and len(prefill_seqs) > 1:
-                    for seq in prefill_seqs[1:]:
-                        self.scheduler.preempt(seq)
-                    prefill_seqs = prefill_seqs[:1]
-
-            mixed_batches = self.model_runner.prepare_mixed(
-                decode_seqs=decode_seqs,
-                prefill_seqs=prefill_seqs,
-            )
+            kept = [seq for seq in seqs if seq.seq_id not in dropped_seq_ids]
+            mixed_batches = self.model_runner.prepare_context(kept)
 
         self._scheduled_is_prefill = "mixed"
         self._scheduled_mixed_batches = mixed_batches
         return mixed_batches
 
-    def schedule(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def schedule(self) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """Schedule the next batch and prepare input tensors.
         
         Must be called before run(). Sets up internal state (context, seqs)
@@ -3544,34 +3406,25 @@ class HybridLLMEngine:
         
         Returns:
             (input_ids, position_ids) tensors ready for run().
+            For mixed stage scheduling, returns (None, None) and run() consumes
+            internal mixed batch metadata.
         """
-        seqs, is_prefill = self.scheduler.schedule()
-        
-        # Handle prefill_one_by_one: only process 1 prefill per step
-        if is_prefill and self.prefill_one_by_one and len(seqs) > 1:
-            extra_seqs = seqs[1:]
-            seqs = seqs[:1]
-            for seq in extra_seqs:
-                self.scheduler.preempt(seq)
-        
-        # Prepare tensors and set context
-        if is_prefill:
-            # For varlen prefill with multiple seqs (FLA required),
-            # or single-seq prefill: use prepare_prefill which packs sequences.
-            if not FLA_AVAILABLE and len(seqs) > 1:
-                # Without FLA, can't do varlen prefill — only take first seq,
-                # preempt the rest (they'll be scheduled in subsequent steps).
-                for seq in seqs[1:]:
-                    self.scheduler.preempt(seq)
-                seqs = seqs[:1]
-            input_ids, positions = self.model_runner.prepare_prefill(seqs)
-        else:
-            input_ids, positions = self.model_runner.prepare_decode(seqs)
-        
-        # Save for run()
-        self._scheduled_seqs = seqs
-        self._scheduled_is_prefill = is_prefill
-        return input_ids, positions
+        mixed_batches = self.schedule_mixed()
+        if not mixed_batches:
+            self._scheduled_seqs = []
+            self._scheduled_is_prefill = "mixed"
+            self._scheduled_mixed_batches = []
+            return None, None
+
+        if len(mixed_batches) == 1:
+            seqs, is_prefill, input_ids, positions = mixed_batches[0]
+            self._scheduled_seqs = seqs
+            self._scheduled_is_prefill = is_prefill
+            return input_ids, positions
+
+        self._scheduled_is_prefill = "mixed"
+        self._scheduled_mixed_batches = mixed_batches
+        return None, None
 
     def _run_single_batch(
         self,
