@@ -9,11 +9,16 @@ from typing import List, Optional, Tuple, Union, Any, Dict
 import pickle
 import torch
 import torch.distributed as dist
+import os
 
 
 from collections import deque
 
-from pynvml import *
+try:
+    import pynvml as _pynvml
+    PYNVML_AVAILABLE = True
+except ImportError:
+    PYNVML_AVAILABLE = False
 
 from collections import deque
 import xxhash
@@ -33,6 +38,8 @@ class Sequence:
     counter = count()
 
     def __init__(self, token_ids: List[int]):
+        if len(token_ids) == 0:
+            raise ValueError("Sequence requires non-empty initial user prompt tokens")
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
@@ -47,6 +54,9 @@ class Sequence:
         self.temperature = 0.7 # sampling_params.temperature
         self.max_tokens = 32768 # sampling_params.max_tokens
         #self.ignore_eos = sampling_params.ignore_eos
+
+        self.turns: List[Dict[str, List[int]]] = []
+        self._start_new_turn(token_ids)
 
     def __len__(self):
         return len(self.token_ids) #self.num_tokens
@@ -93,6 +103,30 @@ class Sequence:
         self.token_ids.append(token_id)
         self.last_token = token_id
         self.num_tokens += 1
+        if self.turns:
+            self.turns[-1]["generation"].append(token_id)
+
+    def _start_new_turn(self, user_prompt_token_ids: List[int]):
+        prompt_ids = copy(user_prompt_token_ids)
+        self.turns.append({
+            "user_prompt": prompt_ids,
+            "generation": [],
+        })
+
+    def add_user_prompt(self, user_prompt_token_ids: List[int]):
+        if len(user_prompt_token_ids) == 0:
+            raise ValueError("user_prompt_token_ids must be non-empty")
+
+        prompt_ids = copy(user_prompt_token_ids)
+        self.token_ids.extend(prompt_ids)
+        self.last_token = self.token_ids[-1]
+        self.num_tokens = len(self.token_ids)
+        self.num_prompt_tokens = self.num_tokens
+        self._start_new_turn(prompt_ids)
+
+    @property
+    def turn_count(self) -> int:
+        return len(self.turns)
 
     def __getstate__(self):
         state = vars(self).copy()
@@ -104,16 +138,21 @@ class Sequence:
 # 增大batch size. 怎么优化batch sequence length. 怎么极大化memory usage. 
 def get_gpu_memory():
     torch.cuda.synchronize()
-    nvmlInit()
-    visible_device = list(map(int, os.getenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7").split(',')))
-    cuda_device_idx = torch.cuda.current_device()
-    cuda_device_idx = visible_device[cuda_device_idx]
-    handle = nvmlDeviceGetHandleByIndex(cuda_device_idx)
-    mem_info = nvmlDeviceGetMemoryInfo(handle)
-    total_memory = mem_info.total
-    used_memory = mem_info.used
-    free_memory = mem_info.free
-    nvmlShutdown()
+    if PYNVML_AVAILABLE:
+        _pynvml.nvmlInit()
+        visible_device = list(map(int, os.getenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7").split(',')))
+        cuda_device_idx = torch.cuda.current_device()
+        cuda_device_idx = visible_device[cuda_device_idx]
+        handle = _pynvml.nvmlDeviceGetHandleByIndex(cuda_device_idx)
+        mem_info = _pynvml.nvmlDeviceGetMemoryInfo(handle)
+        total_memory = mem_info.total
+        used_memory = mem_info.used
+        free_memory = mem_info.free
+        _pynvml.nvmlShutdown()
+    else:
+        total_memory = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
+        used_memory = torch.cuda.memory_allocated()
+        free_memory = total_memory - used_memory
     return total_memory, used_memory, free_memory
 
 

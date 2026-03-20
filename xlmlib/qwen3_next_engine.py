@@ -2823,6 +2823,29 @@ class HybridModelRunner:
         set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables, linear_slots=linear_slots)
         return input_ids, positions
 
+    def prepare_mixed(self, decode_seqs=None, prefill_seqs=None):
+        """Prepare decode and prefill batches for one continuous-batching tick.
+
+        Args:
+            decode_seqs: Sequences that should run decode (next-token) step.
+            prefill_seqs: Sequences that should run prefill (new chunk) step.
+
+        Returns:
+            List[Tuple[seqs, is_prefill, input_ids, positions]] in execution order.
+            Decode batch is prepared first, then prefill batch.
+        """
+        mixed_batches = []
+
+        if decode_seqs:
+            decode_input_ids, decode_positions = self.prepare_decode(decode_seqs)
+            mixed_batches.append((decode_seqs, False, decode_input_ids, decode_positions))
+
+        if prefill_seqs:
+            prefill_input_ids, prefill_positions = self.prepare_prefill(prefill_seqs)
+            mixed_batches.append((prefill_seqs, True, prefill_input_ids, prefill_positions))
+
+        return mixed_batches
+
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill):
         context = get_context()
@@ -3468,8 +3491,8 @@ class HybridLLMEngine:
             List[Tuple[seqs, is_prefill, input_ids, positions]]
         """
         from collections import deque as _deque
-
-        mixed_batches = []
+        decode_seqs = []
+        prefill_seqs = []
 
         # 1) Decode first: temporarily hide waiting queue so scheduler picks running.
         if len(self.scheduler.running) > 0:
@@ -3480,9 +3503,8 @@ class HybridLLMEngine:
                     decode_seqs, is_prefill = self.scheduler.schedule()
                 except AssertionError:
                     decode_seqs, is_prefill = [], False
-                if decode_seqs and (not is_prefill):
-                    decode_input_ids, decode_positions = self.model_runner.prepare_decode(decode_seqs)
-                    mixed_batches.append((decode_seqs, False, decode_input_ids, decode_positions))
+                if not (decode_seqs and (not is_prefill)):
+                    decode_seqs = []
             finally:
                 self.scheduler.waiting = saved_waiting
 
@@ -3505,8 +3527,10 @@ class HybridLLMEngine:
                         self.scheduler.preempt(seq)
                     prefill_seqs = prefill_seqs[:1]
 
-                prefill_input_ids, prefill_positions = self.model_runner.prepare_prefill(prefill_seqs)
-                mixed_batches.append((prefill_seqs, True, prefill_input_ids, prefill_positions))
+            mixed_batches = self.model_runner.prepare_mixed(
+                decode_seqs=decode_seqs,
+                prefill_seqs=prefill_seqs,
+            )
 
         self._scheduled_is_prefill = "mixed"
         self._scheduled_mixed_batches = mixed_batches
