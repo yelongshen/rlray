@@ -106,24 +106,25 @@ class Sequence:
         if self.turns:
             self.turns[-1]["generation"].append(token_id)
 
-    def _start_new_turn(self, user_prompt_token_ids: List[int]):
-        prompt_ids = copy(user_prompt_token_ids)
+    def _start_new_turn(self, context_token_ids: List[int]):
+        context_ids = copy(context_token_ids)
         self.turns.append({
-            "user_prompt": prompt_ids,
+            "context": context_ids,
             "generation": [],
         })
 
-    def add_user_prompt(self, user_prompt_token_ids: List[int]):
-        if len(user_prompt_token_ids) == 0:
-            raise ValueError("user_prompt_token_ids must be non-empty")
+    def add_context(self, context_token_ids: List[int]):
+        if len(context_token_ids) == 0:
+            raise ValueError("context_token_ids must be non-empty")
 
-        prompt_ids = copy(user_prompt_token_ids)
-        self.token_ids.extend(prompt_ids)
+        context_ids = copy(context_token_ids)
+        self.token_ids.extend(context_ids)
         self.last_token = self.token_ids[-1]
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = self.num_tokens
-        self._start_new_turn(prompt_ids)
-
+        self._start_new_turn(context_ids)
+        self.status = SequenceStatus.WAITING
+        
     @property
     def turn_count(self) -> int:
         return len(self.turns)
