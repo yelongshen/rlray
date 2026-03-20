@@ -117,11 +117,16 @@ class Sequence:
         if len(context_token_ids) == 0:
             raise ValueError("context_token_ids must be non-empty")
 
+        old_num_tokens = self.num_tokens
         context_ids = copy(context_token_ids)
         self.token_ids.extend(context_ids)
         self.last_token = self.token_ids[-1]
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = self.num_tokens
+        if self.block_table:
+            self.num_cached_tokens = old_num_tokens
+        else:
+            self.num_cached_tokens = 0
         self._start_new_turn(context_ids)
         self.status = SequenceStatus.WAITING
         
@@ -214,13 +219,21 @@ class BlockManager:
         self.free_block_ids.append(block_id)
 
     def can_allocate(self, seq: Sequence):
-        return len(self.free_block_ids) >= seq.num_blocks
+        additional_blocks = max(seq.num_blocks - len(seq.block_table), 0)
+        return len(self.free_block_ids) >= additional_blocks
 
     def allocate(self, seq: Sequence):
-        assert not seq.block_table
+        assert len(seq.block_table) <= seq.num_blocks
+        start_block_idx = len(seq.block_table)
+        if start_block_idx >= seq.num_blocks:
+            return
+
         h = -1
+        if start_block_idx > 0:
+            prev_block = self.blocks[seq.block_table[start_block_idx - 1]]
+            h = prev_block.hash
         cache_miss = False
-        for i in range(seq.num_blocks):
+        for i in range(start_block_idx, seq.num_blocks):
             token_ids = seq.block(i) # the i's block.
 
             h = compute_hash(token_ids, h) if len(token_ids) == self.block_size else -1
@@ -307,50 +320,48 @@ class Scheduler:
         self.waiting.append(seq)
 
     # decoding or prefill stage. 
-    def schedule(self) -> Tuple[List[Sequence], bool]:
-        # prefill
-        scheduled_seqs = []
+    def schedule(self) -> List[Sequence]:
+        # mixed prefill + decode schedule
+        scheduled_prefill = []
+        scheduled_decode = []
         num_seqs = 0
         num_batched_tokens = 0
+        decode_candidates = len(self.running)
 
         while self.waiting and num_seqs < self.max_num_seqs:
             seq = self.waiting[0]
 
             # if we can't schedule the sequence, break. 
-            if num_batched_tokens + len(seq) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
+            if not self.block_manager.can_allocate(seq):
                 break
 
             num_seqs += 1
             self.block_manager.allocate(seq) # allocate seq. 
             num_batched_tokens += len(seq) - seq.num_cached_tokens
 
-            seq.status = SequenceStatus.RUNNING
+            # WAITING means prefill/chunk stage in this scheduling tick.
+            seq.status = SequenceStatus.WAITING
             self.waiting.popleft()
             self.running.append(seq)
-            scheduled_seqs.append(seq)
-
-            # prefill     
-        if scheduled_seqs:
-            return scheduled_seqs, True
+            scheduled_prefill.append(seq)
 
         # decode
-        while self.running and num_seqs < self.max_num_seqs:
+        while self.running and decode_candidates > 0 and num_seqs < self.max_num_seqs:
             seq = self.running.popleft()
-            while not self.block_manager.can_append(seq):
-                if self.running:
-                    self.preempt(self.running.pop())
-                else:
-                    self.preempt(seq)
-                    break
-            else:
-                num_seqs += 1
-                self.block_manager.may_append(seq)
-                scheduled_seqs.append(seq) 
-        running = deque(scheduled_seqs)
+            decode_candidates -= 1
+            if not self.block_manager.can_append(seq):
+                self.preempt(seq)
+                continue
+
+            num_seqs += 1
+            self.block_manager.may_append(seq)
+            seq.status = SequenceStatus.RUNNING
+            scheduled_decode.append(seq)
+
+        running = deque(scheduled_decode)
         running.extend(self.running)
         self.running = running
-        assert scheduled_seqs
-        return scheduled_seqs, False
+        return scheduled_prefill + scheduled_decode
 
     def preempt(self, seq: Sequence):
         seq.status = SequenceStatus.WAITING
@@ -366,11 +377,14 @@ class Scheduler:
             eos_ids.add(int(eos_cfg))
 
         for seq, token_id in zip(seqs, token_ids):
+            was_waiting = (seq.status == SequenceStatus.WAITING)
             seq.append_token(token_id)
             if (token_id in eos_ids) or (seq.num_completion_tokens >= seq.max_tokens):
                 seq.status = SequenceStatus.FINISHED
                 self.block_manager.deallocate(seq) ## deallocate.
                 self.running.remove(seq)
+            elif was_waiting:
+                seq.status = SequenceStatus.RUNNING
 
 
 # 执行首领。
@@ -606,11 +620,21 @@ class LLMEngine:
 
     def step(self):
         # sequence & tasks. 筹划decoding. 
-        seqs, is_prefill = self.scheduler.schedule()
-        # do prefill first.
-        token_ids = self.model_runner.call("run", seqs, is_prefill)
-        self.scheduler.postprocess(seqs, token_ids)
-        outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
+        seqs = self.scheduler.schedule()
+        prefill_seqs = [seq for seq in seqs if seq.status == SequenceStatus.WAITING]
+        decode_seqs = [seq for seq in seqs if seq.status == SequenceStatus.RUNNING]
+
+        outputs = []
+        if prefill_seqs:
+            token_ids = self.model_runner.call("run", prefill_seqs, True)
+            self.scheduler.postprocess(prefill_seqs, token_ids)
+            outputs.extend((seq.seq_id, seq.completion_token_ids) for seq in prefill_seqs if seq.is_finished)
+
+        if decode_seqs:
+            token_ids = self.model_runner.call("run", decode_seqs, False)
+            self.scheduler.postprocess(decode_seqs, token_ids)
+            outputs.extend((seq.seq_id, seq.completion_token_ids) for seq in decode_seqs if seq.is_finished)
+
         #num_tokens = sum(len(seq) for seq in seqs) if is_prefill else -len(seqs)
         return outputs #, num_tokens
 
