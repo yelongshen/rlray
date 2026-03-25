@@ -12,6 +12,7 @@ if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
 from qwen3_next_engine import HybridLLMEngine
+from llm_engine import Sequence
 
 
 class _DummyBlockManager:
@@ -42,154 +43,56 @@ def _build_engine_stub():
     engine.scheduler = _FakeScheduler()
     engine.tokenizer = _DummyTokenizer()
     engine._stop_token_ids = set()
-    engine._run_calls = []
 
-    def _fake_run_schedule_once(self, force_decode=False):
-        self._run_calls.append(force_decode)
-        if not force_decode and len(self.scheduler.waiting) > 0:
+    def _fake_schedule_mixed(self):
+        if len(self.scheduler.waiting) == 0 and len(self.scheduler.running) == 0:
+            return []
+        return [([], False, None, None)]
+
+    def _fake_run(self, input_ids=None, position_ids=None, debug=False):
+        if len(self.scheduler.waiting) > 0:
             seq = self.scheduler.waiting.popleft()
             self.scheduler.running.append(seq)
-            return
         if len(self.scheduler.running) > 0:
             seq = self.scheduler.running.popleft()
             self._finished_outputs[seq.seq_id] = [900 + (seq.seq_id % 10)]
+        return None
 
-    engine._run_schedule_once = types.MethodType(_fake_run_schedule_once, engine)
+    engine.schedule_mixed = types.MethodType(_fake_schedule_mixed, engine)
+    engine.run = types.MethodType(_fake_run, engine)
     return engine
 
 
-def test_continuous_batching_partial_generation():
+def test_feed_run_batch_user_api():
     engine = _build_engine_stub()
-    prompt_list = [[11, 12], [21, 22, 23]]
-    engine.prepare(prompt_list, max_tokens=32)
+    batch_prompt = [
+        Sequence([1, 2]),
+        Sequence([3, 4, 5]),
+    ]
+    batch_prompt[0].max_generated_tokens = 64
+    batch_prompt[1].max_generated_tokens = 128
 
-    ids_1, outs_1 = engine.generate_partial(yield_finished=True, continuous_batching=True)
-    assert engine._run_calls == [False, True], f"unexpected run call order: {engine._run_calls}"
-    assert len(ids_1) == 1 and len(outs_1) == 1, "first partial should finish exactly one request"
-    assert ids_1[0] == 0, f"expected first external id=0, got {ids_1[0]}"
+    engine.feed(batch_prompt)
+    assert len(batch_prompt) == 2
+    assert batch_prompt[0].max_generated_tokens == 64 and batch_prompt[1].max_generated_tokens == 128
+    assert all(len(seq.completion_token_ids) == 0 for seq in batch_prompt), "sampled tokens should start empty"
 
-    ids_2, outs_2 = engine.generate_partial(yield_finished=True, continuous_batching=True)
-    assert engine._run_calls[-2:] == [False, True], "second partial should also do prefill+decode"
-    assert len(ids_2) == 1 and len(outs_2) == 1, "second partial should finish exactly one request"
-    assert ids_2[0] == 1, f"expected second external id=1, got {ids_2[0]}"
-
-    ids_3, outs_3 = engine.generate_partial(yield_finished=True, continuous_batching=True)
-    assert ids_3 == [] and outs_3 == [], "no outputs expected after all requests are finished"
-
-
-def test_stream_feed_and_done_schema():
-    engine = _build_engine_stub()
-    engine.prepare([[1, 2, 3]], max_tokens=16)
-
-    finished_ids, finished_outs = engine.generate_partial(yield_finished=True, continuous_batching=True)
-    assert finished_ids == [0], f"expected finished external id [0], got {finished_ids}"
-    assert len(finished_outs) == 1 and len(finished_outs[0]) > 0, "finished output should be non-empty"
-
-    before_len = len(engine._external_histories[0])
-    engine.stream_feed([0], ["feedback + new question"])
-    after_len = len(engine._external_histories[0])
-    assert after_len > before_len, "history should extend after stream_feed"
-    assert 0 in engine._active_seq_by_external, "stream_feed should reactivate external id"
-    assert len(engine.scheduler.waiting) > 0, "stream_feed should enqueue a new waiting sequence"
-
-    engine.done([0])
-    assert 0 not in engine._active_seq_by_external, "done() should remove active sequence"
-    assert 0 in engine._closed_external_ids, "done() should mark external id closed"
-
-    waiting_before = len(engine.scheduler.waiting)
-    engine.stream_feed([0], ["should be ignored because closed"])
-    waiting_after = len(engine.scheduler.waiting)
-    assert waiting_after == waiting_before, "closed external id must not be re-enqueued"
-
-
-def test_per_prompt_max_tokens_schema():
-    engine = _build_engine_stub()
-    engine.prepare([[10], [20, 21]], max_tokens=[3, 7])
-
-    seq0 = engine._active_seq_by_external[0]
-    seq1 = engine._active_seq_by_external[1]
-    assert seq0.max_tokens == 3, f"expected prompt0 max_tokens=3, got {seq0.max_tokens}"
-    assert seq1.max_tokens == 7, f"expected prompt1 max_tokens=7, got {seq1.max_tokens}"
-
-    finished_ids, _ = engine.generate_partial(yield_finished=True, continuous_batching=True)
-    assert finished_ids == [0], f"expected first finished external id [0], got {finished_ids}"
-
-    engine.stream_feed([0], ["retry answer"])
-    seq0_reactivated = engine._active_seq_by_external[0]
-    assert seq0_reactivated.max_tokens == 3, (
-        f"reactivated external id should keep max_tokens=3, got {seq0_reactivated.max_tokens}"
+    engine.run_batch(yield_partial=True)
+    assert any(len(seq.completion_token_ids) > 0 for seq in batch_prompt), (
+        "sampled tokens should be visible on sequence handles after one batch tick"
     )
 
-    finished_ids_2, _ = engine.generate_partial(yield_finished=True, continuous_batching=True)
-    assert finished_ids_2 == [1], f"expected second finished external id [1], got {finished_ids_2}"
+    for seq in batch_prompt:
+        if seq.is_finished and len(seq) <= 100000:
+            seq.add_context([120, 120, 120])
+            seq.max_tokens = 32
 
-    engine.stream_feed([1], [[101, 102]])
-    seq1_reactivated = engine._active_seq_by_external[1]
-    assert seq1_reactivated.max_tokens == 7, (
-        f"reactivated external id should keep max_tokens=7, got {seq1_reactivated.max_tokens}"
-    )
-
-
-def test_per_prompt_max_tokens_validation():
-    engine = _build_engine_stub()
-
-    try:
-        engine.prepare([[1], [2]], max_tokens=[5])
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for mismatched max_tokens length")
-
-    try:
-        engine.prepare([[1]], max_tokens=0)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for non-positive global max_tokens")
-
-
-def test_step_continuous_and_multiturn_api():
-    engine = _build_engine_stub()
-    engine.prepare([[5, 6], [7, 8]], max_tokens=[128, 256])
-
-    finished_1 = engine.step_continuous()
-    assert len(finished_1) == 1, f"expected 1 finished item at step1, got {len(finished_1)}"
-    external_id_1, out_tokens_1 = finished_1[0]
-    assert external_id_1 == 0, f"expected first external id=0, got {external_id_1}"
-    assert len(out_tokens_1) > 0, "finished tokens should be non-empty"
-
-    activated = engine.add_multiturn_from_finished(
-        followup_prompts=[[101, 102]],
-        base_seq_ids=[external_id_1],
-        max_tokens=128,
-        inherit_max_tokens=False,
-    )
-    assert activated == [external_id_1], f"expected activated [0], got {activated}"
-    resumed_seq = engine._active_seq_by_external[external_id_1]
-    assert resumed_seq.max_tokens == 128, f"expected resumed max_tokens=128, got {resumed_seq.max_tokens}"
-
-    finished_2 = engine.step_continuous()
-    assert len(finished_2) == 1, f"expected 1 finished item at step2, got {len(finished_2)}"
-    external_id_2, _ = finished_2[0]
-    assert external_id_2 == 1, f"expected second external id=1, got {external_id_2}"
-
-    try:
-        engine.add_multiturn_from_finished(
-            followup_prompts=[[]],
-            base_seq_ids=[external_id_2],
-        )
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for empty followup prompt")
+    engine.run_batch(yield_partial=False)
+    assert all(seq.is_finished for seq in batch_prompt)
 
 
 def run_all_tests():
-    test_continuous_batching_partial_generation()
-    test_stream_feed_and_done_schema()
-    test_per_prompt_max_tokens_schema()
-    test_per_prompt_max_tokens_validation()
-    test_step_continuous_and_multiturn_api()
+    test_feed_run_batch_user_api()
     print("continuous batching controllable API unit tests passed")
 
 
@@ -233,20 +136,22 @@ def run_real_engine_test(
     split = len(prompt_ids) // 2
     per_prompt_max_tokens = [128 if i < split else 256 for i in range(len(prompt_ids))]
     print(f"[real-test] per-prompt max_tokens={per_prompt_max_tokens}")
-    engine.prepare(prompt_ids, max_tokens=per_prompt_max_tokens)
+    batch_prompt = [
+        Sequence(ids, max_generated_tokens=per_prompt_max_tokens[i])
+        for i, ids in enumerate(prompt_ids)
+    ]
+    
+    engine.feed(batch_prompt)
 
     feedback_round_done = set()
-    closed_ids = set()
+    ever_finished = set()
     steps = 0
-
-    def tok(text):
-        return tokenizer.encode(text, add_special_tokens=False)
 
     def detok(tokens):
         return tokenizer.decode(tokens, skip_special_tokens=False)
 
-    def validate_or_reflect(seq_id, text):
-        if with_feedback and seq_id not in feedback_round_done:
+    def validate_or_reflect(seq, text):
+        if with_feedback and seq not in feedback_round_done:
             return {
                 "action": "continue",
                 "feed": "\nPlease verify your last answer, then provide a concise corrected final answer.",
@@ -256,35 +161,29 @@ def run_real_engine_test(
     print(f"[real-test] start with {len(prompts)} prompts")
     while steps < max_steps and (not engine.is_finished()):
         steps += 1
-        finished = engine.step_continuous()
+        engine.run_batch(yield_partial=True)
 
-        if not finished:
-            continue
-
-        for seq_id, out_tokens in finished:
-            out_text = detok(out_tokens)
-            print(f"[real-test] step={steps} finished id={seq_id} out_len={len(out_tokens)}")
+        for idx, seq in enumerate(batch_prompt):
+            if not seq.is_finished or seq in ever_finished:
+                continue
+            full_ids = seq.token_ids
+            out_text = detok(full_ids)
+            print(f"[real-test] step={steps} finished seq={idx} total_len={len(seq)}")
             print(f"[real-test] output preview: {out_text[:240]!r}")
 
-            decision = validate_or_reflect(seq_id, out_text)
+            decision = validate_or_reflect(seq, out_text)
             if decision["action"] == "continue":
-                followup = tok(decision["feed"])
-                engine.add_multiturn_from_finished(
-                    followup_prompts=[followup],
-                    base_seq_ids=[seq_id],
-                    max_tokens=128,
-                    inherit_max_tokens=False,
-                )
-                feedback_round_done.add(seq_id)
-                print(f"[real-test] add_multiturn_from_finished id={seq_id}")
+                seq.add_context(tokenizer.encode(decision["feed"], add_special_tokens=False))
+                seq.max_tokens = 128
+                feedback_round_done.add(seq)
+                print(f"[real-test] seq.add_context seq={idx}")
             else:
-                engine.done([seq_id])
-                closed_ids.add(seq_id)
-                print(f"[real-test] done id={seq_id}")
+                ever_finished.add(seq)
+                print(f"[real-test] finished seq={idx}")
 
-    expected_min_closed = len(prompts)
-    assert len(closed_ids) >= expected_min_closed, (
-        f"real test incomplete: closed={len(closed_ids)} < expected={expected_min_closed}, "
+    expected_finished = len(batch_prompt)
+    assert len(ever_finished) >= expected_finished and engine.is_finished(), (
+        f"real test incomplete: finished={len(ever_finished)} < expected={expected_finished}, "
         f"steps={steps}, engine_finished={engine.is_finished()}"
     )
     print("[real-test] continuous batching controllable schema passed")

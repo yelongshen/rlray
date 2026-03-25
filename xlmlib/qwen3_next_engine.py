@@ -33,8 +33,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple, List, Union, TYPE_CHECKING
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
+
+if TYPE_CHECKING:
+    from llm_engine import Sequence
 
 try:
     from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
@@ -2711,7 +2714,7 @@ class HybridModelRunner:
         ]
         return torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
 
-    def prepare_prefill(self, seqs):
+    def prepare_prefill(self, seqs, apply_context: bool = True, return_context: bool = False):
         from context import set_context
         
         input_ids = []
@@ -2755,10 +2758,23 @@ class HybridModelRunner:
         cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
-        set_context(cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables, linear_slots)
+        context_kwargs = dict(
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            slot_mapping=slot_mapping,
+            context_lens=context_lens,
+            block_tables=block_tables,
+            linear_slots=linear_slots,
+        )
+        if apply_context:
+            set_context(**context_kwargs)
+        if return_context:
+            return input_ids, positions, context_kwargs
         return input_ids, positions
 
-    def prepare_decode(self, seqs):
+    def prepare_decode(self, seqs, apply_context: bool = True, return_context: bool = False):
         from context import set_context
         
         input_ids = []
@@ -2778,7 +2794,16 @@ class HybridModelRunner:
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
         block_tables = self.prepare_block_tables(seqs)
-        set_context(slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables, linear_slots=linear_slots)
+        context_kwargs = dict(
+            slot_mapping=slot_mapping,
+            context_lens=context_lens,
+            block_tables=block_tables,
+            linear_slots=linear_slots,
+        )
+        if apply_context:
+            set_context(**context_kwargs)
+        if return_context:
+            return input_ids, positions, context_kwargs
         return input_ids, positions
 
     def prepare_context(self, seqs):
@@ -2797,6 +2822,7 @@ class HybridModelRunner:
             with decode batch first and prefill batch second.
         """
         from llm_engine import SequenceStatus
+        from context import set_context
 
         if not seqs:
             return []
@@ -2805,6 +2831,79 @@ class HybridModelRunner:
         prefill_seqs = [seq for seq in seqs if seq.status == SequenceStatus.WAITING]
 
         mixed_batches = []
+        if decode_seqs and prefill_seqs:
+            ordered_seqs = decode_seqs + prefill_seqs
+            input_ids = []
+            positions = []
+            cu_seqlens_q = [0]
+            cu_seqlens_k = [0]
+            max_seqlen_q = 0
+            max_seqlen_k = 0
+            slot_mapping = []
+            linear_slots = self._linear_slots_tensor(ordered_seqs)
+
+            for seq in decode_seqs:
+                seqlen = len(seq)
+                input_ids.append(seq.last_token)
+                positions.append(seqlen - 1)
+
+                seqlen_q = 1
+                seqlen_k = seqlen
+                cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
+                cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
+
+                max_seqlen_q = max(seqlen_q, max_seqlen_q)
+                max_seqlen_k = max(seqlen_k, max_seqlen_k)
+
+                slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1)
+
+            for seq in prefill_seqs:
+                seqlen = len(seq)
+                input_ids.extend(seq[seq.num_cached_tokens:])
+                positions.extend(list(range(seq.num_cached_tokens, seqlen)))
+
+                seqlen_q = seqlen - seq.num_cached_tokens
+                seqlen_k = seqlen
+                cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
+                cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
+
+                max_seqlen_q = max(seqlen_q, max_seqlen_q)
+                max_seqlen_k = max(seqlen_k, max_seqlen_k)
+
+                for i in range(seq.num_cached_blocks, seq.num_blocks):
+                    start = seq.block_table[i] * self.block_size
+                    if i != seq.num_blocks - 1:
+                        end = start + self.block_size
+                    else:
+                        end = start + seq.last_block_num_tokens
+                    slot_mapping.extend(list(range(start, end)))
+
+            assert len(input_ids) == len(slot_mapping)
+            assert len(input_ids) == cu_seqlens_q[-1]
+
+            context_lens = torch.tensor([len(seq) for seq in ordered_seqs], dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
+            block_tables = self.prepare_block_tables(ordered_seqs)
+
+            input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
+            positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).to(self.device, non_blocking=True)
+            cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
+            cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
+            slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).to(self.device, non_blocking=True)
+
+            set_context(
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                slot_mapping=slot_mapping,
+                context_lens=context_lens,
+                block_tables=block_tables,
+                linear_slots=linear_slots,
+            )
+
+            mixed_batches.append((ordered_seqs, True, input_ids, positions))
+            return mixed_batches
+
         if decode_seqs:
             decode_input_ids, decode_positions = self.prepare_decode(decode_seqs)
             mixed_batches.append((decode_seqs, False, decode_input_ids, decode_positions))
@@ -2998,7 +3097,6 @@ class HybridLLMEngine:
 
     def is_finished(self):
         return self.scheduler.is_finished()
-    
 
     def step(self):
         import time as _time
@@ -3007,28 +3105,13 @@ class HybridLLMEngine:
         mixed_batches = self.schedule_mixed()
         t_sched = _time.time()
 
-        all_seqs = []
-        for seqs, is_prefill, _, _ in mixed_batches:
-            token_ids = self.model_runner.call("run", seqs, is_prefill)
-            self.scheduler.postprocess(seqs, token_ids)
-
-            if self._stop_token_ids:
-                from llm_engine import SequenceStatus
-                for seq, tid in zip(seqs, token_ids):
-                    if not seq.is_finished and tid in self._stop_token_ids:
-                        seq.status = SequenceStatus.FINISHED
-                        self.scheduler.block_manager.deallocate(seq)
-                        if seq in self.scheduler.running:
-                            self.scheduler.running.remove(seq)
-
-            all_seqs.extend(seqs)
+        if mixed_batches:
+            self.run(None, None, debug=False)
+        all_seqs = [seq for seqs, _, _, _ in mixed_batches for seq in seqs]
 
         t_run = _time.time()
         t_post = t_run
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in all_seqs if seq.is_finished]
-        finished_seqs = [seq for seq in all_seqs if seq.is_finished]
-        if finished_seqs:
-            self.model_runner.release_linear_slots(finished_seqs)
         # Print decode progress every 50 tokens
         decode_seqs = [seq for seq in all_seqs if seq.status == SequenceStatus.RUNNING]
         if len(decode_seqs) > 0:
@@ -3069,11 +3152,10 @@ class HybridLLMEngine:
     # Controllable generation API
     #
     # Usage:
-    #   engine.prepare(prompt_list, max_tokens=4096)
+    #   batch_prompt = [Sequence(...), Sequence(...)]
+    #   engine.feed(batch_prompt)
     #   while not engine.is_finished():
-    #       input_ids, position_ids = engine.schedule()
-    #       hidden_states = engine.run(input_ids, position_ids, debug=True)
-    #   print(engine.output_list)
+    #       engine.run_batch(yield_partial=True)
     # ================================================================
 
     def prepare(self, prompt_list: List[List[int]], max_tokens: Union[int, List[int]] = 32768):
@@ -3088,13 +3170,10 @@ class HybridLLMEngine:
                 - List[int]: per-prompt maximums (must match prompt_list length)
         """
         from llm_engine import Sequence
-        self._finished_outputs = {}
-        self._reported_finished = set()
         if isinstance(max_tokens, int):
             if max_tokens <= 0:
                 raise ValueError(f"max_tokens must be > 0, got {max_tokens}")
             per_prompt_max_tokens = [max_tokens] * len(prompt_list)
-            self._max_tokens_default = max_tokens
         elif isinstance(max_tokens, list):
             if len(max_tokens) != len(prompt_list):
                 raise ValueError(
@@ -3103,262 +3182,80 @@ class HybridLLMEngine:
             if any((not isinstance(m, int) or m <= 0) for m in max_tokens):
                 raise ValueError("all max_tokens values must be positive integers")
             per_prompt_max_tokens = list(max_tokens)
-            self._max_tokens_default = max(per_prompt_max_tokens) if per_prompt_max_tokens else 32768
         else:
             raise TypeError(f"max_tokens must be int or List[int], got {type(max_tokens)}")
 
-        self._next_external_id = 0
-        self._seqid_to_external = {}
-        self._active_seq_by_external = {}
-        self._external_histories = {}
-        self._max_tokens_by_external = {}
-        self._finished_external_order = []
-        self._closed_external_ids = set()
         for prompt, max_tok in zip(prompt_list, per_prompt_max_tokens):
-            external_id = self._next_external_id
-            self._next_external_id += 1
-            seq = Sequence(prompt)
-            seq.max_tokens = max_tok
+            seq = Sequence(prompt, max_generation_tokens=max_tok)
             self.scheduler.add(seq)
-            self._seqid_to_external[seq.seq_id] = external_id
-            self._active_seq_by_external[external_id] = seq
-            self._external_histories[external_id] = list(prompt)
-            self._max_tokens_by_external[external_id] = max_tok
+            self._tracked_sequences.append(seq)
 
-    def _run_schedule_once(self, force_decode: bool = False):
-        """Run one schedule+run iteration; optionally force decode despite waiting queue."""
-        if force_decode and len(self.scheduler.running) > 0:
-            from collections import deque as _deque
-            saved_waiting = self.scheduler.waiting
-            self.scheduler.waiting = _deque()
-            try:
-                try:
-                    input_ids, position_ids = self.schedule()
-                except AssertionError:
-                    # Scheduler may fail to form a decode batch in rare low-block edge cases.
-                    return
-                self.run(input_ids, position_ids, debug=False)
-            finally:
-                self.scheduler.waiting = saved_waiting
-        else:
-            input_ids, position_ids = self.schedule()
-            self.run(input_ids, position_ids, debug=False)
-
-    def generate_partial(self, yield_finished: bool = True, continuous_batching: bool = True):
-        """Generate partial progress.
-
-        Returns:
-            (external_ids, outputs)
-            - external_ids: IDs from prepare() order
-            - outputs: completion token lists for newly finished requests
-        """
-        if self.is_finished():
-            return [], []
-
-        did_work = False
-        if continuous_batching:
-            if len(self.scheduler.waiting) > 0:
-                self._run_schedule_once(force_decode=False)
-                did_work = True
-            if len(self.scheduler.running) > 0:
-                self._run_schedule_once(force_decode=True)
-                did_work = True
-        if not did_work:
-            self._run_schedule_once(force_decode=False)
-
-        if not yield_finished:
-            return [], []
-
-        return self._collect_new_finished_outputs()
-
-    def _collect_new_finished_outputs(self):
-        """Collect newly finished outputs since last report."""
-        if not hasattr(self, '_finished_outputs'):
-            return [], []
-
-        new_external_ids = []
-        new_outputs = []
-        for seq_id, token_ids in self._finished_outputs.items():
-            if seq_id in self._reported_finished:
-                continue
-            external_id = self._seqid_to_external.get(seq_id, None)
-            if external_id is None:
-                self._reported_finished.add(seq_id)
-                continue
-            self._reported_finished.add(seq_id)
-            if external_id in self._closed_external_ids:
-                continue
-            hist = self._external_histories.get(external_id)
-            if hist is not None:
-                hist.extend(token_ids)
-            self._active_seq_by_external.pop(external_id, None)
-            new_external_ids.append(external_id)
-            new_outputs.append(token_ids)
-            self._finished_external_order.append(external_id)
-        return new_external_ids, new_outputs
-
-    def step_continuous(self):
-        """Run one continuous-batching tick and return finished items.
-
-        Returns:
-            List[Tuple[external_id, completion_token_ids]]
-        """
-        if self.is_finished():
-            return []
-
-        # Preferred path: true mixed prefill+decode scheduling in one run() call.
-        did_work = False
-        try:
-            mixed_batches = self.schedule_mixed()
-            if mixed_batches:
-                self.run(None, None, debug=False)
-                did_work = True
-        except Exception:
-            # Fallback path for lightweight stubs/tests or edge scheduler states.
-            pass
-
-        if not did_work:
-            external_ids, outputs = self.generate_partial(
-                yield_finished=True,
-                continuous_batching=True,
-            )
-            return list(zip(external_ids, outputs))
-
-        external_ids, outputs = self._collect_new_finished_outputs()
-        return list(zip(external_ids, outputs))
-
-    def add_multiturn_from_finished(
+    def feed(
         self,
-        followup_prompts: List[Union[str, List[int]]],
-        base_seq_ids: Optional[List[int]] = None,
-        max_tokens: Optional[Union[int, List[int]]] = None,
-        inherit_max_tokens: bool = True,
-    ) -> List[int]:
-        """Continue finished requests by appending followups to their histories.
+        prompts: List['Sequence'],
+    ):
+        """User-facing continuous batching API.
 
         Args:
-            followup_prompts: List of follow-up prompts (str or token-id list).
-            base_seq_ids: External IDs to continue; if None, use most recent
-                finished IDs in order.
-            max_tokens: Optional override for resumed requests.
-                - int: apply to all
-                - List[int]: per-request
-            inherit_max_tokens: If True and max_tokens is None, keep previous
-                per-request max_tokens.
-
-        Returns:
-            External IDs that were (re)activated.
+            prompts: list of Sequence objects.
         """
-        n = len(followup_prompts)
-        if n == 0:
+        for seq in prompts:
+            self.scheduler.add(seq)
+        return
+
+    def _run_batch_tick(self):
+        if self.is_finished():
             return []
 
-        if base_seq_ids is None:
-            if len(self._finished_external_order) < n:
-                raise ValueError(
-                    f"Not enough finished IDs to continue: need={n}, have={len(self._finished_external_order)}"
-                )
-            base_seq_ids = list(self._finished_external_order[-n:])
+        mixed_batches = self.schedule_mixed()
+        if mixed_batches:
+            self.run(None, None, debug=False)
+        return self._collect_new_finished_sequences()
 
-        if len(base_seq_ids) != n:
-            raise ValueError(
-                f"base_seq_ids length ({len(base_seq_ids)}) must match followup_prompts length ({n})"
-            )
+    def run_batch(self, yield_partial: bool = True):
+        """Run continuous batching ticks.
 
-        if max_tokens is None:
-            per_max_tokens = None
-        elif isinstance(max_tokens, int):
-            if max_tokens <= 0:
-                raise ValueError(f"max_tokens must be > 0, got {max_tokens}")
-            per_max_tokens = [max_tokens] * n
-        elif isinstance(max_tokens, list):
-            if len(max_tokens) != n:
-                raise ValueError(
-                    f"max_tokens list length ({len(max_tokens)}) must match followup_prompts length ({n})"
-                )
-            if any((not isinstance(m, int) or m <= 0) for m in max_tokens):
-                raise ValueError("all max_tokens values must be positive integers")
-            per_max_tokens = list(max_tokens)
-        else:
-            raise TypeError(f"max_tokens must be int or List[int], got {type(max_tokens)}")
+        - yield_partial=True: return after at least one sequence finishes.
+        - yield_partial=False: run until all active sequences finish.
 
-        from llm_engine import Sequence
+        Progress is reflected directly on the `Sequence` objects in `batch_prompt`.
+        """
+        if not hasattr(self, '_tracked_sequences'):
+            return
 
-        feed_tokens_list = [self._encode_feed_item(feed) for feed in followup_prompts]
-        if any(len(tokens) == 0 for tokens in feed_tokens_list):
-            raise ValueError("followup prompts must not be empty")
+        if yield_partial:
+            while not self.is_finished():
+                self._enqueue_resumed_sequences_if_needed()
+                finished_sequences = self._run_batch_tick()
+                if finished_sequences:
+                    break
+            return
 
-        activated = []
-        for idx, (external_id, feed_tokens) in enumerate(zip(base_seq_ids, feed_tokens_list)):
-            if external_id in self._closed_external_ids:
-                raise ValueError(f"external id {external_id} is closed")
-            if external_id in self._active_seq_by_external:
-                raise ValueError(f"external id {external_id} is still active; wait until it finishes")
+        while not self.is_finished():
+            self._enqueue_resumed_sequences_if_needed()
+            self._run_batch_tick()
+        return
 
-            hist = self._external_histories.get(external_id, None)
-            if hist is None:
-                raise ValueError(f"external id {external_id} not found")
+    def _collect_new_finished_sequences(self):
+        if not hasattr(self, '_tracked_sequences'):
+            return []
+        new_finished = []
+        for seq in self._tracked_sequences:
+            if seq.is_finished and seq.seq_id not in self._reported_finished_seq_ids:
+                self._reported_finished_seq_ids.add(seq.seq_id)
+                new_finished.append(seq)
+        return new_finished
 
-            if per_max_tokens is not None:
-                self._max_tokens_by_external[external_id] = per_max_tokens[idx]
-            elif not inherit_max_tokens:
-                self._max_tokens_by_external[external_id] = self._max_tokens_default
-
-            hist.extend(feed_tokens)
-            seq = Sequence(hist)
-            seq.max_tokens = self._max_tokens_by_external.get(external_id, self._max_tokens_default)
+    def _enqueue_resumed_sequences_if_needed(self):
+        from llm_engine import SequenceStatus
+        if not hasattr(self, '_tracked_sequences'):
+            return
+        for seq in self._tracked_sequences:
+            if seq.status != SequenceStatus.WAITING:
+                continue
+            if seq in self.scheduler.waiting or seq in self.scheduler.running:
+                continue
             self.scheduler.add(seq)
-            self._seqid_to_external[seq.seq_id] = external_id
-            self._active_seq_by_external[external_id] = seq
-            activated.append(external_id)
-
-        return activated
-
-    def _encode_feed_item(self, item: Union[str, List[int]]) -> List[int]:
-        if isinstance(item, list):
-            return item
-        if isinstance(item, str):
-            if self.tokenizer is None:
-                raise ValueError("stream_feed received str but tokenizer is not set on engine")
-            return self.tokenizer.encode(item, add_special_tokens=False)
-        raise TypeError(f"Unsupported feed item type: {type(item)}")
-
-    def stream_feed(self, external_ids: List[int], feeds: List[Union[str, List[int]]]):
-        """Attach feedback/new question tokens and resume generation for finished IDs."""
-        from llm_engine import Sequence
-        assert len(external_ids) == len(feeds), "external_ids and feeds must have same length"
-
-        for external_id, feed in zip(external_ids, feeds):
-            if external_id in self._closed_external_ids:
-                continue
-            if external_id in self._active_seq_by_external:
-                continue
-            hist = self._external_histories.get(external_id, None)
-            if hist is None:
-                continue
-            feed_tokens = self._encode_feed_item(feed)
-            if not feed_tokens:
-                continue
-            hist.extend(feed_tokens)
-            seq = Sequence(hist)
-            seq.max_tokens = self._max_tokens_by_external.get(external_id, self._max_tokens_default)
-            self.scheduler.add(seq)
-            self._seqid_to_external[seq.seq_id] = external_id
-            self._active_seq_by_external[external_id] = seq
-
-    def done(self, external_ids: List[int]):
-        """Mark external IDs as closed and remove active sequences from scheduler."""
-        for external_id in external_ids:
-            self._closed_external_ids.add(external_id)
-            seq = self._active_seq_by_external.pop(external_id, None)
-            if seq is None:
-                continue
-            if seq in self.scheduler.waiting:
-                self.scheduler.waiting.remove(seq)
-            if seq in self.scheduler.running:
-                self.scheduler.running.remove(seq)
-            if len(seq.block_table) > 0:
-                self.scheduler.block_manager.deallocate(seq)
 
     def schedule_mixed(self):
         """Schedule decode and prefill batches for one mixed run tick.
@@ -3366,33 +3263,11 @@ class HybridLLMEngine:
         Returns:
             List[Tuple[seqs, is_prefill, input_ids, positions]]
         """
-        from llm_engine import SequenceStatus
-
         seqs = self.scheduler.schedule()
         if not seqs:
             mixed_batches = []
         else:
-            dropped_seq_ids = set()
-            prefill_seqs = [seq for seq in seqs if seq.status == SequenceStatus.WAITING]
-            if self.prefill_one_by_one and len(prefill_seqs) > 1:
-                for seq in prefill_seqs[1:]:
-                    if seq.seq_id in dropped_seq_ids:
-                        continue
-                    dropped_seq_ids.add(seq.seq_id)
-                    if seq in self.scheduler.running:
-                        self.scheduler.running.remove(seq)
-                    self.scheduler.preempt(seq)
-            if (not FLA_AVAILABLE) and len(prefill_seqs) > 1:
-                for seq in prefill_seqs[1:]:
-                    if seq.seq_id in dropped_seq_ids:
-                        continue
-                    dropped_seq_ids.add(seq.seq_id)
-                    if seq in self.scheduler.running:
-                        self.scheduler.running.remove(seq)
-                    self.scheduler.preempt(seq)
-
-            kept = [seq for seq in seqs if seq.seq_id not in dropped_seq_ids]
-            mixed_batches = self.model_runner.prepare_context(kept)
+            mixed_batches = self.model_runner.prepare_context(seqs)
 
         self._scheduled_is_prefill = "mixed"
         self._scheduled_mixed_batches = mixed_batches
