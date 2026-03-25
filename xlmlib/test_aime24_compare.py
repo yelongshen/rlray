@@ -49,11 +49,12 @@ def test_engine(args):
     A: Full forward [x1..xn] → xn's logits (no cache)
     B: Prefill [x1..xn-1] with cache → Decode [xn] → xn's logits (with cache)
     
-                    slot_mapping_prefill, context_lens_prefill, block_tables_prefill)
+    Compares per-layer hidden states and final logits to verify
     that prefill+decode produces the same result as full forward.
     """
     from transformers import AutoTokenizer, AutoConfig
-                    context_lens=context_lens_decode)
+    from qwen3_next_engine import (
+        load_qwen3_next_for_engine, Qwen3NextCacheParams, get_tp_rank
     )
     from context import set_context, get_context, reset_context
     
@@ -154,7 +155,7 @@ def test_engine(args):
     slot_mapping_t = torch.tensor(slot_mapping_prefill, dtype=torch.int32, device=device)
     context_lens_t = torch.tensor([prefill_len], dtype=torch.int32, device=device)
     
-    set_context(cu_seqlens_q, cu_seqlens_k, prefill_len, prefill_len,
+    set_context(True, cu_seqlens_q, cu_seqlens_k, prefill_len, prefill_len,
                 slot_mapping_t, context_lens_t, block_tables_t)
     
     print(f"  Prefill: {prefill_len} tokens...", flush=True)
@@ -186,7 +187,7 @@ def test_engine(args):
     block_table_decode = block_table + ([num_blocks_needed] if prefill_len % block_size == 0 else [])
     block_tables_decode = torch.tensor([block_table_decode], dtype=torch.int32, device=device)
     
-    set_context(slot_mapping=slot_mapping_decode,
+    set_context(False, slot_mapping=slot_mapping_decode,
                 context_lens=context_lens_decode, block_tables=block_tables_decode)
     
     # Collect per-layer states for case B decode

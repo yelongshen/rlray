@@ -37,7 +37,7 @@ class Sequence:
     block_size = 256
     counter = count()
 
-    def __init__(self, token_ids: List[int]):
+    def __init__(self, token_ids: List[int], max_generation_tokens: int = 32768):
         if len(token_ids) == 0:
             raise ValueError("Sequence requires non-empty initial user prompt tokens")
         self.seq_id = next(Sequence.counter)
@@ -52,7 +52,7 @@ class Sequence:
         self.num_cached_tokens = 0
         self.block_table = [] 
         self.temperature = 0.7 # sampling_params.temperature
-        self.max_tokens = 32768 # sampling_params.max_tokens
+        self.max_generation_tokens = max_generation_tokens # sampling_params.max_tokens
         #self.ignore_eos = sampling_params.ignore_eos
 
         self.turns: List[Dict[str, List[int]]] = []
@@ -368,7 +368,7 @@ class Scheduler:
         self.block_manager.deallocate(seq)
         self.waiting.appendleft(seq)
 
-    def postprocess(self, seqs: List[Sequence], token_ids: List[int]) :
+    def postprocess(self, seqs: List[Sequence], token_ids: List[int], auto_finish=True) :
         eos_cfg = getattr(self.llm_config, 'eos_token_id', None)
         eos_ids = set()
         if isinstance(eos_cfg, (list, tuple, set)):
@@ -381,7 +381,10 @@ class Scheduler:
             seq.append_token(token_id)
             if (token_id in eos_ids) or (seq.num_completion_tokens >= seq.max_tokens):
                 seq.status = SequenceStatus.FINISHED
-                self.block_manager.deallocate(seq) ## deallocate.
+                if auto_finish:
+                    self.block_manager.deallocate(seq) ## deallocate.
+                else:
+                    self.waiting.appendleft(seq)
                 self.running.remove(seq)
             elif was_waiting:
                 seq.status = SequenceStatus.RUNNING

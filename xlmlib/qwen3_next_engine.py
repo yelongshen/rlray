@@ -3090,10 +3090,17 @@ class HybridLLMEngine:
         self.scheduler = Scheduler(llm_config, self.model_runner.block_size, self.model_runner.num_kvcache_blocks)
         self.scheduler.max_num_seqs = max_batch_size  # Limit concurrent sequences
         
-        # Patch scheduler to support multiple stop tokens (Qwen3 uses <|im_end|>, <|endoftext|>, etc.)
-        self._stop_token_ids = getattr(llm_config, 'stop_token_ids', set())
-        if self._stop_token_ids:
-            print(f'  [HybridLLMEngine] Stop tokens: {self._stop_token_ids}', flush=True)
+        # Extend scheduler EOS handling to include all configured stop tokens.
+        stop_token_ids = set(getattr(llm_config, 'stop_token_ids', set()) or [])
+        if stop_token_ids:
+            eos_cfg = getattr(llm_config, 'eos_token_id', None)
+            merged_eos_ids = set(stop_token_ids)
+            if isinstance(eos_cfg, (list, tuple, set)):
+                merged_eos_ids.update(int(eid) for eid in eos_cfg if eid is not None)
+            elif eos_cfg is not None:
+                merged_eos_ids.add(int(eos_cfg))
+            llm_config.eos_token_id = sorted(merged_eos_ids)
+            print(f'  [HybridLLMEngine] Stop tokens merged into eos_token_id: {llm_config.eos_token_id}', flush=True)
 
     def is_finished(self):
         return self.scheduler.is_finished()
@@ -3102,12 +3109,14 @@ class HybridLLMEngine:
         import time as _time
         from llm_engine import SequenceStatus
         t0 = _time.time()
-        mixed_batches = self.schedule_mixed()
+        scheduled = self.schedule()
+        if scheduled is None:
+            all_seqs = []
+        else:
+            seqs, is_prefill, input_ids, position_ids = scheduled
+            self.run(seqs, is_prefill, input_ids, position_ids, debug=False)
+            all_seqs = list(seqs)
         t_sched = _time.time()
-
-        if mixed_batches:
-            self.run(None, None, debug=False)
-        all_seqs = [seq for seqs, _, _, _ in mixed_batches for seq in seqs]
 
         t_run = _time.time()
         t_post = t_run
@@ -3137,8 +3146,7 @@ class HybridLLMEngine:
         from llm_engine import Sequence
         
         for prompt in prompts:
-            seq = Sequence(prompt)
-            seq.max_tokens = max_tokens
+            seq = Sequence(prompt, max_generation_tokens=max_tokens)
             self.scheduler.add(seq)
 
         outputs = {}
@@ -3188,7 +3196,6 @@ class HybridLLMEngine:
         for prompt, max_tok in zip(prompt_list, per_prompt_max_tokens):
             seq = Sequence(prompt, max_generation_tokens=max_tok)
             self.scheduler.add(seq)
-            self._tracked_sequences.append(seq)
 
     def feed(
         self,
@@ -3203,15 +3210,6 @@ class HybridLLMEngine:
             self.scheduler.add(seq)
         return
 
-    def _run_batch_tick(self):
-        if self.is_finished():
-            return []
-
-        mixed_batches = self.schedule_mixed()
-        if mixed_batches:
-            self.run(None, None, debug=False)
-        return self._collect_new_finished_sequences()
-
     def run_batch(self, yield_partial: bool = True):
         """Run continuous batching ticks.
 
@@ -3220,102 +3218,66 @@ class HybridLLMEngine:
 
         Progress is reflected directly on the `Sequence` objects in `batch_prompt`.
         """
-        if not hasattr(self, '_tracked_sequences'):
-            return
 
         if yield_partial:
             while not self.is_finished():
-                self._enqueue_resumed_sequences_if_needed()
-                finished_sequences = self._run_batch_tick()
-                if finished_sequences:
+                outputs = self.step()
+                if outputs:
                     break
             return
 
         while not self.is_finished():
-            self._enqueue_resumed_sequences_if_needed()
-            self._run_batch_tick()
+            self.step()
         return
 
-    def _collect_new_finished_sequences(self):
-        if not hasattr(self, '_tracked_sequences'):
-            return []
-        new_finished = []
-        for seq in self._tracked_sequences:
-            if seq.is_finished and seq.seq_id not in self._reported_finished_seq_ids:
-                self._reported_finished_seq_ids.add(seq.seq_id)
-                new_finished.append(seq)
-        return new_finished
-
-    def _enqueue_resumed_sequences_if_needed(self):
-        from llm_engine import SequenceStatus
-        if not hasattr(self, '_tracked_sequences'):
-            return
-        for seq in self._tracked_sequences:
-            if seq.status != SequenceStatus.WAITING:
-                continue
-            if seq in self.scheduler.waiting or seq in self.scheduler.running:
-                continue
-            self.scheduler.add(seq)
-
-    def schedule_mixed(self):
-        """Schedule decode and prefill batches for one mixed run tick.
-
+    def schedule(self) -> Optional[Tuple[List['Sequence'], bool, torch.Tensor, torch.Tensor]]:
+        """Schedule the next batch and prepare input tensors.
+        
+        Must be called before run().
+        
         Returns:
-            List[Tuple[seqs, is_prefill, input_ids, positions]]
+            None if no work is scheduled.
+            Otherwise: (seqs, is_prefill, input_ids, position_ids).
         """
         seqs = self.scheduler.schedule()
         if not seqs:
-            mixed_batches = []
-        else:
-            mixed_batches = self.model_runner.prepare_context(seqs)
+            return None
 
-        self._scheduled_is_prefill = "mixed"
-        self._scheduled_mixed_batches = mixed_batches
-        return mixed_batches
-
-    def schedule(self) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        """Schedule the next batch and prepare input tensors.
-        
-        Must be called before run(). Sets up internal state (context, seqs)
-        needed by run().
-        
-        Returns:
-            (input_ids, position_ids) tensors ready for run().
-            For mixed stage scheduling, returns (None, None) and run() consumes
-            internal mixed batch metadata.
-        """
-        mixed_batches = self.schedule_mixed()
+        mixed_batches = self.model_runner.prepare_context(seqs)
         if not mixed_batches:
-            self._scheduled_seqs = []
-            self._scheduled_is_prefill = "mixed"
-            self._scheduled_mixed_batches = []
-            return None, None
+            return None
 
-        if len(mixed_batches) == 1:
-            seqs, is_prefill, input_ids, positions = mixed_batches[0]
-            self._scheduled_seqs = seqs
-            self._scheduled_is_prefill = is_prefill
-            return input_ids, positions
+        if len(mixed_batches) != 1:
+            raise RuntimeError(
+                f"Expected exactly 1 scheduled batch, got {len(mixed_batches)}"
+            )
 
-        self._scheduled_is_prefill = "mixed"
-        self._scheduled_mixed_batches = mixed_batches
-        return None, None
+        seqs, is_prefill, input_ids, positions = mixed_batches[0]
+        return seqs, is_prefill, input_ids, positions
 
-    def _run_single_batch(
-        self,
-        seqs,
-        is_prefill: bool,
-        input_ids: torch.Tensor,
-        position_ids: torch.Tensor,
-        debug: bool = False,
-    ) -> Optional[List[torch.Tensor]]:
-        """Run one homogeneous batch (all prefill or all decode)."""
+    @torch.inference_mode()
+    def run(self, seqs, is_prefill: bool, input_ids: torch.Tensor, position_ids: torch.Tensor,
+            debug: bool = False, auto_finish: bool = True) -> Optional[List[torch.Tensor]]:
+        """Run model forward, sample tokens, and postprocess.
+
+        Args:
+            seqs: Scheduled sequences to postprocess.
+            is_prefill: Whether this is a prefill batch.
+            input_ids: Batch input IDs from schedule().
+            position_ids: Batch position IDs from schedule().
+            debug: If True, returns per-layer hidden states list.
+                   Index 0 = embedding output, 1..N = after each decoder layer,
+                   N+1 = after final RMSNorm.
+            auto_finish: If True, automatically deallocate sequence memory as finished after generation.
+        Returns:
+            If debug=False: None
+            If debug=True: List of hidden state tensors [num_layers + 2].
+        """
         model = self.model_runner.model
         cache_params = self.model_runner.cache_params
         context = get_context()
         all_hidden_states = None
 
-        # === Forward pass ===
         if is_prefill:
             kwargs = dict(
                 input_ids=input_ids.unsqueeze(0),
@@ -3346,7 +3308,6 @@ class HybridLLMEngine:
         if logits.dim() == 1:
             logits = logits.unsqueeze(0)
 
-        # === Sample ===
         temperature = self.model_runner.temperature
         top_k = self.model_runner.top_k
         top_p = self.model_runner.top_p
@@ -3373,7 +3334,6 @@ class HybridLLMEngine:
             probs = torch.softmax(scaled_logits, dim=-1)
             token_ids = torch.multinomial(probs, num_samples=1).squeeze(-1)
 
-        # TP broadcast
         if get_tp_world_size() > 1:
             dist.broadcast(token_ids, src=0, group=get_tp_group())
 
@@ -3382,77 +3342,21 @@ class HybridLLMEngine:
         if isinstance(token_list, int):
             token_list = [token_list]
 
-        # === Postprocess ===
-        self.scheduler.postprocess(seqs, token_list)
+        self.scheduler.postprocess(seqs, token_list, auto_finish=auto_finish)
 
-        # Check stop tokens
-        if self._stop_token_ids:
-            from llm_engine import SequenceStatus
-            for seq, tid in zip(seqs, token_list):
-                if not seq.is_finished and tid in self._stop_token_ids:
-                    seq.status = SequenceStatus.FINISHED
-                    self.scheduler.block_manager.deallocate(seq)
-                    if seq in self.scheduler.running:
-                        self.scheduler.running.remove(seq)
-
-        # Collect finished outputs
         if not hasattr(self, '_finished_outputs'):
             self._finished_outputs = {}
         finished_seqs = []
         for seq in seqs:
             if seq.is_finished:
                 finished_seqs.append(seq)
-                self._finished_outputs[seq.seq_id] = seq.completion_token_ids
-        if finished_seqs:
+
+        if finished_seqs and auto_finish:
             self.model_runner.release_linear_slots(finished_seqs)
 
         if debug:
             return all_hidden_states
-        return None
-
-    @torch.inference_mode()
-    def run(self, input_ids: Optional[torch.Tensor], position_ids: Optional[torch.Tensor],
-            debug: bool = False) -> Optional[List[torch.Tensor]]:
-        """Run model forward, sample tokens, and postprocess.
-        
-        Must be called after schedule(). Uses the seqs and context set up by schedule().
-        
-        Args:
-            input_ids: From schedule().
-            position_ids: From schedule().
-            debug: If True, returns per-layer hidden states list.
-                   Index 0 = embedding output, 1..N = after each decoder layer,
-                   N+1 = after final RMSNorm.
-        
-        Returns:
-            If debug=False: None
-            If debug=True: List of hidden state tensors [num_layers + 2].
-        """
-        # Mixed mode: execute decode + prefill batches in one run() call.
-        if getattr(self, '_scheduled_is_prefill', None) == "mixed":
-            if debug:
-                raise ValueError("debug=True is not supported for mixed run mode")
-            for seqs, is_prefill, batch_input_ids, batch_positions in getattr(self, '_scheduled_mixed_batches', []):
-                self._run_single_batch(seqs, is_prefill, batch_input_ids, batch_positions, debug=False)
-            return None
-
-        # Legacy single-mode path.
-        seqs = self._scheduled_seqs
-        is_prefill = self._scheduled_is_prefill
-        assert input_ids is not None and position_ids is not None
-        return self._run_single_batch(seqs, is_prefill, input_ids, position_ids, debug=debug)
-
-    @property
-    def output_list(self) -> List[List[int]]:
-        """Get completed generation outputs, ordered by seq_id.
-        
-        Returns:
-            List of token id lists, one per completed prompt (in order of submission).
-        """
-        if not hasattr(self, '_finished_outputs'):
-            return []
-        return [self._finished_outputs[sid] for sid in sorted(self._finished_outputs)]
-
+        return finished_seqs
 
 # Simple test
 if __name__ == "__main__":
