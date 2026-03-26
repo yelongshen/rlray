@@ -149,6 +149,11 @@ def run_real_engine_test(
     finally_done = set()
     steps = 0
 
+    def _ensure_enqueued(seq: Sequence):
+        if seq in engine.scheduler.waiting or seq in engine.scheduler.running:
+            return
+        engine.scheduler.add(seq)
+
     def _decode_tail(seq: Sequence, n: int = 120):
         try:
             return tokenizer.decode(seq.token_ids[-n:], skip_special_tokens=False)
@@ -178,10 +183,15 @@ def run_real_engine_test(
                 feedback_ids = tokenizer.encode(feedback_text, add_special_tokens=False)
                 seq.add_context(feedback_ids)
                 _set_seq_max_tokens(seq, 64)
+                _ensure_enqueued(seq)
                 feedback_done.add(seq.seq_id)
                 print(f"[real-test] seq={idx} add_context(feedback_round)")
             else:
                 finally_done.add(seq.seq_id)
+
+    for seq in seqs:
+        if not seq.is_finished:
+            _ensure_enqueued(seq)
 
     if not engine.is_finished():
         print("[real-test] forcing full drain with run_batch(yield_partial=False)")
