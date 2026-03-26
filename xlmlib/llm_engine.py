@@ -53,6 +53,7 @@ class Sequence:
         self.block_table = [] 
         self.temperature = 0.7 # sampling_params.temperature
         self.max_generation_tokens = max_generation_tokens # sampling_params.max_tokens
+        self.max_tokens = max_generation_tokens
         #self.ignore_eos = sampling_params.ignore_eos
 
         self.turns: List[Dict[str, List[int]]] = []
@@ -379,7 +380,8 @@ class Scheduler:
         for seq, token_id in zip(seqs, token_ids):
             was_waiting = (seq.status == SequenceStatus.WAITING)
             seq.append_token(token_id)
-            if (token_id in eos_ids) or (seq.num_completion_tokens >= seq.max_tokens):
+            max_tokens = getattr(seq, 'max_tokens', getattr(seq, 'max_generation_tokens', 32768))
+            if (token_id in eos_ids) or (seq.num_completion_tokens >= max_tokens):
                 seq.status = SequenceStatus.FINISHED
                 if auto_finish:
                     self.block_manager.deallocate(seq) ## deallocate.
@@ -655,6 +657,7 @@ class LLMEngine:
             seq = Sequence(prompt)
             if max_tokens is not None:
                 seq.max_tokens = int(max_tokens)
+                seq.max_generation_tokens = int(max_tokens)
             self.scheduler.add(seq)
             #self.add_request(prompt) #, sp
 
