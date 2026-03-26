@@ -2739,13 +2739,10 @@ class HybridModelRunner:
             max_seqlen_q = max(seqlen_q, max_seqlen_q)
             max_seqlen_k = max(seqlen_k, max_seqlen_k)
 
-            for i in range(seq.num_cached_blocks, seq.num_blocks):
-                start = seq.block_table[i] * self.block_size
-                if i != seq.num_blocks - 1:
-                    end = start + self.block_size
-                else:
-                    end = start + seq.last_block_num_tokens
-                slot_mapping.extend(list(range(start, end)))
+            for token_pos in range(seq.num_cached_tokens, seqlen):
+                block_idx = token_pos // self.block_size
+                block_offset = token_pos % self.block_size
+                slot_mapping.append(seq.block_table[block_idx] * self.block_size + block_offset)
 
         assert len(input_ids) == len(slot_mapping)
         assert len(input_ids) == cu_seqlens_q[-1]
@@ -2870,13 +2867,10 @@ class HybridModelRunner:
                 max_seqlen_q = max(seqlen_q, max_seqlen_q)
                 max_seqlen_k = max(seqlen_k, max_seqlen_k)
 
-                for i in range(seq.num_cached_blocks, seq.num_blocks):
-                    start = seq.block_table[i] * self.block_size
-                    if i != seq.num_blocks - 1:
-                        end = start + self.block_size
-                    else:
-                        end = start + seq.last_block_num_tokens
-                    slot_mapping.extend(list(range(start, end)))
+                for token_pos in range(seq.num_cached_tokens, seqlen):
+                    block_idx = token_pos // self.block_size
+                    block_offset = token_pos % self.block_size
+                    slot_mapping.append(seq.block_table[block_idx] * self.block_size + block_offset)
 
             assert len(input_ids) == len(slot_mapping)
             assert len(input_ids) == cu_seqlens_q[-1]
