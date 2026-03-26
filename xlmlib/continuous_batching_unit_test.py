@@ -195,6 +195,7 @@ def run_real_engine_test(
                     f"prompt_tokens={len(seq.prompt_token_ids)} completion_tokens={len(seq.completion_token_ids)}"
                 )
                 print(f"[real-test] tail[{idx}]: {_decode_tail(seq)!r}")
+                _finalize_sequence(seq)
                 feedback_text = "\nPlease verify the above answer and provide a concise corrected final answer."
                 feedback_messages = [{"role": "user", "content": feedback_text}]
                 feedback_prompt_text = tokenizer.apply_chat_template(
