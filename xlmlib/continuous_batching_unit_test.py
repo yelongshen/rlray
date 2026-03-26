@@ -135,11 +135,22 @@ def run_real_engine_test(
         tokenizer=tokenizer,
     )
 
-    prompt_ids = [tokenizer.encode(p, add_special_tokens=False) for p in prompts]
+    max_generation_len = 16384
+    max_turns = 100
+
+    prompt_ids = []
+    for p in prompts:
+        messages = [{"role": "user", "content": p}]
+        prompt_text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        prompt_ids.append(tokenizer.encode(prompt_text, add_special_tokens=False))
     seqs = []
-    for i, ids in enumerate(prompt_ids):
-        seq = Sequence(ids, max_generation_tokens=96 if i % 2 == 0 else 160)
-        _set_seq_max_tokens(seq, 96 if i % 2 == 0 else 160)
+    for ids in prompt_ids:
+        seq = Sequence(ids, max_generation_tokens=max_generation_len)
+        _set_seq_max_tokens(seq, max_generation_len)
         seqs.append(seq)
 
     engine.feed(seqs)
@@ -178,16 +189,22 @@ def run_real_engine_test(
             if not seq.is_finished:
                 continue
 
-            if enable_feedback_round and seq.turn_count < 2:
+            if enable_feedback_round and seq.turn_count < max_turns:
                 print(
                     f"[real-test] finished seq={idx} "
                     f"prompt_tokens={len(seq.prompt_token_ids)} completion_tokens={len(seq.completion_token_ids)}"
                 )
                 print(f"[real-test] tail[{idx}]: {_decode_tail(seq)!r}")
                 feedback_text = "\nPlease verify the above answer and provide a concise corrected final answer."
-                feedback_ids = tokenizer.encode(feedback_text, add_special_tokens=False)
+                feedback_messages = [{"role": "user", "content": feedback_text}]
+                feedback_prompt_text = tokenizer.apply_chat_template(
+                    feedback_messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                feedback_ids = tokenizer.encode(feedback_prompt_text, add_special_tokens=False)
                 seq.add_context(feedback_ids)
-                _set_seq_max_tokens(seq, 64)
+                _set_seq_max_tokens(seq, max_generation_len)
                 _ensure_enqueued(seq)
                 print(f"[real-test] seq={idx} add_context(feedback_round)")
             else:
@@ -215,7 +232,7 @@ def run_real_engine_test(
         print(
             f"[real-test] final seq={idx}: "
             f"prompt_token_ids={seq.prompt_token_ids}, completion_token_ids={seq.completion_token_ids}, "
-            f"token_ids={seq.token_ids}, decoded_text={decoded_text!r}"
+            f"decoded_text={decoded_text!r}"
         )
 
 

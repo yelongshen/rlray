@@ -3105,7 +3105,7 @@ class HybridLLMEngine:
     def is_finished(self):
         return self.scheduler.is_finished()
 
-    def step(self):
+    def step(self, auto_finish=True):
         import time as _time
         from llm_engine import SequenceStatus
         t0 = _time.time()
@@ -3114,7 +3114,7 @@ class HybridLLMEngine:
             all_seqs = []
         else:
             seqs, is_prefill, input_ids, position_ids = scheduled
-            self.run(seqs, is_prefill, input_ids, position_ids, debug=False)
+            self.run(seqs, is_prefill, input_ids, position_ids, debug=False, auto_finish=auto_finish)
             all_seqs = list(seqs)
         t_sched = _time.time()
 
@@ -3221,13 +3221,13 @@ class HybridLLMEngine:
 
         if yield_partial:
             while not self.is_finished():
-                outputs = self.step()
+                outputs = self.step(auto_finish=False)
                 if outputs:
                     break
             return
 
         while not self.is_finished():
-            self.step()
+            self.step(auto_finish=True)
         return
 
     def schedule(self) -> Optional[Tuple[List['Sequence'], bool, torch.Tensor, torch.Tensor]]:
@@ -3344,8 +3344,6 @@ class HybridLLMEngine:
 
         self.scheduler.postprocess(seqs, token_list, auto_finish=auto_finish)
 
-        if not hasattr(self, '_finished_outputs'):
-            self._finished_outputs = {}
         finished_seqs = []
         for seq in seqs:
             if seq.is_finished:
