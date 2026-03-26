@@ -160,20 +160,6 @@ def run_real_engine_test(
             return
         engine.scheduler.add(seq)
 
-    def _finalize_sequence(seq: Sequence):
-        if seq in engine.scheduler.waiting:
-            engine.scheduler.waiting.remove(seq)
-        if seq in engine.scheduler.running:
-            engine.scheduler.running.remove(seq)
-        try:
-            engine.scheduler.block_manager.deallocate(seq)
-        except Exception:
-            pass
-        try:
-            engine.model_runner.release_linear_slots([seq])
-        except Exception:
-            pass
-
     def _decode_tail(seq: Sequence, n: int = 120):
         try:
             return tokenizer.decode(seq.token_ids[-n:], skip_special_tokens=False)
@@ -195,7 +181,7 @@ def run_real_engine_test(
                     f"prompt_tokens={len(seq.prompt_token_ids)} completion_tokens={len(seq.completion_token_ids)}"
                 )
                 print(f"[real-test] tail[{idx}]: {_decode_tail(seq)!r}")
-                _finalize_sequence(seq)
+                engine._finalize_sequence(seq)
                 feedback_text = "\nPlease verify the above answer and provide a concise corrected final answer."
                 feedback_messages = [{"role": "user", "content": feedback_text}]
                 feedback_prompt_text = tokenizer.apply_chat_template(
@@ -209,7 +195,7 @@ def run_real_engine_test(
                 _ensure_enqueued(seq)
                 print(f"[real-test] seq={idx} add_context(feedback_round)")
             else:
-                _finalize_sequence(seq)
+                engine._finalize_sequence(seq)
     for seq in seqs:
         if not seq.is_finished:
             _ensure_enqueued(seq)

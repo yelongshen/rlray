@@ -26,6 +26,7 @@ Usage:
 
 import gc
 import math
+import inspect
 import sys
 import time
 import os as _os
@@ -42,8 +43,28 @@ if TYPE_CHECKING:
 try:
     from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
     FLASH_ATTN_AVAILABLE = True
+    _FLASH_VARLEN_WINDOW_ARG = None
+    _FLASH_KVCACHE_WINDOW_ARG = None
+    try:
+        _varlen_sig = inspect.signature(flash_attn_varlen_func)
+        if 'window_size' in _varlen_sig.parameters:
+            _FLASH_VARLEN_WINDOW_ARG = 'window_size'
+        elif 'attention_window' in _varlen_sig.parameters:
+            _FLASH_VARLEN_WINDOW_ARG = 'attention_window'
+    except Exception:
+        pass
+    try:
+        _kvcache_sig = inspect.signature(flash_attn_with_kvcache)
+        if 'window_size' in _kvcache_sig.parameters:
+            _FLASH_KVCACHE_WINDOW_ARG = 'window_size'
+        elif 'attention_window' in _kvcache_sig.parameters:
+            _FLASH_KVCACHE_WINDOW_ARG = 'attention_window'
+    except Exception:
+        pass
 except ImportError:
     FLASH_ATTN_AVAILABLE = False
+    _FLASH_VARLEN_WINDOW_ARG = None
+    _FLASH_KVCACHE_WINDOW_ARG = None
     print("Warning: flash_attn not available, paged attention will not work")
 
 _DISABLE_FLA = _os.getenv("QWEN3NEXT_DISABLE_FLA", "0").strip().lower() in ("1", "true", "yes", "on")
@@ -1504,6 +1525,18 @@ class Qwen3NextAttentionForEngine(nn.Module):
         
         if page_attention and FLASH_ATTN_AVAILABLE:
             context = get_context()
+            attention_window = int(getattr(self.config, 'max_position_embeddings', 0) or 0)
+            varlen_window_kwargs = {}
+            kvcache_window_kwargs = {}
+            if attention_window > 0:
+                if _FLASH_VARLEN_WINDOW_ARG == 'window_size':
+                    varlen_window_kwargs['window_size'] = (attention_window - 1, 0)
+                elif _FLASH_VARLEN_WINDOW_ARG == 'attention_window':
+                    varlen_window_kwargs['attention_window'] = attention_window
+                if _FLASH_KVCACHE_WINDOW_ARG == 'window_size':
+                    kvcache_window_kwargs['window_size'] = (attention_window - 1, 0)
+                elif _FLASH_KVCACHE_WINDOW_ARG == 'attention_window':
+                    kvcache_window_kwargs['attention_window'] = attention_window
             if context.is_prefill:
                 attn_output = flash_attn_varlen_func(
                     query_states, k_cache_paged, v_cache_paged,
@@ -1512,7 +1545,8 @@ class Qwen3NextAttentionForEngine(nn.Module):
                     max_seqlen_k=context.max_seqlen_k,
                     cu_seqlens_k=context.cu_seqlens_k,
                     causal=True,
-                    block_table=context.block_tables
+                    block_table=context.block_tables,
+                    **varlen_window_kwargs,
                 )
             else:
                 attn_output = flash_attn_with_kvcache(
@@ -1520,7 +1554,8 @@ class Qwen3NextAttentionForEngine(nn.Module):
                     k_cache_paged, v_cache_paged,
                     cache_seqlens=context.context_lens,
                     causal=True,
-                    block_table=context.block_tables
+                    block_table=context.block_tables,
+                    **kvcache_window_kwargs,
                 )
         else:
             # Fallback: standard attention
@@ -3098,6 +3133,20 @@ class HybridLLMEngine:
 
     def is_finished(self):
         return self.scheduler.is_finished()
+
+    def _finalize_sequence(self, seq):
+        if seq in self.scheduler.waiting:
+            self.scheduler.waiting.remove(seq)
+        if seq in self.scheduler.running:
+            self.scheduler.running.remove(seq)
+        try:
+            self.scheduler.block_manager.deallocate(seq)
+        except Exception:
+            pass
+        try:
+            self.model_runner.release_linear_slots([seq])
+        except Exception:
+            pass
 
     def step(self, auto_finish=True):
         import time as _time
