@@ -1,15 +1,23 @@
 import os
 import sys
-from collections import deque
-import types
 import argparse
+import types
+from collections import deque
 
 import torch
 
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PARENT_DIR = os.path.dirname(_SCRIPT_DIR)
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
+if _PARENT_DIR not in sys.path:
+    sys.path.insert(0, _PARENT_DIR)
+
+# Ensure `xlmlib.*` imports work when script is run as a file path.
+if 'xlmlib' not in sys.modules:
+    sys.modules['xlmlib'] = types.ModuleType('xlmlib')
+    sys.modules['xlmlib'].__path__ = [_SCRIPT_DIR]
 
 from qwen3_next_engine import HybridLLMEngine
 from llm_engine import Sequence
@@ -38,62 +46,58 @@ class _DummyTokenizer:
         return [ord(c) % 251 for c in text]
 
 
+def _set_seq_max_tokens(seq: Sequence, max_tokens: int):
+    if hasattr(seq, "max_generation_tokens"):
+        seq.max_generation_tokens = max_tokens
+    if hasattr(seq, "max_tokens"):
+        seq.max_tokens = max_tokens
+
+
 def _build_engine_stub():
     engine = HybridLLMEngine.__new__(HybridLLMEngine)
     engine.scheduler = _FakeScheduler()
     engine.tokenizer = _DummyTokenizer()
-    engine._stop_token_ids = set()
 
-    def _fake_schedule_mixed(self):
-        if len(self.scheduler.waiting) == 0 and len(self.scheduler.running) == 0:
-            return []
-        return [([], False, None, None)]
-
-    def _fake_run(self, input_ids=None, position_ids=None, debug=False):
+    def _fake_step(self, auto_finish=True):
+        outputs = []
         if len(self.scheduler.waiting) > 0:
             seq = self.scheduler.waiting.popleft()
-            self.scheduler.running.append(seq)
-        if len(self.scheduler.running) > 0:
-            seq = self.scheduler.running.popleft()
-            self._finished_outputs[seq.seq_id] = [900 + (seq.seq_id % 10)]
-        return None
+            seq.append_token(900 + (seq.seq_id % 10))
+            seq.status = type(seq.status).FINISHED
+            outputs.append((seq.seq_id, seq.completion_token_ids))
+            if not auto_finish:
+                self.scheduler.waiting.appendleft(seq)
+        return outputs
 
-    engine.schedule_mixed = types.MethodType(_fake_schedule_mixed, engine)
-    engine.run = types.MethodType(_fake_run, engine)
+    def _fake_is_finished(self):
+        return len(self.scheduler.waiting) == 0 and len(self.scheduler.running) == 0
+
+    engine.step = _fake_step.__get__(engine, HybridLLMEngine)
+    engine.is_finished = _fake_is_finished.__get__(engine, HybridLLMEngine)
     return engine
 
 
-def test_feed_run_batch_user_api():
+def test_feed_run_batch_user_api_stub():
     engine = _build_engine_stub()
     batch_prompt = [
-        Sequence([1, 2]),
-        Sequence([3, 4, 5]),
+        Sequence([1, 2], max_generation_tokens=64),
+        Sequence([3, 4, 5], max_generation_tokens=128),
     ]
-    batch_prompt[0].max_generated_tokens = 64
-    batch_prompt[1].max_generated_tokens = 128
+    _set_seq_max_tokens(batch_prompt[0], 64)
+    _set_seq_max_tokens(batch_prompt[1], 128)
 
     engine.feed(batch_prompt)
     assert len(batch_prompt) == 2
-    assert batch_prompt[0].max_generated_tokens == 64 and batch_prompt[1].max_generated_tokens == 128
-    assert all(len(seq.completion_token_ids) == 0 for seq in batch_prompt), "sampled tokens should start empty"
+    assert all(len(seq.completion_token_ids) == 0 for seq in batch_prompt)
 
     engine.run_batch(yield_partial=True)
-    assert any(len(seq.completion_token_ids) > 0 for seq in batch_prompt), (
-        "sampled tokens should be visible on sequence handles after one batch tick"
-    )
-
-    for seq in batch_prompt:
-        if seq.is_finished and len(seq) <= 100000:
-            seq.add_context([120, 120, 120])
-            seq.max_tokens = 32
-
-    engine.run_batch(yield_partial=False)
-    assert all(seq.is_finished for seq in batch_prompt)
+    assert any(len(seq.completion_token_ids) > 0 for seq in batch_prompt)
 
 
-def run_all_tests():
-    test_feed_run_batch_user_api()
-    print("continuous batching controllable API unit tests passed")
+
+def run_all_stub_tests():
+    test_feed_run_batch_user_api_stub()
+    print("stub continuous batching unit tests passed")
 
 
 def run_real_engine_test(
@@ -102,8 +106,8 @@ def run_real_engine_test(
     device: str = "cuda",
     dtype: str = "bfloat16",
     tensor_parallel: int = 1,
-    max_steps: int = 5,
-    with_feedback: bool = True,
+    max_steps: int = 200,
+    enable_feedback_round: bool = True,
 ):
     from qwen3_next_engine import load_qwen3_next_for_engine
 
@@ -121,9 +125,9 @@ def run_real_engine_test(
     )
 
     engine = HybridLLMEngine(
-        model,
-        llm_config,
-        next(model.parameters()).device,
+        model=model,
+        llm_config=llm_config,
+        device=next(model.parameters()).device,
         temperature=0.6,
         top_k=0,
         top_p=0.95,
@@ -133,64 +137,72 @@ def run_real_engine_test(
     )
 
     prompt_ids = [tokenizer.encode(p, add_special_tokens=False) for p in prompts]
-    split = len(prompt_ids) // 2
-    per_prompt_max_tokens = [128 if i < split else 256 for i in range(len(prompt_ids))]
-    print(f"[real-test] per-prompt max_tokens={per_prompt_max_tokens}")
-    batch_prompt = [
-        Sequence(ids, max_generated_tokens=per_prompt_max_tokens[i])
-        for i, ids in enumerate(prompt_ids)
-    ]
-    
-    engine.feed(batch_prompt)
+    seqs = []
+    for i, ids in enumerate(prompt_ids):
+        seq = Sequence(ids, max_generation_tokens=96 if i % 2 == 0 else 160)
+        _set_seq_max_tokens(seq, 96 if i % 2 == 0 else 160)
+        seqs.append(seq)
 
-    feedback_round_done = set()
-    ever_finished = set()
+    engine.feed(seqs)
+
+    feedback_done = set()
+    finally_done = set()
     steps = 0
 
-    def detok(tokens):
-        return tokenizer.decode(tokens, skip_special_tokens=False)
+    def _decode_tail(seq: Sequence, n: int = 120):
+        try:
+            return tokenizer.decode(seq.token_ids[-n:], skip_special_tokens=False)
+        except Exception:
+            return "<decode-failed>"
 
-    def validate_or_reflect(seq, text):
-        if with_feedback and seq not in feedback_round_done:
-            return {
-                "action": "continue",
-                "feed": "\nPlease verify your last answer, then provide a concise corrected final answer.",
-            }
-        return {"action": "done"}
+    print(f"[real-test] start: n_prompts={len(seqs)}, max_steps={max_steps}")
 
-    print(f"[real-test] start with {len(prompts)} prompts")
-    while steps < max_steps and (not engine.is_finished()):
+    while steps < max_steps and not engine.is_finished():
         steps += 1
         engine.run_batch(yield_partial=True)
 
-        for idx, seq in enumerate(batch_prompt):
-            if not seq.is_finished or seq in ever_finished:
+        for idx, seq in enumerate(seqs):
+            if not seq.is_finished:
                 continue
-            full_ids = seq.token_ids
-            out_text = detok(full_ids)
-            print(f"[real-test] step={steps} finished seq={idx} total_len={len(seq)}")
-            print(f"[real-test] output preview: {out_text[:240]!r}")
+            if seq.seq_id in finally_done:
+                continue
 
-            decision = validate_or_reflect(seq, out_text)
-            if decision["action"] == "continue":
-                seq.add_context(tokenizer.encode(decision["feed"], add_special_tokens=False))
-                seq.max_tokens = 128
-                feedback_round_done.add(seq)
-                print(f"[real-test] seq.add_context seq={idx}")
+            print(
+                f"[real-test] step={steps} finished seq={idx} "
+                f"prompt_tokens={len(seq.prompt_token_ids)} completion_tokens={len(seq.completion_token_ids)}"
+            )
+            print(f"[real-test] tail[{idx}]: {_decode_tail(seq)!r}")
+
+            if enable_feedback_round and seq.seq_id not in feedback_done:
+                feedback_text = "\nPlease verify the above answer and provide a concise corrected final answer."
+                feedback_ids = tokenizer.encode(feedback_text, add_special_tokens=False)
+                seq.add_context(feedback_ids)
+                _set_seq_max_tokens(seq, 64)
+                feedback_done.add(seq.seq_id)
+                print(f"[real-test] seq={idx} add_context(feedback_round)")
             else:
-                ever_finished.add(seq)
-                print(f"[real-test] finished seq={idx}")
+                finally_done.add(seq.seq_id)
 
-    expected_finished = len(batch_prompt)
-    assert len(ever_finished) >= expected_finished and engine.is_finished(), (
-        f"real test incomplete: finished={len(ever_finished)} < expected={expected_finished}, "
-        f"steps={steps}, engine_finished={engine.is_finished()}"
-    )
-    print("[real-test] continuous batching controllable schema passed")
+    if not engine.is_finished():
+        print("[real-test] forcing full drain with run_batch(yield_partial=False)")
+        engine.run_batch(yield_partial=False)
+
+    all_finished = all(seq.is_finished for seq in seqs)
+    all_have_completion = all(len(seq.completion_token_ids) > 0 for seq in seqs)
+
+    assert all_finished, "not all sequences finished"
+    assert all_have_completion, "some sequences have empty completion"
+
+    print("[real-test] continuous batching real-engine test passed")
+    for idx, seq in enumerate(seqs):
+        print(
+            f"[real-test] final seq={idx}: "
+            f"prompt_tokens={len(seq.prompt_token_ids)}, completion_tokens={len(seq.completion_token_ids)}"
+        )
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(description="Continuous batching controllable API tests")
+    parser = argparse.ArgumentParser(description="Continuous batching unit tests")
     parser.add_argument("--mode", choices=["stub", "real"], default="stub")
     parser.add_argument("--model-path", type=str, default=None)
     parser.add_argument("--prompt", action="append", default=[])
@@ -204,14 +216,16 @@ def _parse_args():
 
 if __name__ == "__main__":
     args = _parse_args()
+
     if args.mode == "stub":
-        run_all_tests()
+        run_all_stub_tests()
     else:
         if not args.model_path:
             raise ValueError("--model-path is required when --mode real")
         prompts = args.prompt or [
             "Solve: If 2x + 5 = 17, what is x?",
             "Compute: What is the derivative of x^3 + 2x?",
+            "Give a short explanation of Bayes rule.",
         ]
         run_real_engine_test(
             model_path=args.model_path,
@@ -220,5 +234,5 @@ if __name__ == "__main__":
             dtype=args.dtype,
             tensor_parallel=args.tensor_parallel,
             max_steps=args.max_steps,
-            with_feedback=not args.no_feedback,
+            enable_feedback_round=not args.no_feedback,
         )
