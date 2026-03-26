@@ -106,7 +106,6 @@ def run_real_engine_test(
     device: str = "cuda",
     dtype: str = "bfloat16",
     tensor_parallel: int = 1,
-    max_steps: int = 200,
     enable_feedback_round: bool = True,
 ):
     from qwen3_next_engine import load_qwen3_next_for_engine
@@ -145,14 +144,24 @@ def run_real_engine_test(
 
     engine.feed(seqs)
 
-    feedback_done = set()
-    finally_done = set()
-    steps = 0
-
     def _ensure_enqueued(seq: Sequence):
         if seq in engine.scheduler.waiting or seq in engine.scheduler.running:
             return
         engine.scheduler.add(seq)
+
+    def _finalize_sequence(seq: Sequence):
+        if seq in engine.scheduler.waiting:
+            engine.scheduler.waiting.remove(seq)
+        if seq in engine.scheduler.running:
+            engine.scheduler.running.remove(seq)
+        try:
+            engine.scheduler.block_manager.deallocate(seq)
+        except Exception:
+            pass
+        try:
+            engine.model_runner.release_linear_slots([seq])
+        except Exception:
+            pass
 
     def _decode_tail(seq: Sequence, n: int = 120):
         try:
@@ -160,35 +169,29 @@ def run_real_engine_test(
         except Exception:
             return "<decode-failed>"
 
-    print(f"[real-test] start: n_prompts={len(seqs)}, max_steps={max_steps}")
+    print(f"[real-test] start: n_prompts={len(seqs)}")
 
-    while steps < max_steps and not engine.is_finished():
-        steps += 1
+    while not engine.is_finished():
         engine.run_batch(yield_partial=True)
 
         for idx, seq in enumerate(seqs):
             if not seq.is_finished:
                 continue
-            if seq.seq_id in finally_done:
-                continue
 
-            print(
-                f"[real-test] step={steps} finished seq={idx} "
-                f"prompt_tokens={len(seq.prompt_token_ids)} completion_tokens={len(seq.completion_token_ids)}"
-            )
-            print(f"[real-test] tail[{idx}]: {_decode_tail(seq)!r}")
-
-            if enable_feedback_round and seq.seq_id not in feedback_done:
+            if enable_feedback_round and seq.turn_count < 2:
+                print(
+                    f"[real-test] finished seq={idx} "
+                    f"prompt_tokens={len(seq.prompt_token_ids)} completion_tokens={len(seq.completion_token_ids)}"
+                )
+                print(f"[real-test] tail[{idx}]: {_decode_tail(seq)!r}")
                 feedback_text = "\nPlease verify the above answer and provide a concise corrected final answer."
                 feedback_ids = tokenizer.encode(feedback_text, add_special_tokens=False)
                 seq.add_context(feedback_ids)
                 _set_seq_max_tokens(seq, 64)
                 _ensure_enqueued(seq)
-                feedback_done.add(seq.seq_id)
                 print(f"[real-test] seq={idx} add_context(feedback_round)")
             else:
-                finally_done.add(seq.seq_id)
-
+                _finalize_sequence(seq)
     for seq in seqs:
         if not seq.is_finished:
             _ensure_enqueued(seq)
@@ -207,7 +210,7 @@ def run_real_engine_test(
     for idx, seq in enumerate(seqs):
         print(
             f"[real-test] final seq={idx}: "
-            f"prompt_tokens={len(seq.prompt_token_ids)}, completion_tokens={len(seq.completion_token_ids)}"
+            f"prompt_token_ids={seq.prompt_token_ids}, completion_token_ids={seq.completion_token_ids}, token_ids={seq.token_ids}"
         )
 
 
@@ -219,7 +222,6 @@ def _parse_args():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--tensor-parallel", type=int, default=1)
-    parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--no-feedback", action="store_true")
     return parser.parse_args()
 
@@ -243,6 +245,5 @@ if __name__ == "__main__":
             device=args.device,
             dtype=args.dtype,
             tensor_parallel=args.tensor_parallel,
-            max_steps=args.max_steps,
             enable_feedback_round=not args.no_feedback,
         )
