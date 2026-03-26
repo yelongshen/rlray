@@ -208,9 +208,14 @@ def run_real_engine_test(
 
     print("[real-test] continuous batching real-engine test passed")
     for idx, seq in enumerate(seqs):
+        try:
+            decoded_text = tokenizer.decode(seq.token_ids, skip_special_tokens=False)
+        except Exception:
+            decoded_text = "<decode-failed>"
         print(
             f"[real-test] final seq={idx}: "
-            f"prompt_token_ids={seq.prompt_token_ids}, completion_token_ids={seq.completion_token_ids}, token_ids={seq.token_ids}"
+            f"prompt_token_ids={seq.prompt_token_ids}, completion_token_ids={seq.completion_token_ids}, "
+            f"token_ids={seq.token_ids}, decoded_text={decoded_text!r}"
         )
 
 
