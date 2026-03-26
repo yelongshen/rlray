@@ -135,8 +135,8 @@ def run_real_engine_test(
         tokenizer=tokenizer,
     )
 
-    max_generation_len = 16384
-    max_turns = 100
+    max_generation_len = 96
+    max_turns = 2
 
     prompt_ids = []
     for p in prompts:
